@@ -1,0 +1,30 @@
+/**
+ * Register a {@link ProtocomAdapter} for the four Protocom official API group
+ * routes on `ctx.llm`, with connection facts resolved per request instead of
+ * frozen at load: the plugin layers its `cordis.yml` entry config under the
+ * optional `protocom-api` user-settings section (`ctx.settings`) and resolves
+ * each group's API key through the optional credential seam
+ * (`ctx.credentials`), so a changed endpoint, group set, or key reaches the
+ * very next request without restarting anything. The route set itself is the
+ * one registration-captured fact — it re-registers in place via
+ * `handle.replace` when the enabled groups change. The balance endpoint rides
+ * the optional `webServer` service and answers loopback clients only.
+ *
+ * @module dsh-protocom-api
+ */
+import type { Context } from '@deepseek-ai/cordis';
+import { Config } from './config.ts';
+export { ProtocomAdapter } from './adapter.ts';
+export type { ProtocomAdapterOptions } from './adapter.ts';
+export { BalanceService, balanceRouteHandler, parseRateMultiplier, parseUsage } from './balance.ts';
+export type { BalanceHooks, GroupBalance } from './balance.ts';
+export { Config, DEFAULT_BASE_URL, GROUP_DEFAULTS, GROUP_KEYS, groupOf, providerOf, resolveAdapterOptions } from './config.ts';
+export type { GroupConfig, GroupKey, Protocol, ResolvedGroup, ResolvedProtocomOptions } from './config.ts';
+export { decodeVariantId, encodeVariantId, stripVariantId, variantLengths } from './context-variants.ts';
+export { discoverModels, fetchUpstreamModels, parseModelsListing } from './discovery.ts';
+export type { DiscoveryHooks } from './discovery.ts';
+export { catalogEntry, contextLabel, displayNameWithContext, FALLBACK_CONTEXT_WINDOW, matchRegistry, REGISTRY, } from './model-registry.ts';
+export type { CatalogModel, RegistryEntry, RegistryPricing, RegistryReasoning, UpstreamModel } from './model-registry.ts';
+export declare const name = "protocom-api";
+export declare const inject: string[];
+export declare function apply(ctx: Context, config: Config): void;

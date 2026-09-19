@@ -1,0 +1,57 @@
+/** Copy dictionaries for the Protocom API settings section. */
+/** English strings (the key-set source of truth for this pair). */
+export declare const en: {
+    nav: string;
+    title: string;
+    intro: string;
+    readOnly: string;
+    advanced: string;
+    baseUrl: string;
+    apply: string;
+    applying: string;
+    saved: string;
+    groupAggregate: string;
+    groupCodex: string;
+    groupStepfun: string;
+    groupGrok: string;
+    enabled: string;
+    protocol: string;
+    apiKey: string;
+    keyPlaceholder: string;
+    keyConfigured: string;
+    keyMissing: string;
+    saveKey: string;
+    savingKey: string;
+    keySaved: string;
+    keyFailed: string;
+    probe: string;
+    probing: string;
+    probeFailed: string;
+    probeEmpty: string;
+    probeHint: string;
+    colModel: string;
+    colId: string;
+    colVariants: string;
+    balance: string;
+    refresh: string;
+    refreshing: string;
+    loading: string;
+    loadFailed: string;
+    retry: string;
+    remaining: string;
+    limit: string;
+    balanceAmount: string;
+    plan: string;
+    today: string;
+    requests: string;
+    cost: string;
+    rateWindow: string;
+    expiresAt: string;
+    rateMultiplier: string;
+    groupRateMultiplier: string;
+    none: string;
+};
+/** Dictionary key union owned by this plugin. */
+export type ProtocomKey = keyof typeof en;
+/** Chinese strings. */
+export declare const zh: Record<ProtocomKey, string>;
