@@ -84,9 +84,15 @@ function BalanceView({ group, balance, phase, error, onRefresh, t }: {
   t: Translator
 }): ReactNode {
   const items: [string, string][] = []
+  const heroQuota = balance !== undefined
+    && balance.remaining !== undefined
+    && balance.limit !== undefined
+    && balance.limit > 0
   if (balance !== undefined) {
-    if (balance.remaining !== undefined) items.push([t('remaining'), formatAmount(balance.remaining, balance.unit)])
-    if (balance.limit !== undefined) items.push([t('limit'), formatAmount(balance.limit, balance.unit)])
+    if (!heroQuota) {
+      if (balance.remaining !== undefined) items.push([t('remaining'), formatAmount(balance.remaining, balance.unit)])
+      if (balance.limit !== undefined) items.push([t('limit'), formatAmount(balance.limit, balance.unit)])
+    }
     if (balance.balance !== undefined) items.push([t('balanceAmount'), formatAmount(balance.balance, balance.unit)])
     if (balance.planName !== undefined) items.push([t('plan'), balance.planName])
     if (balance.todayRequests !== undefined || balance.todayCost !== undefined) {
@@ -113,7 +119,25 @@ function BalanceView({ group, balance, phase, error, onRefresh, t }: {
         </button>
       </div>
       {phase === 'error' ? <p className="protocom-error">{`${t('loadFailed')}: ${error ?? ''}`}</p> : null}
-      {phase === 'ready' && items.length === 0 ? <p className="protocom-notice">{t('none')}</p> : null}
+      {phase === 'ready' && items.length === 0 && !heroQuota ? <p className="protocom-notice">{t('none')}</p> : null}
+      {heroQuota && balance !== undefined ? (
+        <div className="protocom-quota">
+          <div className="protocom-quota-hero">
+            {formatAmount(balance.remaining as number, balance.unit)}
+            <small>{`/ ${formatAmount(balance.limit as number, balance.unit)} ${t('limit')}`}</small>
+          </div>
+          <div className="protocom-quota-bar">
+            <div
+              className={
+                ((balance.limit as number) - (balance.remaining as number)) / (balance.limit as number) > 0.8
+                  ? 'protocom-quota-fill is-warn'
+                  : 'protocom-quota-fill'
+              }
+              style={{ width: `${Math.min(100, Math.max(0, (((balance.limit as number) - (balance.remaining as number)) / (balance.limit as number)) * 100))}%` }}
+            />
+          </div>
+        </div>
+      ) : null}
       {items.length === 0 ? null : (
         <div className="protocom-balance-grid">
           {items.map(([label, value]) => (
@@ -221,19 +245,26 @@ function GroupCard({ groupKey, group, credential, writable, revision, baseURL, o
 
   const credentialConfigured = credential?.configured === true
   return (
-    <li className="protocom-card">
+    <li className={group.enabled ? 'protocom-card' : 'protocom-card is-off'}>
       <div className="protocom-card-head">
         <span className="protocom-card-name">{t(`group${groupKey.charAt(0).toUpperCase()}${groupKey.slice(1)}` as keyof typeof en)}</span>
         <span className="protocom-tag" title={t('protocol')}>{group.protocol}</span>
-        <label className="protocom-toggle">
-          <input
-            type="checkbox"
-            checked={group.enabled}
-            disabled={!writable}
-            onChange={() => { void write([{ op: 'set', path: ['groups', groupKey, 'enabled'], value: !group.enabled }]) }}
-          />
-          {t('enabled')}
-        </label>
+        <span className="protocom-head-state">
+          <span className={credentialConfigured ? 'protocom-dot is-on' : 'protocom-dot'} />
+          {credentialConfigured ? t('keyConfigured') : t('keyMissing')}
+          <label className="protocom-switch">
+            <input
+              type="checkbox"
+              role="switch"
+              checked={group.enabled}
+              disabled={!writable}
+              aria-label={t('enabled')}
+              onChange={() => { void write([{ op: 'set', path: ['groups', groupKey, 'enabled'], value: !group.enabled }]) }}
+            />
+            <span className="protocom-switch-track"><span className="protocom-switch-thumb" /></span>
+            {t('enabled')}
+          </label>
+        </span>
       </div>
       <div className="protocom-field">
         <span className="protocom-field-label">{t('apiKey')}</span>
@@ -246,7 +277,7 @@ function GroupCard({ groupKey, group, credential, writable, revision, baseURL, o
           disabled={!writable || credential?.writable === false}
           onChange={event => { setKeyDraft(event.target.value) }}
         />
-        <button type="button" className="protocom-button" disabled={!writable || keyBusy || keyDraft.length === 0} onClick={saveKey}>
+        <button type="button" className="protocom-button protocom-button-primary" disabled={!writable || keyBusy || keyDraft.length === 0} onClick={saveKey}>
           {keyBusy ? t('savingKey') : t('saveKey')}
         </button>
       </div>
@@ -258,7 +289,7 @@ function GroupCard({ groupKey, group, credential, writable, revision, baseURL, o
       )}
       {cardError === undefined ? null : <p className="protocom-error">{cardError}</p>}
       <div className="protocom-field">
-        <button type="button" className="protocom-button" disabled={probe.phase === 'loading'} onClick={runProbe}>
+        <button type="button" className="protocom-button protocom-button-primary" disabled={probe.phase === 'loading'} onClick={runProbe}>
           {probe.phase === 'loading' ? t('probing') : t('probe')}
         </button>
       </div>
@@ -284,10 +315,13 @@ function GroupCard({ groupKey, group, credential, writable, revision, baseURL, o
                   return (
                     <tr key={model.id}>
                       <td>{entry.displayName}</td>
-                      <td>{model.id}</td>
+                      <td><span className="protocom-probe-id">{model.id}</span></td>
                       <td>
                         {variantChoicesFor(model.id).map(length => (
-                          <label key={length} className="protocom-variant">
+                          <label
+                            key={length}
+                            className={group.contextLengths.includes(length) ? 'protocom-chip is-on' : 'protocom-chip'}
+                          >
                             <input
                               type="checkbox"
                               checked={group.contextLengths.includes(length)}
