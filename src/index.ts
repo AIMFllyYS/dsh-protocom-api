@@ -115,12 +115,13 @@ export function apply(ctx: Context, config: Config): void {
       baseURL: () => options().baseURL,
       resolveApiKey: async (provider) => {
         const group = [...options().groups.values()].find(candidate => candidate.provider === provider)
-        if (group === undefined || !group.enabled || group.apiKeyRef === undefined) return undefined
-        try {
-          return await resolveApiKey(group)
-        } catch {
-          return undefined
+        if (group === undefined) return undefined
+        if (!group.enabled) {
+          throw new Error(
+            `protocom-api: group "${group.key}" is disabled; toggle it on in the "${NS}" settings section before discovering models`,
+          )
         }
+        return await resolveApiKey(group)
       },
     }))
     // The adapter registers lazily: `registerAdapter` refuses an empty route
