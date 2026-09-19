@@ -1,0 +1,440 @@
+/**
+ * Protocom API settings section: one card per group (enable switch, API key,
+ * read-only protocol tag, model probe with context-variant checkboxes, and
+ * the balance strip), plus the advanced baseURL override. Every mutation
+ * writes through the wire (settings.mutate / credentials.set); the page
+ * reloads its snapshot after each landed write.
+ */
+
+import { useEffect, useState } from 'react'
+import type { ReactNode } from 'react'
+import type { InjectFace } from '@deepseek-ai/dsh-client-ui-slots'
+import type { CredentialInfo, LlmDiscoveredModel, SettingsNamespaceView } from '@deepseek-ai/dsh-api-remotes/client'
+import { defaultKeyRef, GROUP_DEFAULTS, GROUP_KEYS, providerOf } from '../groups.ts'
+import type { GroupKey, Protocol } from '../groups.ts'
+import { catalogEntry, contextLabel } from '../model-registry.ts'
+import type { GroupBalance } from '../balance.ts'
+import type { ProtocomOperations } from './operations.ts'
+import { toggleLength, variantChoicesFor } from './variants.ts'
+import type { en } from './locale.ts'
+
+/** Injected dependencies of {@link ProtocomSection} (slot `inject`). */
+export interface ProtocomInjected {
+  /** The Host operations the section invokes. */
+  operations: ProtocomOperations
+  /** Section copy. */
+  t: (key: keyof typeof en) => string
+}
+
+/**
+ * Props delivered by the slot outlet: the inject face spread flat (absent
+ * pieces mean the shell has not injected yet, and the section renders null).
+ */
+export type ProtocomSectionProps = Partial<InjectFace<ProtocomInjected>>
+
+type Translator = (key: keyof typeof en) => string
+
+/** One group's redacted section value (the apiKey literal never rides). */
+interface GroupSectionValue {
+  enabled?: boolean
+  protocol?: Protocol
+  contextLengths?: number[]
+  showBalance?: boolean
+}
+
+/** The plugin's redacted section value. */
+interface SectionValue {
+  baseURL?: string
+  groups?: Record<string, GroupSectionValue>
+}
+
+interface PageState {
+  phase: 'loading' | 'ready' | 'error'
+  view?: SettingsNamespaceView
+  credentials: Record<string, CredentialInfo>
+  error?: string
+}
+
+function sectionOf(view: SettingsNamespaceView | undefined): SectionValue {
+  const value = view?.value
+  return value !== null && typeof value === 'object' && !Array.isArray(value) ? value as SectionValue : {}
+}
+
+function groupValueOf(section: SectionValue, key: GroupKey): Required<GroupSectionValue> {
+  const raw = section.groups?.[key] ?? {}
+  return {
+    enabled: raw.enabled ?? false,
+    protocol: raw.protocol ?? GROUP_DEFAULTS[key].protocol,
+    contextLengths: raw.contextLengths ?? [],
+    showBalance: raw.showBalance ?? true,
+  }
+}
+
+function formatAmount(value: number, unit: string | undefined): string {
+  return unit === 'USD' ? `$${value.toFixed(2)}` : `${value}${unit === undefined ? '' : ` ${unit}`}`
+}
+
+/** The balance strip of one group card. */
+function BalanceView({ group, balance, phase, error, onRefresh, t }: {
+  group: GroupKey
+  balance: GroupBalance | undefined
+  phase: 'idle' | 'loading' | 'ready' | 'error'
+  error: string | undefined
+  onRefresh: () => void
+  t: Translator
+}): ReactNode {
+  const items: [string, string][] = []
+  if (balance !== undefined) {
+    if (balance.remaining !== undefined) items.push([t('remaining'), formatAmount(balance.remaining, balance.unit)])
+    if (balance.limit !== undefined) items.push([t('limit'), formatAmount(balance.limit, balance.unit)])
+    if (balance.balance !== undefined) items.push([t('balanceAmount'), formatAmount(balance.balance, balance.unit)])
+    if (balance.planName !== undefined) items.push([t('plan'), balance.planName])
+    if (balance.todayRequests !== undefined || balance.todayCost !== undefined) {
+      const parts = [
+        balance.todayRequests === undefined ? undefined : `${balance.todayRequests} ${t('requests')}`,
+        balance.todayCost === undefined ? undefined : formatAmount(balance.todayCost, balance.unit ?? 'USD'),
+      ].filter((part): part is string => part !== undefined)
+      items.push([t('today'), parts.join(' · ')])
+    }
+    if (balance.rpm !== undefined || balance.tpm !== undefined) {
+      items.push([t('rateWindow'), `RPM ${balance.rpm ?? t('none')} · TPM ${balance.tpm ?? t('none')}`])
+    }
+    if (balance.expiresAt !== undefined) items.push([t('expiresAt'), balance.expiresAt.slice(0, 10)])
+    if (balance.rateMultiplier !== undefined) items.push([t('rateMultiplier'), `×${balance.rateMultiplier}`])
+    if (balance.groupRateMultiplier !== undefined) items.push([t('groupRateMultiplier'), `×${balance.groupRateMultiplier}`])
+  }
+  void group
+  return (
+    <div className="protocom-balance">
+      <div className="protocom-balance-head">
+        <span>{t('balance')}</span>
+        <button type="button" className="protocom-button" disabled={phase === 'loading'} onClick={onRefresh}>
+          {phase === 'loading' ? t('refreshing') : t('refresh')}
+        </button>
+      </div>
+      {phase === 'error' ? <p className="protocom-error">{`${t('loadFailed')}: ${error ?? ''}`}</p> : null}
+      {phase === 'ready' && items.length === 0 ? <p className="protocom-notice">{t('none')}</p> : null}
+      {items.length === 0 ? null : (
+        <div className="protocom-balance-grid">
+          {items.map(([label, value]) => (
+            <span key={label} className="protocom-balance-item">{`${label} `}<b>{value}</b></span>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+/** One group's card. */
+function GroupCard({ groupKey, group, credential, writable, revision, baseURL, operations, t, onChanged }: {
+  groupKey: GroupKey
+  group: Required<GroupSectionValue>
+  credential: CredentialInfo | undefined
+  writable: boolean
+  revision: number | undefined
+  baseURL: string | undefined
+  operations: ProtocomOperations
+  t: Translator
+  onChanged: () => Promise<void>
+}): ReactNode {
+  const ref = defaultKeyRef(groupKey)
+  const [keyDraft, setKeyDraft] = useState('')
+  const [keyBusy, setKeyBusy] = useState(false)
+  const [keyMessage, setKeyMessage] = useState<{ kind: 'ok' | 'error'; text: string } | undefined>(undefined)
+  const [cardError, setCardError] = useState<string | undefined>(undefined)
+  const [probe, setProbe] = useState<
+    | { phase: 'idle' }
+    | { phase: 'loading' }
+    | { phase: 'ready'; models: readonly LlmDiscoveredModel[] }
+    | { phase: 'error'; message: string }
+  >({ phase: 'idle' })
+  const [balance, setBalance] = useState<{
+    phase: 'idle' | 'loading' | 'ready' | 'error'
+    data: GroupBalance | undefined
+    error: string | undefined
+  }>({ phase: 'idle', data: undefined, error: undefined })
+
+  const write = async (ops: Parameters<ProtocomOperations['writeSettings']>[0]): Promise<void> => {
+    setCardError(undefined)
+    const outcome = await operations.writeSettings(ops, revision)
+    if (outcome.kind !== 'written') {
+      setCardError(outcome.message)
+      // A conflict means the card's snapshot is stale: reload so the next
+      // toggle rides the current revision instead of wedging on the old one.
+      await onChanged()
+      return
+    }
+    await onChanged()
+  }
+
+  const loadBalance = async (): Promise<void> => {
+    setBalance(previous => ({ ...previous, phase: 'loading', error: undefined }))
+    try {
+      const response = await fetch(`/api/protocom-api/balance?group=${groupKey}`)
+      if (!response.ok) {
+        const body = await response.json().catch(() => undefined) as { error?: string } | undefined
+        throw new Error(body?.error ?? `HTTP ${response.status}`)
+      }
+      const data = await response.json() as GroupBalance
+      setBalance({ phase: 'ready', data, error: undefined })
+    } catch (error: unknown) {
+      setBalance({ phase: 'error', data: undefined, error: error instanceof Error ? error.message : String(error) })
+    }
+  }
+
+  const balanceVisible = group.enabled && group.showBalance
+  useEffect(() => {
+    if (balanceVisible && balance.phase === 'idle') void loadBalance()
+    // Loading once per enablement is the intent; the strip re-reads on Refresh.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [balanceVisible])
+
+  const saveKey = (): void => {
+    if (keyDraft.length === 0 || keyBusy) return
+    setKeyBusy(true)
+    setKeyMessage(undefined)
+    void operations.storeApiKey(groupKey, ref, keyDraft)
+      .then(async (failure) => {
+        if (failure !== undefined) {
+          setKeyMessage({ kind: 'error', text: failure })
+          return
+        }
+        setKeyDraft('')
+        setKeyMessage({ kind: 'ok', text: t('keySaved') })
+        await onChanged()
+      })
+      .finally(() => { setKeyBusy(false) })
+  }
+
+  const runProbe = (): void => {
+    if (probe.phase === 'loading') return
+    setProbe({ phase: 'loading' })
+    void operations.discoverModels({
+      provider: providerOf(groupKey),
+      ...baseURL === undefined ? {} : { baseURL },
+    }).then((outcome) => {
+      setProbe(outcome.kind === 'found'
+        ? { phase: 'ready', models: outcome.models }
+        : { phase: 'error', message: outcome.message })
+    })
+  }
+
+  const credentialConfigured = credential?.configured === true
+  return (
+    <li className="protocom-card">
+      <div className="protocom-card-head">
+        <span className="protocom-card-name">{t(`group${groupKey.charAt(0).toUpperCase()}${groupKey.slice(1)}` as keyof typeof en)}</span>
+        <span className="protocom-tag" title={t('protocol')}>{group.protocol}</span>
+        <label className="protocom-toggle">
+          <input
+            type="checkbox"
+            checked={group.enabled}
+            disabled={!writable}
+            onChange={() => { void write([{ op: 'set', path: ['groups', groupKey, 'enabled'], value: !group.enabled }]) }}
+          />
+          {t('enabled')}
+        </label>
+      </div>
+      <div className="protocom-field">
+        <span className="protocom-field-label">{t('apiKey')}</span>
+        <input
+          type="password"
+          className="protocom-input"
+          value={keyDraft}
+          placeholder={credentialConfigured ? t('keyConfigured') : t('keyPlaceholder')}
+          aria-label={`${t('apiKey')} (${ref})`}
+          disabled={!writable || credential?.writable === false}
+          onChange={event => { setKeyDraft(event.target.value) }}
+        />
+        <button type="button" className="protocom-button" disabled={!writable || keyBusy || keyDraft.length === 0} onClick={saveKey}>
+          {keyBusy ? t('savingKey') : t('saveKey')}
+        </button>
+      </div>
+      <span className="protocom-key-state">{credentialConfigured ? `${t('keyConfigured')} (${ref})` : `${t('keyMissing')} (${ref})`}</span>
+      {keyMessage === undefined ? null : (
+        <p className={keyMessage.kind === 'ok' ? 'protocom-status' : 'protocom-error'}>
+          {keyMessage.kind === 'ok' ? keyMessage.text : `${t('keyFailed')}: ${keyMessage.text}`}
+        </p>
+      )}
+      {cardError === undefined ? null : <p className="protocom-error">{cardError}</p>}
+      <div className="protocom-field">
+        <button type="button" className="protocom-button" disabled={probe.phase === 'loading'} onClick={runProbe}>
+          {probe.phase === 'loading' ? t('probing') : t('probe')}
+        </button>
+      </div>
+      {probe.phase === 'error' ? <p className="protocom-error">{`${t('probeFailed')}: ${probe.message}`}</p> : null}
+      {probe.phase === 'ready' && probe.models.length === 0 ? <p className="protocom-notice">{t('probeEmpty')}</p> : null}
+      {probe.phase === 'ready' && probe.models.length > 0
+        ? (
+          <>
+            <table className="protocom-probe-table">
+              <thead>
+                <tr>
+                  <th>{t('colModel')}</th>
+                  <th>{t('colId')}</th>
+                  <th>{t('colVariants')}</th>
+                </tr>
+              </thead>
+              <tbody>
+                {probe.models.map((model) => {
+                  const entry = catalogEntry(
+                    { id: model.id, ...model.name === undefined ? {} : { displayName: model.name } },
+                    GROUP_DEFAULTS[groupKey].reasoning,
+                  )
+                  return (
+                    <tr key={model.id}>
+                      <td>{entry.displayName}</td>
+                      <td>{model.id}</td>
+                      <td>
+                        {variantChoicesFor(model.id).map(length => (
+                          <label key={length} className="protocom-variant">
+                            <input
+                              type="checkbox"
+                              checked={group.contextLengths.includes(length)}
+                              disabled={!writable}
+                              onChange={() => {
+                                const next = toggleLength(group.contextLengths, length)
+                                void write(next.length === 0
+                                  ? [{ op: 'unset', path: ['groups', groupKey, 'contextLengths'] }]
+                                  : [{ op: 'set', path: ['groups', groupKey, 'contextLengths'], value: next }])
+                              }}
+                            />
+                            {contextLabel(length)}
+                          </label>
+                        ))}
+                      </td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+            <p className="protocom-notice">{t('probeHint')}</p>
+          </>
+        )
+        : null}
+      {balanceVisible
+        ? (
+          <BalanceView
+            group={groupKey}
+            balance={balance.data}
+            phase={balance.phase}
+            error={balance.error}
+            onRefresh={() => { void loadBalance() }}
+            t={t}
+          />
+        )
+        : null}
+    </li>
+  )
+}
+
+/**
+ * Render the Protocom API section content column.
+ * @param props - slot-delivered injected dependencies.
+ * @returns the section, or null while the shell has not injected yet.
+ */
+export function ProtocomSection(props: ProtocomSectionProps): ReactNode {
+  const { operations, t } = props
+  if (operations === undefined || t === undefined) return null
+  return <Loaded operations={operations} t={t} />
+}
+
+function Loaded({ operations, t }: { operations: ProtocomOperations; t: Translator }): ReactNode {
+  const [state, setState] = useState<PageState>({ phase: 'loading', credentials: {} })
+  const [baseDraft, setBaseDraft] = useState<string | undefined>(undefined)
+  const [baseBusy, setBaseBusy] = useState(false)
+  const [baseNotice, setBaseNotice] = useState<{ kind: 'ok' | 'error'; text: string } | undefined>(undefined)
+
+  const load = async (): Promise<void> => {
+    const view = await operations.describeSettings()
+    if (view === undefined) {
+      setState({ phase: 'error', credentials: {}, error: 'settings namespace unavailable' })
+      return
+    }
+    const credentials = await operations.describeCredentials(GROUP_KEYS.map(defaultKeyRef))
+    setState({ phase: 'ready', view, credentials })
+  }
+
+  useEffect(() => {
+    if (state.phase === 'loading') void load()
+    // The initial load is the only automatic one; writes reload explicitly.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  if (state.phase === 'loading') return <p className="protocom-notice">{t('loading')}</p>
+  if (state.phase === 'error') {
+    return (
+      <div className="protocom-section">
+        <p className="protocom-error">{`${t('loadFailed')}: ${state.error ?? ''}`}</p>
+        <button type="button" className="protocom-button" onClick={() => { void load() }}>{t('retry')}</button>
+      </div>
+    )
+  }
+
+  const view = state.view
+  const section = sectionOf(view)
+  const revision = view?.revision
+  const writable = revision !== undefined
+  const baseURL = section.baseURL
+
+  const applyBaseURL = (): void => {
+    if (baseDraft === undefined || baseBusy) return
+    setBaseBusy(true)
+    setBaseNotice(undefined)
+    void operations.writeSettings([{ op: 'set', path: ['baseURL'], value: baseDraft }], revision)
+      .then(async (outcome) => {
+        if (outcome.kind !== 'written') {
+          setBaseNotice({ kind: 'error', text: outcome.message })
+          await load()
+          return
+        }
+        setBaseNotice({ kind: 'ok', text: t('saved') })
+        await load()
+      })
+      .finally(() => { setBaseBusy(false) })
+  }
+
+  return (
+    <div className="protocom-section">
+      <h2 className="protocom-title">{t('title')}</h2>
+      <p className="protocom-intro">{t('intro')}</p>
+      {writable ? null : <p className="protocom-notice">{t('readOnly')}</p>}
+      <ul className="protocom-groups">
+        {GROUP_KEYS.map(key => (
+          <GroupCard
+            key={key}
+            groupKey={key}
+            group={groupValueOf(section, key)}
+            credential={state.credentials[defaultKeyRef(key)]}
+            writable={writable}
+            revision={revision}
+            baseURL={baseURL}
+            operations={operations}
+            t={t}
+            onChanged={load}
+          />
+        ))}
+      </ul>
+      <details className="protocom-advanced">
+        <summary>{t('advanced')}</summary>
+        <div className="protocom-advanced-body">
+          <span className="protocom-field-label">{t('baseUrl')}</span>
+          <input
+            type="text"
+            className="protocom-input"
+            value={baseDraft ?? baseURL ?? ''}
+            aria-label={t('baseUrl')}
+            disabled={!writable}
+            onChange={event => { setBaseDraft(event.target.value) }}
+          />
+          <button type="button" className="protocom-button" disabled={!writable || baseBusy} onClick={applyBaseURL}>
+            {baseBusy ? t('applying') : t('apply')}
+          </button>
+        </div>
+        {baseNotice === undefined ? null : (
+          <p className={baseNotice.kind === 'ok' ? 'protocom-status' : 'protocom-error'}>{baseNotice.text}</p>
+        )}
+      </details>
+    </div>
+  )
+}
