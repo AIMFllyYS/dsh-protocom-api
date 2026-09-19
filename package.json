@@ -39,6 +39,7 @@
   },
   "scripts": {
     "build": "tsdown && tsc -b",
+    "prepare": "pnpm run build",
     "test": "vitest run"
   },
   "peerDependencies": {
