@@ -1,6 +1,6 @@
 # dsh-protocom-api
 
-DeepSeek Harness (DSH) 插件：接入 **Protocom 官方 API**（OpenAI 兼容网关，baseURL `https://relay.protocom.org`），以四个分组对应四条 provider route，各分组独立配置 API key。
+DeepSeek Harness (DSH) v1.5 插件：接入 **Protocom 官方 API**（OpenAI 兼容，默认端点 `https://relay.protocom.org`）。四个分组对应四条独立 provider route，各自配置 API key：
 
 | 分组 | provider route | 默认协议 | 说明 |
 | --- | --- | --- | --- |
@@ -9,82 +9,94 @@ DeepSeek Harness (DSH) 插件：接入 **Protocom 官方 API**（OpenAI 兼容�
 | `stepfun` | `protocom-stepfun` | chat-completions | 阶跃星辰系列 |
 | `grok` | `protocom-grok` | chat-completions | Grok 系列 |
 
-## 安装
+## 功能特性
 
-本包声明了 `dsh.bundle.patch`，随 bundle 组装时通过 `cordis.patch.yml` 插入：
+- **模型实时探测**：`GET /v1/models` 拉取分组可见模型（60s 缓存），内置美化名录投影——`deepseek/deepseek-v4.1-flash` 显示为 `DeepSeek V4.1 Flash [1M]`；名录外模型显示原 ID；名录内但探测不到的不显示。
+- **上下文长度可选**：每个可选长度（200K/256K/400K/1M）在模型菜单中呈现为独立条目（如 `DeepSeek V4.1 Flash [256K]`），选择即驱动上下文压力与压缩阈值；Kimi K3 上下文固定为实测的 256K。
+- **思考强度二级菜单**：模型菜单自动出现 Effort 子菜单。DeepSeek 系 `off/low/high/max`，Kimi K3 `low/high`，Codex 分组 `minimal/low/medium/high/xhigh`（走 responses 协议 `reasoning.effort`），Grok 分组优先采用上游披露的 effort 元数据。思考内容以 `reasoning-delta` 流式接入，聊天界面折叠显示。
+- **缓存感知的用量统计**：`cached_tokens` → `cacheReadTokens` 不相交换算，DSH 自带的缓存命中率、每轮 TPS、token 明细全部正确生效。
+- **余额与用量显示**：设置页每个分组卡片内嵌余额区——限额模式显示剩余额度大数字 + 用量进度条（>80% 警示），订阅/钱包模式显示余额与套餐；附今日用量、速率窗口、计费倍率、到期时间与手动刷新。
+- **引导式设置页**：设置 → 「Protocom API」整页，中英双语。分组卡片带启用开关（switch）、密钥状态圆点、保存密钥即自动启用分组、探测结果表格内直接勾选上下文变体（chips）。
 
-```yaml
-- insert:
-  - id: protocom-api
-    name: dsh-protocom-api
+## 首次安装
+
+要求：DSH v1.5+，pnpm。
+
+```bash
+# 在 DSH 仓库目录执行（web profile；用其他 profile 就替换名字）
+pnpm dsh plugin --profile web add "github:AIMFllyYS/dsh-protocom-api"
+pnpm dsh web
 ```
 
-运行时依赖宿主提供的服务：`llm`（必需）、`settings`（可选，用户设置分层）、`credentials`（可选，密钥托管）、`webServer`（可选，余额端点）。
+仓库自带预构建产物（`lib/`），git 安装零构建、不触发 pnpm allowBuilds 拦截。安装命令会自动初始化 profile 并把插件追加进 `dsh.profile.bundles`，无需手改任何 YAML。
 
-## 配置
+也可以从本地目录安装（开发用，重新 build 即生效）：
 
-插件配置即 `protocom-api` 设置区的形状（字段均可选）：
-
-```yaml
-baseURL: https://relay.protocom.org   # 默认值；末尾斜杠与 /v1 后缀会被归一化
-groups:
-  aggregate:
-    enabled: true                     # 默认 false，启用后才注册对应 route
-    apiKey: PROTOCOM_AGGREGATE_KEY    # credential-ref：凭据引用名，不是密钥本身
-    contextLengths: [204800, 262144, 1048576]   # 可选：启用上下文变体
-    showBalance: true                 # 默认 true：是否出现在余额端点
-  codex:
-    enabled: true
-    apiKey: PROTOCOM_CODEX_KEY
-    # protocol 默认 responses，其余分组默认 chat-completions，一般无需覆盖
+```bash
+pnpm dsh plugin --profile web add "/path/to/dsh-protocom-api-plugin"
 ```
 
-密钥只经凭据引用（`credential-ref`）解析：优先 `ctx.credentials` 托管存储，其次启动环境中的同名环境变量；密钥本身永不落盘进配置。
+## 配置密钥
 
-## 模型目录与美化名录
+**界面方式（推荐）**：设置 → Protocom API → 对应分组卡片 → 粘贴 API key → 保存密钥（保存即自动启用该分组）→ 点「探测模型」验证 → 卡片底部查看余额。
 
-- 模型目录来自对 `GET {baseURL}/v1/models` 的实时探测（60 秒缓存），经内置名录投影：已知模型显示美化名与实测上下文窗口（如 `DeepSeek V4.1 Flash [1M]`、`Kimi K3 [256K]`）；名录未覆盖的模型显示上游 `display_name`（与 id 相同则显示原 id），上下文窗口兜底 131072。
-- 名录内但探测不到的模型不显示。
-- 显示名统一为 `{美化名} [{上下文标签}]`，标签按 tokens/1024 换算（200K/256K/400K），≥1M 显示为 `xM`。
+**配置文件方式**：编辑 `~/.dsh/settings.yaml`：
 
-## 上下文变体
+```yaml
+protocom-api:
+  groups:
+    aggregate:
+      enabled: true
+      apiKey: PROTOCOM_AGGREGATE_API_KEY   # credential-ref 引用名，不是密钥本身
+      contextLengths: [204800, 262144, 1048576]   # 可选：启用上下文变体
+      showBalance: true                    # 默认 true
+```
 
-分组配置 `contextLengths` 后，每个可选长度产出一个独立条目，模型 id 形如 `<上游id>::ctx@<tokens>`；`resolveModel` 上报对应 contextWindow，发起请求时自动还原为上游 id。未配置 `contextLengths` 时每模型仅产出一个不带后缀的默认条目（向后兼容）。名录声明了 `contextOptions` 的模型按交集过滤，空交集退化为默认条目。
+密钥值放入 `~/.dsh/.credentials.yaml`，或启动时经同名环境变量注入：
 
-## 思考（reasoning）
+```bash
+PROTOCOM_AGGREGATE_API_KEY=sk-... pnpm dsh web
+```
 
-- 名录模型自带 effort 词表（如 DeepSeek V4.1 Flash：`off/low/high/max`，默认 `off`；Kimi K3：`low/high`，默认 `high`）。
-- Codex 分组默认 `minimal/low/medium/high/xhigh`，默认 `medium`，经 responses 协议的 `reasoning.effort` 下发。
-- Grok 分组优先使用探测到的 `reasoningEfforts` 元数据，兜底 `low/high`（默认 `high`）。
-- chat-completions 协议下：`off` 映射 `thinking: {type: "disabled"}`；其余 effort 映射 `thinking: {type: "enabled"}` + `reasoning_effort`。
+密钥只经凭据引用解析（优先凭据托管存储，其次环境变量），永不落盘进配置。
+
+## 更新与卸载
+
+```bash
+pnpm dsh plugin --profile web update dsh-protocom-api   # 更新到最新 main
+pnpm dsh plugin --profile web remove dsh-protocom-api   # 卸载
+```
+
+## 验证安装
+
+1. 设置 → Protocom API → 分组卡片「探测模型」能拉回模型列表（美化名 + 上下文 chips）
+2. 聊天界面模型菜单出现对应分组条目，二级菜单可选思考强度
+3. 发一条消息：思考模型有折叠思考区，统计区显示缓存命中率与 TPS
+4. 分组卡片余额区显示剩余额度/余额
 
 ## 余额端点
 
-挂载 `webServer` 时提供回环专享端点 `GET /api/protocom-api/balance`：
+Host 半挂载 `webServer` 时提供回环专享端点 `GET /api/protocom-api/balance`：
 
-- 无参数：返回所有已启用且 `showBalance` 分组的标准化余额（配额模式 `limit/used/remaining`，订阅/钱包模式 `balance/planName/subscription` 字段，均兼容解析）。
-- `?group=<aggregate|codex|stepfun|grok>`：单个分组。
-- 每分组 60 秒缓存；计费倍率端点在 simple 模式部署上可能 404，自动容错合并。
-- 仅回环地址（127.0.0.1 / ::1）可访问，否则 403；非 GET 方法 405。
+- 无参数返回所有已启用且 `showBalance` 的分组；`?group=<aggregate|codex|stepfun|grok>` 单查
+- 每分组 60s 缓存；计费倍率端点在部分部署上可能 404，自动容错
+- 仅回环地址可访问（否则 403），非 GET 方法 405
 
-## 设置页
+## 常见问题
 
-本包附带 Web client 半（`dsh.client`，`platform: web`），向设置页贡献「Protocom API」设置区（slot `settings.section`，order 20，紧随 Models 之后），界面文案中英双语随界面语言切换：
-
-- **页头**：插件简介；「高级」折叠内可覆盖 `baseURL`。
-- **四个分组卡片**（开源聚合 / Codex / StepFun / Grok）：启用开关、API key 输入（写入凭据托管并把分组的 `apiKey` 字段指向该 credential-ref，密钥本身不落配置）、只读协议标签、「探测模型」按钮。
-- **探测结果表格**：美化名 / 上游 id / 上下文变体复选框（200K/256K/400K/1M，名录声明 `contextOptions` 的模型按名录），勾选即写回该分组 `contextLengths`。
-- **余额区**（分组启用且 `showBalance` 时显示）：读取同源 `/api/protocom-api/balance?group=<key>`，展示剩余/总额度或余额+套餐、今日用量、速率窗口与到期时间、计费倍率（按部署披露情况），附加载/失败态与刷新按钮。
-
-所有读写经 Client Remote 完成（`settings.mutate` / `credentials.set` / `llm.discoverModels`），页面在每次写入落账后重取快照。
+- **探测报 "group is disabled"**：该分组未启用。打开卡片上的启用开关，或直接保存一次密钥（会自动启用）。
+- **探测报 401**：key 未配置或无效；确认密钥已保存且状态圆点为绿色。
+- **上下文变体不生效**：确认已在探测结果里勾选了长度档位（写回该分组 `contextLengths`）。
 
 ## 开发
 
 ```bash
 pnpm install
-pnpm run build   # tsdown 打包 lib/index.js（Host，ESM）与 lib/client.js（Web client，CJS 工厂）+ tsc -b 产出 lib/types 类型
-pnpm run test    # vitest
+pnpm run build   # tsdown → lib/index.js（Host，ESM）+ lib/client.js（Web client，CJS 工厂）；tsc -b → lib/types
+pnpm run test    # vitest，38 用例
 ```
+
+本仓约定 `lib/` 构建产物随源码一起提交（保证 git 安装零构建），改完代码务必先 `pnpm run build` 再提交。
 
 ## 措辞约定
 
