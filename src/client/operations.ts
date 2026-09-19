@@ -33,7 +33,9 @@ export interface ProtocomOperations {
   describeCredentials(refs: readonly string[]): Promise<Record<string, CredentialInfo>>
   /**
    * Store one credential literal under its reference, then point the group's
-   * `apiKey` field at that reference.
+   * `apiKey` field at that reference and enable the group: a saved key means
+   * the user intends to use the route, and leaving it disabled strands the
+   * next discovery click on a refusal.
    * @returns the refusal message, or undefined once both writes landed.
    */
   storeApiKey(group: string, ref: string, value: string): Promise<string | undefined>
@@ -67,6 +69,7 @@ export function createProtocomOperations(ctx: ClientContext): ProtocomOperations
       if (!stored.ok) return stored.error.message
       const pointed = await ctx.remote.settings.mutate(SETTINGS_NS, [
         { op: 'set', path: ['groups', group, 'apiKey'], value: ref },
+        { op: 'set', path: ['groups', group, 'enabled'], value: true },
       ], undefined)
       return pointed.ok ? undefined : pointed.error.message
     },
