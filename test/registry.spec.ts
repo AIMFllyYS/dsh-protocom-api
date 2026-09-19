@@ -5,6 +5,7 @@ import {
   displayNameWithContext,
   FALLBACK_CONTEXT_WINDOW,
   matchRegistry,
+  REGISTRY,
 } from '../src/model-registry.ts'
 
 describe('model-registry', () => {
@@ -32,7 +33,22 @@ describe('model-registry', () => {
     expect(matchRegistry('Qwen/Qwen3.8-Omni-Flash')?.displayName).toBe('Qwen3.8 Omni Flash')
     expect(matchRegistry('gpt-5.6-sol')?.displayName).toBe('GPT-5.6 Sol')
     expect(matchRegistry('meituan/LongCat-2.0:free')?.displayName).toBe('LongCat 2.0')
+    expect(matchRegistry('poolside/laguna-s-2.1-free')?.displayName).toBe('Laguna S 2.1 Free')
+    expect(matchRegistry('inclusionai/ling-3.0-flash-sante:free')?.displayName).toBe('Ling 3.0 Flash Sante')
+    expect(matchRegistry('meta/muse-spark-1.3-contributor')?.displayName).toBe('Muse Spark 1.3 Contributor')
     expect(matchRegistry('poolside/some-model')).toBeUndefined()
+  })
+
+  it('covers every listed model without duplicate or unreachable entries', () => {
+    const seen = new Set<string>()
+    for (const entry of REGISTRY) {
+      const key = typeof entry.match === 'string' ? entry.match : entry.match.source
+      expect(seen.has(key), `duplicate registry matcher ${key}`).toBe(false)
+      seen.add(key)
+      // A literal entry must resolve to itself, not be shadowed by an earlier
+      // pattern that happens to match the same id.
+      if (typeof entry.match === 'string') expect(matchRegistry(entry.match)).toBe(entry)
+    }
   })
 
   it('formats context labels as 200K/256K/400K/1M', () => {

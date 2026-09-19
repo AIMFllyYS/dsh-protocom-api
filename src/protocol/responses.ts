@@ -3,7 +3,11 @@
  * handling: requests map messages to `input` items and the reasoning effort
  * to `reasoning.effort`; stream events resolve through their payload `type`
  * field, terminating at `response.completed` / `response.failed` rather than
- * relying on a `[DONE]` sentinel.
+ * relying on a `[DONE]` sentinel. Tool calls stream twice on this protocol —
+ * identity on `response.output_item.added`, arguments on
+ * `response.function_call_arguments.delta`, and the complete item once more on
+ * `response.output_item.done` — so the terminal item only ever contributes the
+ * part the deltas have not already carried.
  *
  * @module dsh-protocom-api/protocol/responses
  */
@@ -27,7 +31,13 @@ export interface WireResponseUsage {
 interface WireEvent {
   type?: string
   delta?: string
+  /** Streamed-item identity; providers send one or both of these. */
+  item_id?: string
+  output_index?: number
+  /** Complete argument text some providers put on `function_call_arguments.done`. */
+  arguments?: string
   item?: {
+    id?: string
     type?: string
     call_id?: string
     name?: string
@@ -153,6 +163,8 @@ interface OpenBlock {
   text: string
   callId?: string | undefined
   name?: string | undefined
+  /** Whether this block's `block-start` has been emitted (a tool call may open before its identity arrives). */
+  announced?: boolean
 }
 
 function closeBlock(block: OpenBlock): ContentBlock {
@@ -166,6 +178,23 @@ function closeBlock(block: OpenBlock): ContentBlock {
       arguments: block.text,
     }
   }
+}
+
+/** `id` and `name` are identity: the wire sends each once, on the call's first event. */
+function acceptIdentity(current: string | undefined, incoming: unknown): string | undefined {
+  return typeof incoming === 'string' && incoming.length > 0 ? incoming : current
+}
+
+/**
+ * The part of a function call's arguments the deltas have not carried yet.
+ * Providers resend the complete text on the `...done` events, so only what
+ * extends the streamed prefix is new; text that does not extend it is dropped
+ * rather than replayed as duplicate or corrupt arguments.
+ */
+function argumentsRemainder(streamed: string, complete: string | undefined): string | undefined {
+  if (complete === undefined || complete.length === 0) return undefined
+  if (!complete.startsWith(streamed)) return undefined
+  return complete.slice(streamed.length)
 }
 
 /**
@@ -182,11 +211,59 @@ export async function* translateResponses(payloads: AsyncIterable<string>): Asyn
   let pendingFinish: FinishReason | undefined
   let pendingUsage: TokenUsage | undefined
   let sawToolCall = false
+  /** One streamed call per wire identity, so its deltas and its terminal item share one block. */
+  const toolBlocks = new Map<string, OpenBlock>()
 
   function open(kind: OpenBlock['kind']): OpenBlock {
     const block: OpenBlock = { index: nextIndex++, kind, text: '' }
     order.push(block)
     return block
+  }
+
+  /** The open call block for one wire identity, created on first sight. */
+  function toolBlockFor(identity: string): OpenBlock {
+    let block = toolBlocks.get(identity)
+    if (!block) {
+      block = open('tool-call')
+      toolBlocks.set(identity, block)
+    }
+    return block
+  }
+
+  /** One wire identity per call: the item id when sent, else its output index. */
+  function identityOf(itemId: unknown, outputIndex: unknown): string | undefined {
+    if (typeof itemId === 'string' && itemId.length > 0) return itemId
+    if (typeof outputIndex === 'number' && Number.isSafeInteger(outputIndex)) return `#${outputIndex}`
+    return undefined
+  }
+
+  /**
+   * Adopt whatever identity this event discloses and, on the first one, open
+   * the block. Identity is re-read on every event because the wire may not
+   * disclose `call_id`/`name` until the item completes, and the opening
+   * `block-start` must precede every delta whether or not it ever does.
+   */
+  function* announce(block: OpenBlock, id: unknown, name: unknown): Generator<StreamChunk> {
+    block.callId = acceptIdentity(block.callId, id)
+    block.name = acceptIdentity(block.name, name)
+    if (block.announced !== true) {
+      block.announced = true
+      sawToolCall = true
+      yield { type: 'block-start', index: block.index, blockType: 'tool-call' }
+    }
+  }
+
+  /** Append argument text and yield the delta carrying it. */
+  function* emitArguments(block: OpenBlock, fragment: string): Generator<StreamChunk> {
+    if (fragment.length === 0) return
+    block.text += fragment
+    yield {
+      type: 'tool-call-delta',
+      index: block.index,
+      id: ToolCallId(block.callId ?? ''),
+      ...block.name === undefined ? {} : { name: block.name },
+      argumentsDelta: fragment,
+    }
   }
 
   for await (const payload of payloads) {
@@ -219,22 +296,41 @@ export async function* translateResponses(payloads: AsyncIterable<string>): Asyn
         yield { type: 'reasoning-delta', index: reasoningBlock.index, text: event.delta }
         break
       }
+      case 'response.output_item.added': {
+        const item = event.item
+        if (item?.type !== 'function_call') break
+        const identity = identityOf(item.id ?? event.item_id, event.output_index)
+        if (identity === undefined) break
+        const block = toolBlockFor(identity)
+        yield* announce(block, item.call_id, item.name)
+        yield* emitArguments(block, item.arguments ?? '')
+        break
+      }
+      case 'response.function_call_arguments.delta': {
+        const identity = identityOf(event.item_id, event.output_index)
+        if (identity === undefined || typeof event.delta !== 'string') break
+        const deltaBlock = toolBlockFor(identity)
+        yield* announce(deltaBlock, undefined, undefined)
+        yield* emitArguments(deltaBlock, event.delta)
+        break
+      }
+      case 'response.function_call_arguments.done': {
+        const identity = identityOf(event.item_id, event.output_index)
+        if (identity === undefined) break
+        const block = toolBlockFor(identity)
+        yield* announce(block, undefined, undefined)
+        yield* emitArguments(block, argumentsRemainder(block.text, event.arguments) ?? '')
+        break
+      }
       case 'response.output_item.done': {
         const item = event.item
         if (item?.type !== 'function_call') break
-        sawToolCall = true
-        const block = open('tool-call')
-        block.callId = typeof item.call_id === 'string' ? item.call_id : undefined
-        block.name = typeof item.name === 'string' ? item.name : undefined
-        block.text = typeof item.arguments === 'string' ? item.arguments : ''
-        yield { type: 'block-start', index: block.index, blockType: 'tool-call' }
-        yield {
-          type: 'tool-call-delta',
-          index: block.index,
-          id: ToolCallId(block.callId ?? ''),
-          ...block.name !== undefined ? { name: block.name } : {},
-          argumentsDelta: block.text,
-        }
+        const identity = identityOf(item.id ?? event.item_id, event.output_index)
+        const block = identity === undefined
+          ? open('tool-call')
+          : toolBlockFor(identity)
+        yield* announce(block, item.call_id, item.name)
+        yield* emitArguments(block, argumentsRemainder(block.text, item.arguments) ?? '')
         break
       }
       case 'response.completed':

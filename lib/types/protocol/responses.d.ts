@@ -3,7 +3,11 @@
  * handling: requests map messages to `input` items and the reasoning effort
  * to `reasoning.effort`; stream events resolve through their payload `type`
  * field, terminating at `response.completed` / `response.failed` rather than
- * relying on a `[DONE]` sentinel.
+ * relying on a `[DONE]` sentinel. Tool calls stream twice on this protocol —
+ * identity on `response.output_item.added`, arguments on
+ * `response.function_call_arguments.delta`, and the complete item once more on
+ * `response.output_item.done` — so the terminal item only ever contributes the
+ * part the deltas have not already carried.
  *
  * @module dsh-protocom-api/protocol/responses
  */
