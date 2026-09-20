@@ -27,6 +27,8 @@ type WireContentPart =
 /** One conversation message on the wire. */
 interface WireMessage {
   role: 'system' | 'user' | 'assistant' | 'tool'
+  /** Participant label; the re-attribution compatibility mode uses it. */
+  name?: string
   content: string | WireContentPart[]
   reasoning_content?: string
   tool_call_id?: string
@@ -151,11 +153,7 @@ function userContent(
   return parts.length === 0 ? text : parts
 }
 
-function wireMessage(
-  message: Message,
-  images: RequestImageUrls | undefined,
-  replayReasoning: boolean,
-): WireMessage {
+function wireMessage(message: Message, images: RequestImageUrls | undefined): WireMessage {
   if (message.role === 'system') return { role: 'system', content: flattenText(message.content) }
   if (message.role === 'user') {
     const result = message.content.find((block): block is Extract<ContentBlock, { type: 'tool-result' }> =>
@@ -166,8 +164,32 @@ function wireMessage(
     }
     return { role: 'user', content: userContent(message.content, images) }
   }
-  // Assistant output is declared text-only, so an image here is a caller bug
-  // rather than something the protocol could carry.
+  // The assistant branch is decided by the compatibility mode, not here.
+  throw new LlmError('assistant messages are serialized by assistantMessages()', 'INVALID_REQUEST')
+}
+
+/**
+ * How a chat-completions request replays an assistant message's own text.
+ *
+ * `see GroupConfig.assistantTextReplay — this relay's chat surface translates
+ * to an upstream Responses API that refuses an assistant text item in every
+ * chat-side shape (string, `text` part, `output_text` part all answer 400),
+ * while accepting the same words on a user item. `keep` is the correct wire
+ * behaviour and the default; the two other modes exist so a deployment whose
+ * route has that defect can still be served.
+ */
+export type AssistantTextReplay = 'keep' | 'drop' | 'user'
+
+/**
+ * The wire messages one assistant turn becomes. An image is a caller bug here
+ * (assistant output is declared text-only), and the text may be dropped or
+ * re-attributed when the route cannot carry it.
+ */
+function assistantMessages(
+  message: Message,
+  replayReasoning: boolean,
+  assistantTextReplay: AssistantTextReplay,
+): WireMessage[] {
   assertTextOnly(message.content)
   const text = flattenText(message.content)
   const reasoning = message.content
@@ -181,19 +203,35 @@ function wireMessage(
       type: 'function' as const,
       function: { name: block.name, arguments: block.arguments },
     }))
-  return {
+  const body: WireMessage = {
     role: 'assistant',
     content: text,
     // Reasoning is the model's own scratch work, and routes disagree about
     // whether it may come back: this relay answers 400 for a replayed
-    // assistant turn that carries it (its chat surface translates to the
-    // upstream's Responses API, where the field lands as content the model
-    // rejects), and DeepSeek's own API documents a 400 for the same reason.
-    // A route that needs its thinking back — an interleaved-thinking provider
-    // — asks for it with `replayReasoning: true`.
+    // assistant turn that carries it, and DeepSeek's own API documents the
+    // same. A route that needs its thinking back — an interleaved-thinking
+    // provider — asks for it with `replayReasoning: true`.
     ...replayReasoning && reasoning.length > 0 ? { reasoning_content: reasoning } : {},
     ...toolCalls.length > 0 ? { tool_calls: toolCalls } : {},
   }
+  if (text.length === 0 || assistantTextReplay === 'keep') return [body]
+  // Nothing about the turn is lost — the tool calls still ride the assistant
+  // message — but the route never sees the assistant's own prose.
+  if (assistantTextReplay === 'drop') return [{ ...body, content: '' }]
+  // The text survives on a user item labelled `assistant`: the only shape this
+  // relay's translation accepts with the words still present.
+  return [{ role: 'user', name: 'assistant', content: text }, { ...body, content: '' }]
+}
+
+/** The wire messages one harness message becomes, under the route's modes. */
+function wireMessages(
+  message: Message,
+  images: RequestImageUrls | undefined,
+  replayReasoning: boolean,
+  assistantTextReplay: AssistantTextReplay,
+): WireMessage[] {
+  if (message.role === 'assistant') return assistantMessages(message, replayReasoning, assistantTextReplay)
+  return [wireMessage(message, images)]
 }
 
 /** Serialize one request into the chat-completions wire body. */
@@ -202,10 +240,13 @@ export function serializeChatRequest(
   model: string,
   images?: RequestImageUrls,
   replayReasoning = false,
+  assistantTextReplay: AssistantTextReplay = 'keep',
 ): Record<string, unknown> {
   const messages: WireMessage[] = []
   if (options.system !== undefined) messages.push({ role: 'system', content: options.system })
-  for (const message of options.messages) messages.push(wireMessage(message, images, replayReasoning))
+  for (const message of options.messages) {
+    messages.push(...wireMessages(message, images, replayReasoning, assistantTextReplay))
+  }
   return {
     model,
     messages,
@@ -366,11 +407,12 @@ export async function* streamChatCompletions(
   model: string,
   images?: RequestImageUrls,
   replayReasoning = false,
+  assistantTextReplay: AssistantTextReplay = 'keep',
 ): AsyncGenerator<StreamChunk> {
   const response = await postSse(
     connection,
     'chat/completions',
-    serializeChatRequest(options, model, images, replayReasoning),
+    serializeChatRequest(options, model, images, replayReasoning, assistantTextReplay),
     options.signal,
   )
   yield* translateChatCompletions(parseSse(response.body as ReadableStream<BufferSource>))

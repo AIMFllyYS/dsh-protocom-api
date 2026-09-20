@@ -451,7 +451,9 @@ export class ProtocomAdapter extends LlmAdapter {
     const projected = messages === options.messages ? options : { ...options, messages: [...messages] }
     return group.protocol === 'responses'
       ? streamResponses(connection, projected, model, images)
-      : streamChatCompletions(connection, projected, model, images, group.replayReasoning)
+      : streamChatCompletions(
+        connection, projected, model, images, group.replayReasoning, group.assistantTextReplay,
+      )
   }
 
   /**

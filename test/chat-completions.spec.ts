@@ -152,6 +152,61 @@ describe('chat-completions serialization', () => {
     expect(body.thinking).toBeUndefined()
   })
 
+  it('drops the assistant text when the route cannot carry it', () => {
+    // Verified against this endpoint: a chat surface that translates to an
+    // upstream Responses API refuses an assistant text item in every shape,
+    // while an assistant turn with empty content is accepted.
+    const body = serializeChatRequest(base, 'm', undefined, false, 'drop')
+    expect(body.messages).toEqual([
+      { role: 'user', content: 'hi' },
+      { role: 'assistant', content: '' },
+      { role: 'user', content: 'again' },
+    ])
+  })
+
+  it('re-attributes the assistant text to a named user item when asked', () => {
+    const body = serializeChatRequest(base, 'm', undefined, false, 'user')
+    expect(body.messages).toEqual([
+      { role: 'user', content: 'hi' },
+      { role: 'user', name: 'assistant', content: 'hello' },
+      { role: 'assistant', content: '' },
+      { role: 'user', content: 'again' },
+    ])
+  })
+
+  it('keeps a tool call on the assistant message its text was lifted from', () => {
+    // Lifting the text must not move or drop the call: the tool result that
+    // follows still has to find its tool_call_id on an assistant message.
+    const withCall = {
+      ...base,
+      messages: [
+        { role: 'user', content: [{ type: 'text', text: 'go' }] },
+        {
+          role: 'assistant',
+          content: [
+            { type: 'text', text: 'running' },
+            { type: 'tool-call', id: 'call_1', name: 'run_code', arguments: '{"code":"1"}' },
+          ],
+        },
+        {
+          role: 'user',
+          content: [{ type: 'tool-result', toolCallId: 'call_1', content: [{ type: 'text', text: '1' }] }],
+        },
+      ],
+    } as unknown as GenerateOptions
+    const body = serializeChatRequest(withCall, 'm', undefined, false, 'user')
+    expect(body.messages).toEqual([
+      { role: 'user', content: 'go' },
+      { role: 'user', name: 'assistant', content: 'running' },
+      {
+        role: 'assistant',
+        content: '',
+        tool_calls: [{ id: 'call_1', type: 'function', function: { name: 'run_code', arguments: '{"code":"1"}' } }],
+      },
+      { role: 'tool', tool_call_id: 'call_1', content: '1' },
+    ])
+  })
+
   it('replays assistant reasoning for a route that asks for it', () => {
     const body = serializeChatRequest(base, 'deepseek/deepseek-v4.1-flash', undefined, true)
     const messages = body.messages as { role: string; content: string; reasoning_content?: string }[]

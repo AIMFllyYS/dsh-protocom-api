@@ -53,6 +53,21 @@ export interface GroupConfig {
    * thinking back turns this on.
    */
   replayReasoning?: boolean
+  /**
+   * How a chat-completions request replays an assistant message's own text
+   * (default `keep`): `keep` sends it as the protocol says, `drop` omits it
+   * while keeping the turn's tool calls, and `user` re-attributes it to a user
+   * item named `assistant`.
+   *
+   * This relay's chat surface translates to an upstream Responses API that
+   * refuses an assistant text item in every chat-side shape — string, `text`
+   * part and `output_text` part all answer 400 — while accepting the same
+   * words on a user item, so a route with that defect is unusable on this
+   * protocol until one of the two compromise modes is chosen. Prefer
+   * `protocol: responses` where the route has one; these modes are for a route
+   * that does not.
+   */
+  assistantTextReplay?: 'keep' | 'drop' | 'user'
 }
 
 /** Plugin configuration: the endpoint base plus the four group profiles. */
@@ -108,6 +123,7 @@ const group: z<GroupConfig> = z.object({
   contextLengths: z.array(z.number().step(1).min(1)),
   showBalance: z.boolean().default(true),
   replayReasoning: z.boolean().default(false),
+  assistantTextReplay: z.union(['keep', 'drop', 'user']).default('keep'),
 })
 
 /** Runtime schema for {@link Config}. */
@@ -139,6 +155,8 @@ export interface ResolvedGroup {
   showBalance: boolean
   /** Whether a chat-completions replay carries the assistant's reasoning. */
   replayReasoning: boolean
+  /** How a chat-completions replay carries an assistant message's own text. */
+  assistantTextReplay: 'keep' | 'drop' | 'user'
 }
 
 /**
@@ -231,6 +249,7 @@ export function resolveAdapterOptions(config: Config): ResolvedProtocomOptions {
       ...effectiveLengths === undefined ? {} : { contextLengths: [...effectiveLengths] },
       showBalance: source.showBalance ?? true,
       replayReasoning: source.replayReasoning ?? false,
+      assistantTextReplay: source.assistantTextReplay ?? 'keep',
     })
   }
   const hidden = config.hiddenModels ?? []

@@ -26,6 +26,16 @@ describe('shipped group defaults (issue 2a)', () => {
     expect(resolveAdapterOptions({ groups: { stepfun: { protocol: 'chat-completions' } } })
       .groups.get('stepfun')?.protocol).toBe('chat-completions')
   })
+
+  it('keeps the spec-correct assistant text replay unless a route needs the compromise', () => {
+    // 'keep' is what the protocol says; the two compromise modes exist only
+    // for a chat surface that cannot carry an assistant text item at all.
+    expect(resolveAdapterOptions({}).groups.get('aggregate')?.assistantTextReplay).toBe('keep')
+    expect(resolveAdapterOptions({ groups: { aggregate: { assistantTextReplay: 'drop' } } })
+      .groups.get('aggregate')?.assistantTextReplay).toBe('drop')
+    expect(resolveAdapterOptions({ groups: { aggregate: { assistantTextReplay: 'user' } } })
+      .groups.get('aggregate')?.assistantTextReplay).toBe('user')
+  })
 })
 
 describe('baseURL validation (P1-1)', () => {

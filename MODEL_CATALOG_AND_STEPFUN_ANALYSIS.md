@@ -96,6 +96,20 @@
 
 **端到端验证**：step 1 拿到 `run_code {"code": "console.log(8*9)"}`（finish=tool-calls）→ step 2 回放 reasoning+text+tool-call+tool-result → 200，回答 "…computed 8*9 as 72…"，finish=stop。
 
+### 2.4 0.5.0：把 chat-completions 也补成可用（可选）
+
+既然 responses 是"绕开"，再把 chat 侧所有 assistant 写法试一遍：
+
+| 写法 | 结果 |
+|---|---|
+| `content: "text"` / `[{type:'text'}]` / `[{type:'output_text'}]` / `[{type:'input_text'}]` | **全部 400** |
+| `content: ""`（丢文本、留工具调用） | 200 |
+| 同一段话挂 user 条目（`name:"assistant"`） | 200 |
+| `reasoning_content` | **400** |
+| `reasoning`（另一个字段名） | 200（中转站忽略它） |
+
+→ chat 侧没有能保全 assistant 角色的 shape；要跑通只能丢文本或改归属。因此新增 `groups.<key>.assistantTextReplay`：`keep`（默认，规范行为）/ `drop` / `user`。实测同一段回放：keep 400、drop 200、user 200、responses 200。**首选 responses**，兼容模式只服务于没有 responses 通道的 route。
+
 ### 2.3 诊断能力（0.2.0 已实现；2a 已在 0.4.0 定位，无需样本）
 
 `DSH_PROTOCOM_CAPTURE_DIR=<dir>` 时，把每次上游请求的**序列化 body**与上游**非 2xx 的响应体**写成 `<ISO>-<status>.json`（只写 body，不写任何 header，因此不含密钥；默认关闭，含对话内容）。0.4.0 的定位没有用到它——单变量实测已经足够——但它仍是下一个上游怪癖的第一手证据来源，保留。

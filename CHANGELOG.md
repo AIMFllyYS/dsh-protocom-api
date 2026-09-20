@@ -2,6 +2,42 @@
 
 All notable changes to `dsh-protocom-api` are documented here.
 
+## [0.5.0] — 让有缺陷的 chat-completions 路由也能真实跑通（可选兼容模式）
+
+0.4.0 让阶跃星辰分组改走 responses 通道，问题是解决了，但那算"绕开"。这一版回答"能不能从插件侧把 chat-completions 也修好"：**能，但有代价，默认不开**。
+
+### 实测：chat 侧所有 assistant 写法里只有两种能活
+
+| chat 侧 assistant 写法 | 结果 |
+|---|---|
+| `content: "text"`（规范写法） | **400** |
+| `content: [{type:'text',text}]` | **400** |
+| `content: [{type:'output_text',text}]` | **400** |
+| `content: [{type:'input_text',text}]` | **400** |
+| `content: ""`（丢弃文本、保留工具调用） | 200 |
+| 同一段话放在 **user 条目**（`name: "assistant"`） | 200 |
+| `reasoning_content: "…"` | **400** |
+| `reasoning: "…"`（另一个字段名） | 200（被中转站忽略，等于没发） |
+
+机制：该中转站把 assistant 文本**一律**渲染成上游拒绝的形状（没有 `type` 的 message 条目 + `output_text` 部件），chat 侧**没有任何 shape 能让它变合法**；但同一段话挂在 user 条目上它接受。
+
+### 新增 `groups.<key>.assistantTextReplay`（默认 `keep`）
+
+- `keep`：按规范原样回放（默认，行为不变）。
+- `drop`：**丢弃** assistant 自己的文字，保留该轮的工具调用与结果。
+- `user`：把这段文字**改挂到一条 `name: "assistant"` 的 user 条目**上——信息不丢，但角色归属被改写。
+
+实测（构建产物 + 真实凭据，同一段「reasoning + 文本 + 工具调用 + 工具结果」回放）：
+
+`
+keep              [chat-completions/keep] -> INVALID_REQUEST | Upstream error: 400
+drop              [chat-completions/drop] -> 200 finish=stop | "Yes, that's correct — **72**…"
+user              [chat-completions/user] -> 200 finish=stop | "Confirmed — 8*9 = 72. ✅"
+responses（默认）  [responses/keep]        -> 200 finish=stop | "**8 × 9 = 72**…"
+`
+
+怎么选：**优先 `protocol: responses`**（原生形状、不改写语义）；只有当那条 route 没有 responses 通道、又必须跑在 chat-completions 上时，才在 `drop`（更干净，模型看不到自己上一轮的话）与 `user`（保留文字、改归属）之间二选一。
+
 ## [0.4.0] — 阶跃星辰：修复「第二轮起必 400」
 
 一句话：**该分组原先走的 chat-completions 门面在这个中转站上无法回放任何历史**，所以只要不是第一轮请求就必然 400。现已让该分组默认走官方 Responses 通道，并补齐该通道的思考流词表。

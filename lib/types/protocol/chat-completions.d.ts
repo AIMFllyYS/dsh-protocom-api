@@ -48,8 +48,19 @@ export declare function mapUsage(usage: WireUsage): TokenUsage;
  * `code`.
  */
 export declare function mapFinishReason(reason: string): FinishReason;
+/**
+ * How a chat-completions request replays an assistant message's own text.
+ *
+ * `see GroupConfig.assistantTextReplay — this relay's chat surface translates
+ * to an upstream Responses API that refuses an assistant text item in every
+ * chat-side shape (string, `text` part, `output_text` part all answer 400),
+ * while accepting the same words on a user item. `keep` is the correct wire
+ * behaviour and the default; the two other modes exist so a deployment whose
+ * route has that defect can still be served.
+ */
+export type AssistantTextReplay = 'keep' | 'drop' | 'user';
 /** Serialize one request into the chat-completions wire body. */
-export declare function serializeChatRequest(options: GenerateOptions, model: string, images?: RequestImageUrls, replayReasoning?: boolean): Record<string, unknown>;
+export declare function serializeChatRequest(options: GenerateOptions, model: string, images?: RequestImageUrls, replayReasoning?: boolean, assistantTextReplay?: AssistantTextReplay): Record<string, unknown>;
 /**
  * Consume SSE data payloads (ending with `[DONE]`) and yield StreamChunks.
  * `block-end`s, `usage`, and `finish` are deferred to the `[DONE]` sentinel
@@ -59,4 +70,4 @@ export declare function serializeChatRequest(options: GenerateOptions, model: st
  */
 export declare function translateChatCompletions(payloads: AsyncIterable<string>): AsyncGenerator<StreamChunk>;
 /** Stream one chat-completions call as harness chunks. */
-export declare function streamChatCompletions(connection: ProtocolConnection, options: GenerateOptions, model: string, images?: RequestImageUrls, replayReasoning?: boolean): AsyncGenerator<StreamChunk>;
+export declare function streamChatCompletions(connection: ProtocolConnection, options: GenerateOptions, model: string, images?: RequestImageUrls, replayReasoning?: boolean, assistantTextReplay?: AssistantTextReplay): AsyncGenerator<StreamChunk>;

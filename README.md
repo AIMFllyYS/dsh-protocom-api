@@ -105,6 +105,7 @@ Host 提供 `GET /api/protocom-api/balance`，它挂在 Host 的共享、带围�
 - **探测报 "group is disabled"**：该分组未启用。打开卡片上的启用开关，或直接保存一次密钥（会自动启用）。
 - **探测报 401**：key 未配置或无效；确认密钥已保存且状态圆点为绿色。
 - **阶跃星辰从第二轮开始报 `Upstream error: 400`**：0.3.x 及更早版本该分组走 chat-completions 门面，而该门面在这个中转站上**无法回放任何历史**（assistant 文本/reasoning 一出现就被上游拒）。0.4.0 起该分组默认走 responses 通道；若你手写过 `protocol: chat-completions`，删掉它即可恢复默认。
+- **某个 route 只有 chat-completions，且一回放历史就 400**：这是中转站把 assistant 文本渲染成上游不接受的形状所致（0.4.0 记录）。若该 route 有 responses 通道，直接 `protocol: responses`；没有的话用 `assistantTextReplay: drop`（丢弃 assistant 自己的文字、保留工具调用）或 `user`（把这段文字改挂到 user 条目、角色归属被改写）。实测两者都能跑通，`keep`（默认）在该类 route 上必然 400。
 - **某个分组在设置页里看不到模型行**：该分组未启用或未配置密钥。启用并保存密钥后面板会自动拉取该分组自己的 listing（也可点「刷新模型」）。
 - **上下文变体不生效**：在**该分组卡片内**对应模型行上勾选档位（写回 `modelContexts`）。分组自带的梯子（StepFun 为 200K/256K/400K/1M）未手动改过时不落盘。
 - **上传图片没有入口 / 报 `UNSUPPORTED_CONTENT`**：说明该模型的图片能力被显式关闭了（`visionModels` 为 `false`，或名录标注 `vision: false`，如 GLM 系）。在对应模型行点「仅文本 / 视觉」切换即可。
