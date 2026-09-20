@@ -1,10 +1,12 @@
 /**
  * OpenAI chat-completions wire protocol: request serialization (thinking
  * fields ported from llm-deepseek's serialize.ts) and SSE translation into
- * harness StreamChunks (after llm-deepseek's translate.ts). Two upstream
+ * harness StreamChunks (after llm-deepseek's translate.ts). Three upstream
  * quirks drive the differences: intermediate chunks may carry an empty-string
- * `finish_reason` that means "not finished", and thinking models stream
- * `delta.reasoning_content`.
+ * `finish_reason` that means "not finished", thinking models stream
+ * `delta.reasoning_content`, and images ride as inline base64 `image_url`
+ * parts (the endpoint accepts data URLs and rejects no image input of its
+ * own, so the model's declared modality is the only gate).
  *
  * @module dsh-protocom-api/protocol/chat-completions
  */
@@ -15,10 +17,22 @@ import { DONE, parseSse } from '../sse.ts'
 import { postSse } from './http.ts'
 import type { ProtocolConnection } from './http.ts'
 
+/**
+ * Resolved request images, keyed by attachment id: the provider-ready
+ * `data:` URL an image block's durable reference stands for. Empty when the
+ * request carries no image the adapter retained.
+ */
+export type RequestImageUrls = ReadonlyMap<string, string>
+
+/** One content part of a multimodal user message. */
+type WireContentPart =
+  | { type: 'text'; text: string }
+  | { type: 'image_url'; image_url: { url: string } }
+
 /** One conversation message on the wire. */
 interface WireMessage {
   role: 'system' | 'user' | 'assistant' | 'tool'
-  content: string
+  content: string | WireContentPart[]
   reasoning_content?: string
   tool_call_id?: string
   tool_calls?: {
@@ -117,12 +131,32 @@ function flattenText(blocks: readonly ContentBlock[]): string {
 
 function assertTextOnly(blocks: readonly ContentBlock[]): void {
   if (contentHasImage(blocks)) {
-    throw new LlmError('The protocom-api chat-completions adapter does not support image content.', 'UNSUPPORTED_CONTENT')
+    throw new LlmError('The protocom-api chat-completions adapter does not support image content here.', 'UNSUPPORTED_CONTENT')
   }
 }
 
-function wireMessage(message: Message): WireMessage {
-  assertTextOnly(message.content)
+/**
+ * The user-message content: a plain string while no image survives, otherwise
+ * the multimodal part list. Text parts keep their order ahead of the images,
+ * matching how the composer presents them.
+ */
+function userContent(
+  blocks: readonly ContentBlock[],
+  images: RequestImageUrls | undefined,
+): string | WireContentPart[] {
+  const text = flattenText(blocks)
+  if (images === undefined || images.size === 0) return text
+  const parts: WireContentPart[] = []
+  if (text.length > 0) parts.push({ type: 'text', text })
+  for (const block of blocks) {
+    if (block.type !== 'image') continue
+    const url = images.get(String(block.attachment.attachmentId))
+    if (url !== undefined) parts.push({ type: 'image_url', image_url: { url } })
+  }
+  return parts.length === 0 ? text : parts
+}
+
+function wireMessage(message: Message, images: RequestImageUrls | undefined): WireMessage {
   if (message.role === 'system') return { role: 'system', content: flattenText(message.content) }
   if (message.role === 'user') {
     const result = message.content.find((block): block is Extract<ContentBlock, { type: 'tool-result' }> =>
@@ -131,8 +165,11 @@ function wireMessage(message: Message): WireMessage {
       assertTextOnly(result.content)
       return { role: 'tool', tool_call_id: String(result.toolCallId), content: flattenText(result.content) }
     }
-    return { role: 'user', content: flattenText(message.content) }
+    return { role: 'user', content: userContent(message.content, images) }
   }
+  // Assistant output is declared text-only, so an image here is a caller bug
+  // rather than something the protocol could carry.
+  assertTextOnly(message.content)
   const text = flattenText(message.content)
   const reasoning = message.content
     .filter(block => block.type === 'reasoning')
@@ -154,10 +191,14 @@ function wireMessage(message: Message): WireMessage {
 }
 
 /** Serialize one request into the chat-completions wire body. */
-export function serializeChatRequest(options: GenerateOptions, model: string): Record<string, unknown> {
+export function serializeChatRequest(
+  options: GenerateOptions,
+  model: string,
+  images?: RequestImageUrls,
+): Record<string, unknown> {
   const messages: WireMessage[] = []
   if (options.system !== undefined) messages.push({ role: 'system', content: options.system })
-  for (const message of options.messages) messages.push(wireMessage(message))
+  for (const message of options.messages) messages.push(wireMessage(message, images))
   return {
     model,
     messages,
@@ -316,11 +357,12 @@ export async function* streamChatCompletions(
   connection: ProtocolConnection,
   options: GenerateOptions,
   model: string,
+  images?: RequestImageUrls,
 ): AsyncGenerator<StreamChunk> {
   const response = await postSse(
     connection,
     'chat/completions',
-    serializeChatRequest(options, model),
+    serializeChatRequest(options, model, images),
     options.signal,
   )
   yield* translateChatCompletions(parseSse(response.body as ReadableStream<BufferSource>))

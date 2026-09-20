@@ -1,15 +1,23 @@
 /**
  * OpenAI chat-completions wire protocol: request serialization (thinking
  * fields ported from llm-deepseek's serialize.ts) and SSE translation into
- * harness StreamChunks (after llm-deepseek's translate.ts). Two upstream
+ * harness StreamChunks (after llm-deepseek's translate.ts). Three upstream
  * quirks drive the differences: intermediate chunks may carry an empty-string
- * `finish_reason` that means "not finished", and thinking models stream
- * `delta.reasoning_content`.
+ * `finish_reason` that means "not finished", thinking models stream
+ * `delta.reasoning_content`, and images ride as inline base64 `image_url`
+ * parts (the endpoint accepts data URLs and rejects no image input of its
+ * own, so the model's declared modality is the only gate).
  *
  * @module dsh-protocom-api/protocol/chat-completions
  */
 import type { FinishReason, GenerateOptions, StreamChunk, TokenUsage } from '@deepseek-ai/dsh-llm';
 import type { ProtocolConnection } from './http.ts';
+/**
+ * Resolved request images, keyed by attachment id: the provider-ready
+ * `data:` URL an image block's durable reference stands for. Empty when the
+ * request carries no image the adapter retained.
+ */
+export type RequestImageUrls = ReadonlyMap<string, string>;
 /** Token accounting as the endpoint reports it. */
 export interface WireUsage {
     prompt_tokens: number;
@@ -46,7 +54,7 @@ export declare function mapUsage(usage: WireUsage): TokenUsage;
  */
 export declare function mapFinishReason(reason: string): FinishReason;
 /** Serialize one request into the chat-completions wire body. */
-export declare function serializeChatRequest(options: GenerateOptions, model: string): Record<string, unknown>;
+export declare function serializeChatRequest(options: GenerateOptions, model: string, images?: RequestImageUrls): Record<string, unknown>;
 /**
  * Consume SSE data payloads (ending with `[DONE]`) and yield StreamChunks.
  * `block-end`s, `usage`, and `finish` are deferred to the `[DONE]` sentinel
@@ -56,4 +64,4 @@ export declare function serializeChatRequest(options: GenerateOptions, model: st
  */
 export declare function translateChatCompletions(payloads: AsyncIterable<string>): AsyncGenerator<StreamChunk>;
 /** Stream one chat-completions call as harness chunks. */
-export declare function streamChatCompletions(connection: ProtocolConnection, options: GenerateOptions, model: string): AsyncGenerator<StreamChunk>;
+export declare function streamChatCompletions(connection: ProtocolConnection, options: GenerateOptions, model: string, images?: RequestImageUrls): AsyncGenerator<StreamChunk>;

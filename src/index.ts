@@ -100,7 +100,13 @@ export function apply(ctx: Context, config: Config): void {
     )
   }
 
-  const adapter = new ProtocomAdapter({ options, resolveApiKey })
+  const adapter = new ProtocomAdapter({
+    options,
+    resolveApiKey,
+    // Optional seam, like credentials: a deployment without the attachment
+    // service still runs, it just refuses image input instead of dropping it.
+    resolveAttachments: () => ctx.get('attachments'),
+  })
   const balance = new BalanceService({ options, resolveApiKey })
 
   let syncRoutes: () => void = () => {}

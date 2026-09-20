@@ -15,16 +15,58 @@ describe('model-registry', () => {
     expect(prefixed?.displayName).toBe('DeepSeek V4.1 Flash')
     expect(bare?.displayName).toBe('DeepSeek V4.1 Flash')
     expect(prefixed?.contextWindow).toBe(1_048_576)
-    expect(prefixed?.contextOptions).toEqual([204_800, 262_144, 409_600, 1_048_576])
+    expect(prefixed?.contextOptions).toEqual([262_144, 524_288, 1_048_576])
     expect(prefixed?.reasoning).toEqual({ efforts: ['off', 'low', 'high', 'max'], defaultEffort: 'off' })
+    // Verified against the endpoint: the flash model accepts image input.
+    expect(prefixed?.vision).toBe(true)
   })
 
   it('pins kimi-k3 to its forced context window and reasoning vocabulary', () => {
     const entry = matchRegistry('kimi-k3')
     expect(entry?.displayName).toBe('Kimi K3')
     expect(entry?.contextWindow).toBe(262_144)
-    expect(entry?.contextOptions).toBeUndefined()
+    expect(entry?.contextOptions).toEqual([131_072, 262_144])
     expect(entry?.reasoning).toEqual({ efforts: ['low', 'high'], defaultEffort: 'high' })
+    expect(entry?.vision).toBe(true)
+  })
+
+  it('leads the menu with the models whose reasoning content streams', () => {
+    // The picker renders adapter order verbatim, so rank IS the recommendation.
+    expect(matchRegistry('kimi-k3')?.rank).toBe(1)
+    expect(matchRegistry('glm-5.2')?.rank).toBe(2)
+    expect(matchRegistry('mimo-v2.5')?.rank).toBe(3)
+    expect(matchRegistry('deepseek/deepseek-v4.1-flash')?.rank).toBeUndefined()
+  })
+
+  it('drops the models this endpoint refuses to serve', () => {
+    // Listed by /v1/models but rejected by /v1/chat/completions, so offering
+    // them only produces a failure after the user picks one.
+    for (const id of [
+      'google/gemini-3.7-flash',
+      'tencent/hy4-preview',
+      'inclusionai/ling-3.0-flash-sante:free',
+      'Qwen/Qwen3.8-Flash',
+    ]) {
+      expect(matchRegistry(id), id).toBeUndefined()
+    }
+  })
+
+  it('declares image input only where the endpoint accepted one', () => {
+    const vision = REGISTRY.filter(entry => entry.vision === true).map(entry => String(entry.match))
+    expect(vision).toContain('kimi-k3')
+    expect(vision).toContain('gpt-5.6-sol')
+    // Text-only by the vendor's own documentation.
+    expect(matchRegistry('glm-5.3')?.vision).toBeUndefined()
+    // The endpoint answered 404 "no endpoints found that support image input".
+    expect(matchRegistry('mimo-v2.5-pro')?.vision).toBeUndefined()
+  })
+
+  it('never offers an off switch to a model that refuses one', () => {
+    // GLM answers 400 "invalid thinking type, only be disabled when reasoning
+    // effort is none", so an off entry there would be a broken menu choice.
+    for (const id of ['glm-5.2', 'glm-5.3', 'z-ai/glm-5.3-flash', 'zai-org/GLM-5.2']) {
+      expect(matchRegistry(id)?.reasoning?.efforts, id).not.toContain('off')
+    }
   })
 
   it('matches the remaining named models', () => {
@@ -34,8 +76,8 @@ describe('model-registry', () => {
     expect(matchRegistry('gpt-5.6-sol')?.displayName).toBe('GPT-5.6 Sol')
     expect(matchRegistry('meituan/LongCat-2.0:free')?.displayName).toBe('LongCat 2.0')
     expect(matchRegistry('poolside/laguna-s-2.1-free')?.displayName).toBe('Laguna S 2.1 Free')
-    expect(matchRegistry('inclusionai/ling-3.0-flash-sante:free')?.displayName).toBe('Ling 3.0 Flash Sante')
     expect(matchRegistry('meta/muse-spark-1.3-contributor')?.displayName).toBe('Muse Spark 1.3 Contributor')
+    expect(matchRegistry('tencent/hy3-paid')?.contextWindow).toBe(262_144)
     expect(matchRegistry('poolside/some-model')).toBeUndefined()
   })
 
@@ -51,10 +93,10 @@ describe('model-registry', () => {
     }
   })
 
-  it('formats context labels as 200K/256K/400K/1M', () => {
-    expect(contextLabel(204_800)).toBe('200K')
+  it('formats context labels as 128K/256K/512K/1M', () => {
+    expect(contextLabel(131_072)).toBe('128K')
     expect(contextLabel(262_144)).toBe('256K')
-    expect(contextLabel(409_600)).toBe('400K')
+    expect(contextLabel(524_288)).toBe('512K')
     expect(contextLabel(1_048_576)).toBe('1M')
     expect(displayNameWithContext('Kimi K3', 262_144)).toBe('Kimi K3 [256K]')
   })
@@ -76,13 +118,24 @@ describe('model-registry', () => {
     expect(known.displayName).toBe('Kimi K3')
     expect(known.contextWindow).toBe(262_144)
     expect(known.reasoning?.efforts).toEqual(['low', 'high'])
+    expect(known.vision).toBe(true)
 
+    // The endpoint discloses no reasoning metadata, so a row without one takes
+    // the group vocabulary.
     const disclosed = catalogEntry({ id: 'grok-x', reasoningEfforts: ['low', 'high'] })
     expect(disclosed.reasoning).toEqual({ efforts: ['low', 'high'], defaultEffort: 'high' })
 
+    // A registry entry wins over both the disclosed list and the group default.
     const group = catalogEntry({ id: 'gpt-5.6-sol' }, { efforts: ['minimal', 'low', 'medium'], defaultEffort: 'medium' })
     expect(group.displayName).toBe('GPT-5.6 Sol')
-    expect(group.reasoning).toEqual({ efforts: ['minimal', 'low', 'medium'], defaultEffort: 'medium' })
+    expect(group.reasoning?.efforts).toEqual(['low', 'medium', 'high', 'xhigh', 'max'])
+  })
+
+  it('treats an unknown model as text-only and unranked', () => {
+    const unknown = catalogEntry({ id: 'meta/llama-x' })
+    expect(unknown.vision).toBe(false)
+    expect(unknown.rank).toBe(Number.MAX_SAFE_INTEGER)
+    expect(unknown.contextOptions).toBeUndefined()
   })
 
   it('never invents registry models the endpoint did not list', () => {

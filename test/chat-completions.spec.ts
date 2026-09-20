@@ -156,6 +156,57 @@ describe('chat-completions serialization', () => {
     expect(resolveThinking('max')).toEqual({ thinking: { type: 'enabled' }, reasoning_effort: 'max' })
   })
 
+  it('sends a user image as an inline base64 image_url part', () => {
+    const imageMessage = {
+      role: 'user',
+      content: [
+        { type: 'text', text: 'what is this?' },
+        { type: 'image', attachment: { attachmentId: 'sha256:abc', mediaType: 'image/png' } },
+      ],
+    } as unknown as Message
+    const images = new Map([['sha256:abc', 'data:image/png;base64,AAAA']])
+    const body = serializeChatRequest(
+      { ...base, messages: [imageMessage] },
+      'm',
+      images,
+    )
+    expect(body.messages).toEqual([{
+      role: 'user',
+      content: [
+        { type: 'text', text: 'what is this?' },
+        { type: 'image_url', image_url: { url: 'data:image/png;base64,AAAA' } },
+      ],
+    }])
+  })
+
+  it('degrades an unresolvable image to its text and keeps a plain string otherwise', () => {
+    const imageMessage = {
+      role: 'user',
+      content: [
+        { type: 'text', text: 'hi' },
+        { type: 'image', attachment: { attachmentId: 'sha256:missing', mediaType: 'image/png' } },
+      ],
+    } as unknown as Message
+    // An id the map does not carry contributes no part, so the text stands alone.
+    const unresolved = serializeChatRequest({ ...base, messages: [imageMessage] }, 'm', new Map())
+    expect((unresolved.messages as { content: unknown }[])[0]?.content).toBe('hi')
+    // No image map at all keeps the historical string form.
+    const plain = serializeChatRequest({ ...base, messages: [imageMessage] }, 'm')
+    expect((plain.messages as { content: unknown }[])[0]?.content).toBe('hi')
+  })
+
+  it('refuses an image on an assistant message', () => {
+    const assistantImage = {
+      role: 'assistant',
+      content: [
+        { type: 'text', text: 'x' },
+        { type: 'image', attachment: { attachmentId: 'sha256:abc', mediaType: 'image/png' } },
+      ],
+    } as unknown as Message
+    expect(() => serializeChatRequest({ ...base, messages: [assistantImage] }, 'm', new Map()))
+      .toThrowError(/does not support image content/)
+  })
+
   it('materializes the wire thinking fields into the request', () => {
     const off = serializeChatRequest({ ...base, reasoningEffort: 'off' as GenerateOptions['reasoningEffort'] }, 'm')
     expect(off.thinking).toEqual({ type: 'disabled' })

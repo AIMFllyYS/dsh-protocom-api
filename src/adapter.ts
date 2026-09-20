@@ -12,14 +12,17 @@
 
 import { LlmAdapter, LlmError, ReasoningEffortId } from '@deepseek-ai/dsh-llm'
 import type {
+  ContentBlock,
   GenerateOptions,
   LlmModelInfo,
   LlmModelReasoningInfo,
   LlmProviderInfo,
   LlmResolvedModelInfo,
+  ModelModality,
   PreparedAdapterCall,
   StreamChunk,
 } from '@deepseek-ai/dsh-llm'
+import type { AttachmentStore, ImageAttachmentRef, ImageRequestPolicy } from '@deepseek-ai/dsh-attachment'
 import { GROUP_DEFAULTS, groupOf } from './config.ts'
 import type { GroupKey, ResolvedGroup, ResolvedProtocomOptions } from './config.ts'
 import {
@@ -28,14 +31,42 @@ import {
   FALLBACK_CONTEXT_WINDOW,
   matchRegistry,
 } from './model-registry.ts'
-import type { RegistryReasoning, UpstreamModel } from './model-registry.ts'
+import type { CatalogModel, RegistryReasoning, UpstreamModel } from './model-registry.ts'
 import { decodeVariantId, encodeVariantId, stripVariantId, variantLengths } from './context-variants.ts'
 import { fetchUpstreamModels } from './discovery.ts'
 import { streamChatCompletions } from './protocol/chat-completions.ts'
+import type { RequestImageUrls } from './protocol/chat-completions.ts'
 import { streamResponses } from './protocol/responses.ts'
 
 /** How long one fetched model listing is reused per group. */
 export const MODEL_LIST_TTL_MS = 60_000
+
+/**
+ * The request-image projection budget. Mirrors the harness's own default
+ * vision budget: the attachment service re-encodes each stored image to fit,
+ * so the endpoint never receives bytes beyond what a vision model is priced
+ * and sized for.
+ */
+export const REQUEST_IMAGE_POLICY: ImageRequestPolicy = {
+  maxPixels: 640_000,
+  maxBytes: 1024 * 1024,
+}
+
+/** Collect every image reference a message tree carries, including tool results. */
+function collectImageRefs(
+  content: readonly ContentBlock[],
+  refs: Map<string, ImageAttachmentRef>,
+): void {
+  for (const block of content) {
+    if (block.type === 'image') refs.set(String(block.attachment.attachmentId), block.attachment)
+    else if (block.type === 'tool-result') collectImageRefs(block.content, refs)
+  }
+}
+
+/** The inline `data:` URL one resolved request image is transmitted as. */
+function toDataUrl(image: { mediaType: string; data: Uint8Array }): string {
+  return `data:${image.mediaType};base64,${Buffer.from(image.data).toString('base64')}`
+}
 
 /** Constructor options for {@link ProtocomAdapter}: the operation-local resolution hooks the plugin owns. */
 export interface ProtocomAdapterOptions {
@@ -48,6 +79,12 @@ export interface ProtocomAdapterOptions {
    * no key is available anywhere.
    */
   resolveApiKey: (group: ResolvedGroup) => Promise<string>
+  /**
+   * The deployment's durable attachment service, when one is mounted. Absent
+   * means no image can be resolved, so image input is refused rather than
+   * silently dropped.
+   */
+  resolveAttachments?: () => AttachmentStore | undefined
 }
 
 function reasoningInfo(reasoning: RegistryReasoning): LlmModelReasoningInfo {
@@ -102,21 +139,40 @@ export class ProtocomAdapter extends LlmAdapter {
     this.listings.clear()
   }
 
+  /**
+   * The input modalities one route may advertise. Image input is declared only
+   * for a model the registry verified against the endpoint AND a route whose
+   * protocol can actually carry an image; the responses protocol has no image
+   * mapping yet, so it stays text-only rather than advertising a capability
+   * that would fail at dispatch.
+   */
+  private modalitiesOf(group: ResolvedGroup, model: CatalogModel): readonly ModelModality[] {
+    return model.vision && group.protocol === 'chat-completions' ? ['text', 'image'] : ['text']
+  }
+
+  /** Whether one exact upstream model accepts image input on this route. */
+  private acceptsImages(group: ResolvedGroup, upstreamId: string): boolean {
+    return matchRegistry(upstreamId)?.vision === true && group.protocol === 'chat-completions'
+  }
+
   /** The catalog entries one discovered model advertises, one per variant. */
   private modelEntries(provider: string, group: ResolvedGroup, upstream: UpstreamModel): LlmModelInfo[] {
     const model = catalogEntry(upstream, GROUP_DEFAULTS[group.key].reasoning)
+    const inputModalities = this.modalitiesOf(group, model)
     const lengths = variantLengths(model.contextOptions, group.contextLengths)
     if (lengths === undefined) {
       return [{
         provider,
         id: upstream.id,
         name: displayNameWithContext(model.displayName, model.contextWindow),
+        inputModalities,
       }]
     }
     return lengths.map(length => ({
       provider,
       id: encodeVariantId(upstream.id, length),
       name: displayNameWithContext(model.displayName, length),
+      inputModalities,
     }))
   }
 
@@ -130,7 +186,13 @@ export class ProtocomAdapter extends LlmAdapter {
       // lists nothing rather than failing the surface that asked.
       return []
     }
-    return upstream.flatMap(model => this.modelEntries(provider, group, model))
+    // The picker renders this order verbatim and the harness calls it
+    // "adapter-preferred", so it is the one lever that leads the menu with the
+    // models worth reaching for. Ties keep the endpoint's own order.
+    const ranked = upstream
+      .map((model, index) => ({ index, model, rank: catalogEntry(model, GROUP_DEFAULTS[group.key].reasoning).rank }))
+      .sort((left, right) => left.rank - right.rank || left.index - right.index)
+    return ranked.flatMap(entry => this.modelEntries(provider, group, entry.model))
   }
 
   /** Endpoint-disclosed reasoning vocabulary for one model, when the listing says any. */
@@ -175,7 +237,7 @@ export class ProtocomAdapter extends LlmAdapter {
       provider,
       id: model,
       name: displayNameWithContext(displayName, contextWindow),
-      inputModalities: ['text'],
+      inputModalities: this.acceptsImages(group, upstreamId) ? ['text', 'image'] : ['text'],
       context: { contextWindow },
       ...reasoning === undefined ? {} : { reasoning: reasoningInfo(reasoning) },
     }
@@ -205,8 +267,49 @@ export class ProtocomAdapter extends LlmAdapter {
     const apiKey = await this.config.resolveApiKey(group)
     const connection = { baseURL, apiKey }
     const model = stripVariantId(options.model)
-    yield* group.protocol === 'responses'
-      ? streamResponses(connection, options, model)
-      : streamChatCompletions(connection, options, model)
+    if (group.protocol === 'responses') {
+      yield* streamResponses(connection, options, model)
+      return
+    }
+    const images = await this.resolveRequestImages(options, group, model)
+    yield* streamChatCompletions(connection, options, model, images)
+  }
+
+  /**
+   * Resolve every image this request carries into the inline data URL the
+   * endpoint accepts. The harness already projects images away from a
+   * text-only route before dispatch, so a retained image here means the route
+   * declared the `image` modality; the guard still covers direct adapter use.
+   * @param options - the assembled request.
+   * @param group - the frozen group snapshot this request belongs to.
+   * @param model - the upstream model id, variant suffix already stripped.
+   * @returns provider-ready data URLs, or undefined when the request has none.
+   */
+  private async resolveRequestImages(
+    options: GenerateOptions,
+    group: ResolvedGroup,
+    model: string,
+  ): Promise<RequestImageUrls | undefined> {
+    const refs = new Map<string, ImageAttachmentRef>()
+    for (const message of options.messages) collectImageRefs(message.content, refs)
+    if (refs.size === 0) return undefined
+    if (!this.acceptsImages(group, model)) {
+      throw new LlmError(`Protocom model "${model}" does not accept image input.`, 'UNSUPPORTED_CONTENT')
+    }
+    const attachments = this.config.resolveAttachments?.()
+    if (attachments === undefined) {
+      throw new LlmError(
+        'Protocom image input requires the durable attachment service.',
+        'UNSUPPORTED_CONTENT',
+      )
+    }
+    const ordered = [...refs.values()]
+    const projected = await Promise.all(ordered.map(
+      ref => attachments.readImageRequest(ref, REQUEST_IMAGE_POLICY, options.signal),
+    ))
+    return new Map(ordered.map((ref, index) => [
+      String(ref.attachmentId),
+      toDataUrl(projected[index] as { mediaType: string; data: Uint8Array }),
+    ]))
   }
 }

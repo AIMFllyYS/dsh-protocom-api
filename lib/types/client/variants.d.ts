@@ -5,7 +5,7 @@
  * @module dsh-protocom-api/client/variants
  */
 /** The four standard lengths offered for a model the registry does not size. */
-export declare const STANDARD_VARIANT_CHOICES: readonly [204800, 262144, 409600, 1048576];
+export declare const STANDARD_VARIANT_CHOICES: readonly [131072, 262144, 524288, 1048576];
 /**
  * The checkbox lengths one probe row shows: the registry's declared options
  * when known, the standard four otherwise.

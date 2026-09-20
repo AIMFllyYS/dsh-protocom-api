@@ -11,9 +11,17 @@
  */
 import { LlmAdapter } from '@deepseek-ai/dsh-llm';
 import type { GenerateOptions, LlmModelInfo, LlmProviderInfo, LlmResolvedModelInfo, PreparedAdapterCall, StreamChunk } from '@deepseek-ai/dsh-llm';
+import type { AttachmentStore, ImageRequestPolicy } from '@deepseek-ai/dsh-attachment';
 import type { ResolvedGroup, ResolvedProtocomOptions } from './config.ts';
 /** How long one fetched model listing is reused per group. */
 export declare const MODEL_LIST_TTL_MS = 60000;
+/**
+ * The request-image projection budget. Mirrors the harness's own default
+ * vision budget: the attachment service re-encodes each stored image to fit,
+ * so the endpoint never receives bytes beyond what a vision model is priced
+ * and sized for.
+ */
+export declare const REQUEST_IMAGE_POLICY: ImageRequestPolicy;
 /** Constructor options for {@link ProtocomAdapter}: the operation-local resolution hooks the plugin owns. */
 export interface ProtocomAdapterOptions {
     /** Current validated connection facts; called once per operation. */
@@ -25,6 +33,12 @@ export interface ProtocomAdapterOptions {
      * no key is available anywhere.
      */
     resolveApiKey: (group: ResolvedGroup) => Promise<string>;
+    /**
+     * The deployment's durable attachment service, when one is mounted. Absent
+     * means no image can be resolved, so image input is refused rather than
+     * silently dropped.
+     */
+    resolveAttachments?: () => AttachmentStore | undefined;
 }
 /** One adapter serving every enabled `protocom-*` provider route. */
 export declare class ProtocomAdapter extends LlmAdapter {
@@ -38,6 +52,16 @@ export declare class ProtocomAdapter extends LlmAdapter {
     private upstreamModels;
     /** Forget cached listings so a configuration change re-interrogates. */
     invalidateListings(): void;
+    /**
+     * The input modalities one route may advertise. Image input is declared only
+     * for a model the registry verified against the endpoint AND a route whose
+     * protocol can actually carry an image; the responses protocol has no image
+     * mapping yet, so it stays text-only rather than advertising a capability
+     * that would fail at dispatch.
+     */
+    private modalitiesOf;
+    /** Whether one exact upstream model accepts image input on this route. */
+    private acceptsImages;
     /** The catalog entries one discovered model advertises, one per variant. */
     private modelEntries;
     listModels(provider: string): Promise<readonly LlmModelInfo[]>;
@@ -48,4 +72,15 @@ export declare class ProtocomAdapter extends LlmAdapter {
     prepareCall(provider: string, model: string, _signal?: AbortSignal): Promise<PreparedAdapterCall>;
     stream(options: GenerateOptions): AsyncIterable<StreamChunk>;
     private streamWithGroup;
+    /**
+     * Resolve every image this request carries into the inline data URL the
+     * endpoint accepts. The harness already projects images away from a
+     * text-only route before dispatch, so a retained image here means the route
+     * declared the `image` modality; the guard still covers direct adapter use.
+     * @param options - the assembled request.
+     * @param group - the frozen group snapshot this request belongs to.
+     * @param model - the upstream model id, variant suffix already stripped.
+     * @returns provider-ready data URLs, or undefined when the request has none.
+     */
+    private resolveRequestImages;
 }
