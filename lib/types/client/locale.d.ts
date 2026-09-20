@@ -32,6 +32,12 @@ export declare const en: {
     colModel: string;
     colId: string;
     colVariants: string;
+    models: string;
+    modelsHint: string;
+    selectAll: string;
+    selectNone: string;
+    tagVision: string;
+    tagReasoning: string;
     balance: string;
     refresh: string;
     refreshing: string;

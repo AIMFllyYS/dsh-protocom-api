@@ -12,7 +12,7 @@ import type { InjectFace } from '@deepseek-ai/dsh-client-ui-slots'
 import type { CredentialInfo, LlmDiscoveredModel, SettingsNamespaceView } from '@deepseek-ai/dsh-api-remotes/client'
 import { defaultKeyRef, GROUP_DEFAULTS, GROUP_KEYS, providerOf } from '../groups.ts'
 import type { GroupKey, Protocol } from '../groups.ts'
-import { catalogEntry, contextLabel } from '../model-registry.ts'
+import { catalogEntry, contextLabel, modelIdentities } from '../model-registry.ts'
 import type { GroupBalance } from '../balance.ts'
 import type { ProtocomOperations } from './operations.ts'
 import { toggleLength, variantChoicesFor } from './variants.ts'
@@ -46,6 +46,7 @@ interface GroupSectionValue {
 interface SectionValue {
   baseURL?: string
   groups?: Record<string, GroupSectionValue>
+  hiddenModels?: string[]
 }
 
 interface PageState {
@@ -363,6 +364,108 @@ function GroupCard({ groupKey, group, credential, writable, revision, baseURL, o
 }
 
 /**
+ * The model-visibility card: every model the registry knows, one toggle each.
+ * The catalog is the registry's, not the endpoint listing's, so this list is
+ * complete even while the listing is short or unreachable; the switch only
+ * removes an entry from the model menu.
+ */
+function ModelVisibilityCard({ hidden, writable, revision, operations, t, onChanged }: {
+  hidden: readonly string[]
+  writable: boolean
+  revision: number | undefined
+  operations: ProtocomOperations
+  t: Translator
+  onChanged: () => Promise<void>
+}): ReactNode {
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | undefined>(undefined)
+  const hiddenSet = new Set(hidden)
+  // One chip per model identity: the endpoint lists some models under two ids,
+  // and hiding either alone would leave the other in the menu.
+  const identities = modelIdentities()
+  const everyId = identities.flatMap(identity => identity.ids)
+
+  const write = (next: string[]): void => {
+    if (busy) return
+    setBusy(true)
+    setError(undefined)
+    void operations.writeSettings(
+      next.length === 0
+        ? [{ op: 'unset', path: ['hiddenModels'] }]
+        : [{ op: 'set', path: ['hiddenModels'], value: next }],
+      revision,
+    )
+      .then(async (outcome) => {
+        if (outcome.kind !== 'written') {
+          setError(outcome.message)
+          await onChanged()
+          return
+        }
+        await onChanged()
+      })
+      .finally(() => { setBusy(false) })
+  }
+
+  return (
+    <li className="protocom-card">
+      <div className="protocom-card-head">
+        <span className="protocom-card-name">{t('models')}</span>
+        <span className="protocom-head-state">
+          <button
+            type="button"
+            className="protocom-button"
+            disabled={!writable || busy || hidden.length === 0}
+            onClick={() => { write([]) }}
+          >
+            {t('selectAll')}
+          </button>
+          <button
+            type="button"
+            className="protocom-button"
+            disabled={!writable || busy || hidden.length >= everyId.length}
+            onClick={() => { write([...everyId]) }}
+          >
+            {t('selectNone')}
+          </button>
+        </span>
+      </div>
+      <p className="protocom-notice">{t('modelsHint')}</p>
+      {error === undefined ? null : <p className="protocom-error">{error}</p>}
+      <div className="protocom-model-grid">
+        {identities.map(({ displayName, ids, entry }) => {
+          const shown = ids.every(id => !hiddenSet.has(id))
+          const meta = [
+            contextLabel(entry.contextWindow),
+            ...entry.vision === true ? [t('tagVision')] : [],
+            ...entry.reasoning === undefined ? [] : [t('tagReasoning')],
+          ].join(' · ')
+          return (
+            <label
+              key={displayName}
+              className={shown ? 'protocom-model-chip is-on' : 'protocom-model-chip is-off'}
+              title={ids.join('\n')}
+            >
+              <input
+                type="checkbox"
+                checked={shown}
+                disabled={!writable || busy}
+                onChange={() => {
+                  const rest = hidden.filter(id => !ids.includes(id))
+                  write(shown ? [...rest, ...ids] : rest)
+                }}
+              />
+              <span className="protocom-model-dot" />
+              <span className="protocom-model-name">{displayName}</span>
+              <span className="protocom-model-meta">{meta}</span>
+            </label>
+          )
+        })}
+      </div>
+    </li>
+  )
+}
+
+/**
  * Render the Protocom API section content column.
  * @param props - slot-delivered injected dependencies.
  * @returns the section, or null while the shell has not injected yet.
@@ -448,6 +551,14 @@ function Loaded({ operations, t }: { operations: ProtocomOperations; t: Translat
             onChanged={load}
           />
         ))}
+        <ModelVisibilityCard
+          hidden={section.hiddenModels ?? []}
+          writable={writable}
+          revision={revision}
+          operations={operations}
+          t={t}
+          onChanged={load}
+        />
       </ul>
       <details className="protocom-advanced">
         <summary>{t('advanced')}</summary>

@@ -1,9 +1,11 @@
 /**
  * The hand-maintained model registry: display names, context capacities,
  * vision support, and reasoning vocabularies for the models the Protocom
- * official API is known to serve, keyed by upstream model id. Discovery output
- * is projected through this registry; ids it does not know fall through with
- * the endpoint's own display name (or the raw id) and the fallback context
+ * official API serves, keyed by upstream model id. The registry — not the
+ * endpoint's listing — is the catalog of record: every entry is offered even
+ * while the listing omits it, so a shrinking or flaky listing cannot silently
+ * empty the model menu. Ids the registry does not know still ride along from
+ * the listing, with the endpoint's own display name and the fallback context
  * window.
  *
  * The endpoint discloses only `id`, `object`, `created`, `owned_by`, `type`,
@@ -27,8 +29,8 @@ export interface RegistryPricing {
 }
 /** One known model: how to recognize it and what to say about it. */
 export interface RegistryEntry {
-    /** Exact upstream id, or a pattern tested against it. */
-    match: string | RegExp;
+    /** Exact upstream model id. */
+    id: string;
     displayName: string;
     family: string;
     /** Combined request/response context capacity in tokens. */
@@ -55,8 +57,31 @@ export declare const FALLBACK_CONTEXT_WINDOW = 131072;
  * by {@link RegistryEntry.rank} so the recommended models lead the menu.
  */
 export declare const REGISTRY: readonly RegistryEntry[];
+/**
+ * Ids the endpoint advertises but refuses to serve on `/v1/chat/completions`.
+ * Each answers 400 "not available on this endpoint. Call it on
+ * /provider/v1/chat/completions instead" — and that path serves the gateway's
+ * own web UI rather than an API, so the model is simply uncallable. Listing one
+ * only produces a failure after the user has already picked it.
+ */
+export declare const RETIRED_MODELS: readonly string[];
 /** Find the registry entry for one upstream id. */
 export declare function matchRegistry(id: string): RegistryEntry | undefined;
+/**
+ * One selectable model identity: a display name and every upstream id that
+ * serves it. The endpoint lists some models under both an organization- and a
+ * bare-prefixed id, which would otherwise present the same model twice in the
+ * menu and twice in the visibility list.
+ */
+export interface ModelIdentity {
+    displayName: string;
+    /** Every upstream id for this identity, in registry order. */
+    ids: readonly string[];
+    /** The entry whose facts describe the identity. */
+    entry: RegistryEntry;
+}
+/** Collapse the registry into one identity per display name, in registry order. */
+export declare function modelIdentities(): ModelIdentity[];
 /** Short capacity label: 128K, 256K, 512K, 1M. */
 export declare function contextLabel(tokens: number): string;
 /** Selector name for one entry at one context length: `{displayName} [{label}]`. */

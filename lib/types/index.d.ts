@@ -23,8 +23,8 @@ export type { GroupConfig, GroupKey, Protocol, ResolvedGroup, ResolvedProtocomOp
 export { decodeVariantId, encodeVariantId, stripVariantId, variantLengths } from './context-variants.ts';
 export { discoverModels, fetchUpstreamModels, parseModelsListing } from './discovery.ts';
 export type { DiscoveryHooks } from './discovery.ts';
-export { catalogEntry, contextLabel, displayNameWithContext, FALLBACK_CONTEXT_WINDOW, matchRegistry, REGISTRY, } from './model-registry.ts';
-export type { CatalogModel, RegistryEntry, RegistryPricing, RegistryReasoning, UpstreamModel } from './model-registry.ts';
+export { catalogEntry, contextLabel, displayNameWithContext, FALLBACK_CONTEXT_WINDOW, matchRegistry, modelIdentities, REGISTRY, RETIRED_MODELS, } from './model-registry.ts';
+export type { CatalogModel, ModelIdentity, RegistryEntry, RegistryPricing, RegistryReasoning, UpstreamModel, } from './model-registry.ts';
 export declare const name = "protocom-api";
 export declare const inject: string[];
 export declare function apply(ctx: Context, config: Config): void;

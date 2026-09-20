@@ -32,6 +32,12 @@ export interface Config {
     baseURL?: string;
     /** Group profiles keyed by group key; unknown keys are refused. */
     groups?: Record<string, GroupConfig>;
+    /**
+     * Upstream model ids the model menu must not offer, across every group.
+     * Absent or empty shows the whole catalog, so the default is every known
+     * model and hiding is the explicit act.
+     */
+    hiddenModels?: string[];
 }
 /** Runtime schema for {@link Config}. */
 export declare const Config: z<Config>;
@@ -61,6 +67,8 @@ export interface ResolvedProtocomOptions {
     baseURL: string;
     /** All four groups in fixed order; `enabled` gates route registration. */
     groups: ReadonlyMap<GroupKey, ResolvedGroup>;
+    /** Upstream ids the model menu must not offer. Empty means the whole catalog. */
+    hiddenModels: ReadonlySet<string>;
 }
 /**
  * The one explicit resolve step from raw config to validated connection

@@ -39,6 +39,12 @@ export interface Config {
   baseURL?: string
   /** Group profiles keyed by group key; unknown keys are refused. */
   groups?: Record<string, GroupConfig>
+  /**
+   * Upstream model ids the model menu must not offer, across every group.
+   * Absent or empty shows the whole catalog, so the default is every known
+   * model and hiding is the explicit act.
+   */
+  hiddenModels?: string[]
 }
 
 const group: z<GroupConfig> = z.object({
@@ -53,6 +59,7 @@ const group: z<GroupConfig> = z.object({
 export const Config: z<Config> = z.object({
   baseURL: z.string().default(DEFAULT_BASE_URL),
   groups: z.dict(group).default({}),
+  hiddenModels: z.array(z.string()).default([]),
 })
 
 /** Validated per-group facts with every adapter-owned default resolved. */
@@ -82,6 +89,8 @@ export interface ResolvedProtocomOptions {
   baseURL: string
   /** All four groups in fixed order; `enabled` gates route registration. */
   groups: ReadonlyMap<GroupKey, ResolvedGroup>
+  /** Upstream ids the model menu must not offer. Empty means the whole catalog. */
+  hiddenModels: ReadonlySet<string>
 }
 
 /**
@@ -133,5 +142,11 @@ export function resolveAdapterOptions(config: Config): ResolvedProtocomOptions {
       showBalance: source.showBalance ?? true,
     })
   }
-  return { baseURL, groups }
+  const hidden = config.hiddenModels ?? []
+  for (const id of hidden) {
+    if (typeof id !== 'string' || id.length === 0) {
+      throw new Error('protocom-api: hiddenModels entries must be non-empty model ids')
+    }
+  }
+  return { baseURL, groups, hiddenModels: new Set(hidden) }
 }

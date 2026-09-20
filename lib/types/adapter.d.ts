@@ -64,6 +64,13 @@ export declare class ProtocomAdapter extends LlmAdapter {
     private acceptsImages;
     /** The catalog entries one discovered model advertises, one per variant. */
     private modelEntries;
+    /**
+     * The catalog offered for one route. The registry is the catalog of record:
+     * every model it knows is offered even while the endpoint's listing omits
+     * it, so a listing that shrinks, degrades, or fails outright cannot empty
+     * the menu. Ids the registry does not know still ride along from the
+     * listing, so a newly served model appears without a plugin release.
+     */
     listModels(provider: string): Promise<readonly LlmModelInfo[]>;
     /** Endpoint-disclosed reasoning vocabulary for one model, when the listing says any. */
     private disclosedReasoning;

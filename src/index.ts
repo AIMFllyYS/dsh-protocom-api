@@ -39,9 +39,18 @@ export {
   displayNameWithContext,
   FALLBACK_CONTEXT_WINDOW,
   matchRegistry,
+  modelIdentities,
   REGISTRY,
+  RETIRED_MODELS,
 } from './model-registry.ts'
-export type { CatalogModel, RegistryEntry, RegistryPricing, RegistryReasoning, UpstreamModel } from './model-registry.ts'
+export type {
+  CatalogModel,
+  ModelIdentity,
+  RegistryEntry,
+  RegistryPricing,
+  RegistryReasoning,
+  UpstreamModel,
+} from './model-registry.ts'
 
 export const name = 'protocom-api'
 export const inject = ['llm']

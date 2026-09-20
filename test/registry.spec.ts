@@ -52,7 +52,7 @@ describe('model-registry', () => {
   })
 
   it('declares image input only where the endpoint accepted one', () => {
-    const vision = REGISTRY.filter(entry => entry.vision === true).map(entry => String(entry.match))
+    const vision = REGISTRY.filter(entry => entry.vision === true).map(entry => entry.id)
     expect(vision).toContain('kimi-k3')
     expect(vision).toContain('gpt-5.6-sol')
     // Text-only by the vendor's own documentation.
@@ -81,15 +81,23 @@ describe('model-registry', () => {
     expect(matchRegistry('poolside/some-model')).toBeUndefined()
   })
 
-  it('covers every listed model without duplicate or unreachable entries', () => {
+  it('gives every entry a distinct, self-resolving id', () => {
     const seen = new Set<string>()
     for (const entry of REGISTRY) {
-      const key = typeof entry.match === 'string' ? entry.match : entry.match.source
-      expect(seen.has(key), `duplicate registry matcher ${key}`).toBe(false)
-      seen.add(key)
-      // A literal entry must resolve to itself, not be shadowed by an earlier
-      // pattern that happens to match the same id.
-      if (typeof entry.match === 'string') expect(matchRegistry(entry.match)).toBe(entry)
+      expect(seen.has(entry.id), `duplicate registry id ${entry.id}`).toBe(false)
+      seen.add(entry.id)
+      expect(matchRegistry(entry.id)).toBe(entry)
+    }
+  })
+
+  it('never sizes a model below the fallback', () => {
+    // The old registry left most entries on the fallback, so the menu read
+    // 128K for models that publish far more.
+    for (const entry of REGISTRY) {
+      expect(entry.contextWindow, entry.id).toBeGreaterThanOrEqual(FALLBACK_CONTEXT_WINDOW)
+      for (const length of entry.contextOptions ?? []) {
+        expect(length, entry.id).toBeLessThanOrEqual(entry.contextWindow)
+      }
     }
   })
 

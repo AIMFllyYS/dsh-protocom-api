@@ -30,6 +30,8 @@ import {
   displayNameWithContext,
   FALLBACK_CONTEXT_WINDOW,
   matchRegistry,
+  REGISTRY,
+  RETIRED_MODELS,
 } from './model-registry.ts'
 import type { CatalogModel, RegistryReasoning, UpstreamModel } from './model-registry.ts'
 import { decodeVariantId, encodeVariantId, stripVariantId, variantLengths } from './context-variants.ts'
@@ -176,23 +178,44 @@ export class ProtocomAdapter extends LlmAdapter {
     }))
   }
 
+  /**
+   * The catalog offered for one route. The registry is the catalog of record:
+   * every model it knows is offered even while the endpoint's listing omits
+   * it, so a listing that shrinks, degrades, or fails outright cannot empty
+   * the menu. Ids the registry does not know still ride along from the
+   * listing, so a newly served model appears without a plugin release.
+   */
   override async listModels(provider: string): Promise<readonly LlmModelInfo[]> {
     const group = this.groupFor(provider)
-    let upstream: UpstreamModel[]
+    const { hiddenModels } = this.config.options()
+    const retired = new Set(RETIRED_MODELS)
+    const rows: UpstreamModel[] = REGISTRY.map(entry => ({ id: entry.id }))
     try {
-      upstream = await this.upstreamModels(group)
+      const upstream = await this.upstreamModels(group)
+      const known = new Set(REGISTRY.map(entry => entry.id))
+      for (const model of upstream) {
+        if (!known.has(model.id) && !retired.has(model.id)) rows.push(model)
+      }
     } catch {
-      // The catalog is advisory: an unreachable endpoint (or an unset key)
-      // lists nothing rather than failing the surface that asked.
-      return []
+      // The listing only ever adds; the registry alone still answers.
     }
     // The picker renders this order verbatim and the harness calls it
     // "adapter-preferred", so it is the one lever that leads the menu with the
-    // models worth reaching for. Ties keep the endpoint's own order.
-    const ranked = upstream
+    // models worth reaching for. Ties keep registry order.
+    const ranked = rows
+      .filter(model => !hiddenModels.has(model.id))
       .map((model, index) => ({ index, model, rank: catalogEntry(model, GROUP_DEFAULTS[group.key].reasoning).rank }))
       .sort((left, right) => left.rank - right.rank || left.index - right.index)
-    return ranked.flatMap(entry => this.modelEntries(provider, group, entry.model))
+    // The endpoint lists some models under two ids; the menu shows one row per
+    // identity, and its first id (registry order) is the one dispatched.
+    const seen = new Set<string>()
+    const unique = ranked.filter((row) => {
+      const name = catalogEntry(row.model, GROUP_DEFAULTS[group.key].reasoning).displayName
+      if (seen.has(name)) return false
+      seen.add(name)
+      return true
+    })
+    return unique.flatMap(entry => this.modelEntries(provider, group, entry.model))
   }
 
   /** Endpoint-disclosed reasoning vocabulary for one model, when the listing says any. */
