@@ -2,8 +2,10 @@ import { describe, expect, it } from 'vitest'
 import {
   catalogEntry,
   contextLabel,
+  DEFAULT_RECOMMENDED,
   displayNameWithContext,
   FALLBACK_CONTEXT_WINDOW,
+  identityKey,
   matchRegistry,
   REGISTRY,
 } from '../src/model-registry.ts'
@@ -30,24 +32,31 @@ describe('model-registry', () => {
     expect(entry?.vision).toBe(true)
   })
 
-  it('leads the menu with the models whose reasoning content streams', () => {
-    // The picker renders adapter order verbatim, so rank IS the recommendation.
-    expect(matchRegistry('kimi-k3')?.rank).toBe(1)
-    expect(matchRegistry('glm-5.2')?.rank).toBe(2)
-    expect(matchRegistry('mimo-v2.5')?.rank).toBe(3)
-    expect(matchRegistry('deepseek/deepseek-v4.1-flash')?.rank).toBeUndefined()
+  it('recommends the models whose reasoning content actually streams', () => {
+    // The shipped recommendation orders the menu; it removes nothing.
+    expect(DEFAULT_RECOMMENDED).toEqual(['kimi-k3', 'glm-5.2', 'mimo-v2.5'])
+    // The flash model hides its reasoning, so it is not recommended by default.
+    expect(DEFAULT_RECOMMENDED).not.toContain('deepseek/deepseek-v4.1-flash')
   })
 
-  it('drops the models this endpoint refuses to serve', () => {
-    // Listed by /v1/models but rejected by /v1/chat/completions, so offering
-    // them only produces a failure after the user picks one.
+  it('resolves an alias to its model identity', () => {
+    expect(identityKey('deepseek-v4.1-flash')).toBe('deepseek/deepseek-v4.1-flash')
+    expect(identityKey('zai-org/GLM-5.2')).toBe('glm-5.2')
+    // An unknown id is its own identity.
+    expect(identityKey('meta/unknown')).toBe('meta/unknown')
+  })
+
+  it('keeps every advertised model catalogued rather than blocking any', () => {
+    // A model the endpoint currently refuses stays described here: the picker
+    // is how a deployment says what it wants, and a model that starts serving
+    // again should simply start working.
     for (const id of [
       'google/gemini-3.7-flash',
       'tencent/hy4-preview',
       'inclusionai/ling-3.0-flash-sante:free',
       'Qwen/Qwen3.8-Flash',
     ]) {
-      expect(matchRegistry(id), id).toBeUndefined()
+      expect(matchRegistry(id)?.displayName, id).toBeTruthy()
     }
   })
 

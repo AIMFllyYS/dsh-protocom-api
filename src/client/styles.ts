@@ -90,14 +90,23 @@ export const SECTION_CSS = `
 
 .protocom-model-grid { display: flex; flex-wrap: wrap; gap: 6px; }
 .protocom-model-chip {
-  display: inline-flex; align-items: center; gap: 7px; padding: 4px 11px 4px 9px;
-  font-size: 12px; border-radius: 999px; cursor: pointer; user-select: none;
+  display: inline-flex; align-items: center; padding: 2px 5px 2px 9px;
+  font-size: 12px; border-radius: 999px; user-select: none;
   border: 1px solid var(--dsh-border, rgba(128, 128, 128, 0.35));
   transition: background 0.15s ease, border-color 0.15s ease, opacity 0.15s ease;
 }
+.protocom-model-pick { display: inline-flex; align-items: center; gap: 7px; padding: 2px 0; cursor: pointer; }
 .protocom-model-chip input { position: absolute; opacity: 0; width: 0; height: 0; }
 .protocom-model-chip:hover { border-color: var(--dsh-accent, #3a7bfd); }
 .protocom-model-chip:focus-within { outline: 2px solid var(--dsh-accent, #3a7bfd); outline-offset: 2px; }
+.protocom-model-star {
+  border: 0; background: transparent; color: inherit; cursor: pointer;
+  font-size: 12px; line-height: 1; padding: 4px 5px; border-radius: 50%;
+  opacity: 0.32; transition: opacity 0.15s ease, color 0.15s ease;
+}
+.protocom-model-star:hover:not(:disabled) { opacity: 0.75; }
+.protocom-model-star.is-on { opacity: 1; color: var(--dsh-accent, #3a7bfd); }
+.protocom-model-star:disabled { cursor: default; }
 .protocom-model-dot {
   width: 8px; height: 8px; border-radius: 50%; flex: none;
   border: 1.5px solid var(--dsh-border, rgba(128, 128, 128, 0.5));

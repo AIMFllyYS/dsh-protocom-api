@@ -57,14 +57,6 @@ export declare const FALLBACK_CONTEXT_WINDOW = 131072;
  * by {@link RegistryEntry.rank} so the recommended models lead the menu.
  */
 export declare const REGISTRY: readonly RegistryEntry[];
-/**
- * Ids the endpoint advertises but refuses to serve on `/v1/chat/completions`.
- * Each answers 400 "not available on this endpoint. Call it on
- * /provider/v1/chat/completions instead" — and that path serves the gateway's
- * own web UI rather than an API, so the model is simply uncallable. Listing one
- * only produces a failure after the user has already picked it.
- */
-export declare const RETIRED_MODELS: readonly string[];
 /** Find the registry entry for one upstream id. */
 export declare function matchRegistry(id: string): RegistryEntry | undefined;
 /**
@@ -80,6 +72,19 @@ export interface ModelIdentity {
     /** The entry whose facts describe the identity. */
     entry: RegistryEntry;
 }
+/**
+ * The models the plugin recommends out of the box: the ones whose reasoning
+ * content actually streams from this endpoint, in preference order. A
+ * deployment overrides the list through the `recommendedModels` setting; it
+ * only ever orders the menu, so a model left off it stays fully selectable.
+ */
+export declare const DEFAULT_RECOMMENDED: readonly string[];
+/**
+ * The identity key of one upstream id: the first registry id of the model it
+ * belongs to. Aliases of one model share a key, so a recommendation or a
+ * visibility choice made against either id applies to both.
+ */
+export declare function identityKey(id: string): string;
 /** Collapse the registry into one identity per display name, in registry order. */
 export declare function modelIdentities(): ModelIdentity[];
 /** Short capacity label: 128K, 256K, 512K, 1M. */

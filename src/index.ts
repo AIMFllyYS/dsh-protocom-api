@@ -36,12 +36,13 @@ export type { DiscoveryHooks } from './discovery.ts'
 export {
   catalogEntry,
   contextLabel,
+  DEFAULT_RECOMMENDED,
   displayNameWithContext,
   FALLBACK_CONTEXT_WINDOW,
+  identityKey,
   matchRegistry,
   modelIdentities,
   REGISTRY,
-  RETIRED_MODELS,
 } from './model-registry.ts'
 export type {
   CatalogModel,

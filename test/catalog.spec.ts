@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { ProtocomAdapter } from '../src/adapter.ts'
 import { resolveAdapterOptions } from '../src/config.ts'
-import { matchRegistry, modelIdentities, REGISTRY, RETIRED_MODELS } from '../src/model-registry.ts'
+import { modelIdentities, REGISTRY } from '../src/model-registry.ts'
 
 /** An adapter whose credential always fails, so no listing is ever reachable. */
 function offlineAdapter(config: Parameters<typeof resolveAdapterOptions>[0]): ProtocomAdapter {
@@ -95,14 +95,28 @@ describe('catalog composition', () => {
     expect(modelIdentities()).toHaveLength(new Set(REGISTRY.map(entry => entry.displayName)).size)
   })
 
-  it('never offers a model the endpoint refuses to serve', async () => {
-    // These stay in the endpoint's listing but answer 400 on the chat route.
-    expect(RETIRED_MODELS.length).toBe(4)
-    for (const id of RETIRED_MODELS) {
-      expect(matchRegistry(id), id).toBeUndefined()
-      const listed = await offlineAdapter(ENABLED).listModels('protocom-aggregate')
-      expect(listed.some(model => model.id.includes(id)), id).toBe(false)
-    }
+  it('leads with the configured recommendation and keeps the rest selectable', async () => {
+    const listed = await offlineAdapter({
+      ...ENABLED,
+      recommendedModels: ['glm-5.3', 'kimi-k3'],
+    }).listModels('protocom-aggregate')
+    expect(listed.slice(0, 2).map(model => model.id)).toEqual(['glm-5.3', 'kimi-k3'])
+    // Recommendation orders; it never hides.
+    expect(listed).toHaveLength(modelIdentities().length)
+  })
+
+  it('collapses an alias used as the recommendation', async () => {
+    // Recommending either spelling must order the one identity.
+    const listed = await offlineAdapter({
+      ...ENABLED,
+      recommendedModels: ['zai-org/GLM-5.2'],
+    }).listModels('protocom-aggregate')
+    expect(listed[0]?.id).toBe('glm-5.2')
+  })
+
+  it('refuses an empty recommended id', () => {
+    expect(() => resolveAdapterOptions({ ...ENABLED, recommendedModels: [''] }))
+      .toThrowError(/recommendedModels entries must be non-empty/)
   })
 
   it('refuses an empty or non-string hidden id', () => {

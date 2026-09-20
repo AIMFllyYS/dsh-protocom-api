@@ -228,26 +228,22 @@ export const REGISTRY: readonly RegistryEntry[] = [
     reasoning: GPT_REASONING,
     vision: true,
   },
+  // These four answer "not available on this endpoint" on /v1/chat/completions
+  // whenever the endpoint lists them, so their facts cannot be verified by
+  // request; the values follow their generation's published window. They stay
+  // catalogued rather than blocked — the picker's toggles are how a deployment
+  // says which models it wants, and a model that starts serving should simply
+  // start working.
+  { id: 'google/gemini-3.7-flash', displayName: 'Gemini 3.7 Flash', family: 'gemini', contextWindow: CONTEXT_1M, contextOptions: LENGTHS_1M, vision: true },
+  { id: 'tencent/hy4-preview', displayName: 'HY-4 Preview', family: 'hunyuan', contextWindow: CONTEXT_256K, contextOptions: LENGTHS_256K },
+  { id: 'inclusionai/ling-3.0-flash-sante:free', displayName: 'Ling 3.0 Flash Sante', family: 'inclusionai', contextWindow: CONTEXT_256K, contextOptions: LENGTHS_256K },
+  { id: 'Qwen/Qwen3.8-Flash', displayName: 'Qwen3.8 Flash', family: 'qwen', contextWindow: CONTEXT_1M, contextOptions: LENGTHS_1M, vision: true },
   // Context values below follow each model's published ceiling; the two marked
   // unverified follow their family's documented window.
   { id: 'tencent/hy3-paid', displayName: 'HY-3', family: 'hunyuan', contextWindow: CONTEXT_256K, contextOptions: LENGTHS_256K },
   { id: 'meituan/LongCat-2.0:free', displayName: 'LongCat 2.0', family: 'longcat', contextWindow: CONTEXT_256K, contextOptions: LENGTHS_256K },
   { id: 'poolside/laguna-s-2.1-free', displayName: 'Laguna S 2.1 Free', family: 'poolside', contextWindow: CONTEXT_256K, contextOptions: LENGTHS_256K },
   { id: 'meta/muse-spark-1.3-contributor', displayName: 'Muse Spark 1.3 Contributor', family: 'meta', contextWindow: CONTEXT_1M, contextOptions: LENGTHS_1M, vision: true },
-]
-
-/**
- * Ids the endpoint advertises but refuses to serve on `/v1/chat/completions`.
- * Each answers 400 "not available on this endpoint. Call it on
- * /provider/v1/chat/completions instead" — and that path serves the gateway's
- * own web UI rather than an API, so the model is simply uncallable. Listing one
- * only produces a failure after the user has already picked it.
- */
-export const RETIRED_MODELS: readonly string[] = [
-  'google/gemini-3.7-flash',
-  'tencent/hy4-preview',
-  'inclusionai/ling-3.0-flash-sante:free',
-  'Qwen/Qwen3.8-Flash',
 ]
 
 /** Find the registry entry for one upstream id. */
@@ -267,6 +263,29 @@ export interface ModelIdentity {
   ids: readonly string[]
   /** The entry whose facts describe the identity. */
   entry: RegistryEntry
+}
+
+/**
+ * The models the plugin recommends out of the box: the ones whose reasoning
+ * content actually streams from this endpoint, in preference order. A
+ * deployment overrides the list through the `recommendedModels` setting; it
+ * only ever orders the menu, so a model left off it stays fully selectable.
+ */
+export const DEFAULT_RECOMMENDED: readonly string[] = REGISTRY
+  .filter(entry => entry.rank !== undefined)
+  .slice()
+  .sort((left, right) => (left.rank as number) - (right.rank as number))
+  .map(entry => entry.id)
+
+/**
+ * The identity key of one upstream id: the first registry id of the model it
+ * belongs to. Aliases of one model share a key, so a recommendation or a
+ * visibility choice made against either id applies to both.
+ */
+export function identityKey(id: string): string {
+  const entry = matchRegistry(id)
+  if (entry === undefined) return id
+  return REGISTRY.find(candidate => candidate.displayName === entry.displayName)?.id ?? id
 }
 
 /** Collapse the registry into one identity per display name, in registry order. */

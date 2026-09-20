@@ -11,6 +11,7 @@ import z from '@deepseek-ai/schemastery'
 import { credentialRef } from '@deepseek-ai/dsh-credentials'
 import type { CredentialRef } from '@deepseek-ai/dsh-credentials'
 import { GROUP_DEFAULTS, GROUP_KEYS, providerOf } from './groups.ts'
+import { DEFAULT_RECOMMENDED, identityKey } from './model-registry.ts'
 
 export { GROUP_DEFAULTS, GROUP_KEYS, groupOf, providerOf } from './groups.ts'
 export type { GroupKey, GroupReasoning, Protocol } from './groups.ts'
@@ -45,6 +46,12 @@ export interface Config {
    * model and hiding is the explicit act.
    */
   hiddenModels?: string[]
+  /**
+   * Upstream model ids that lead the model menu, most preferred first. Absent
+   * uses the plugin's shipped recommendation. This orders the menu and nothing
+   * else: a model left off the list stays fully selectable below the picks.
+   */
+  recommendedModels?: string[]
 }
 
 const group: z<GroupConfig> = z.object({
@@ -60,6 +67,7 @@ export const Config: z<Config> = z.object({
   baseURL: z.string().default(DEFAULT_BASE_URL),
   groups: z.dict(group).default({}),
   hiddenModels: z.array(z.string()).default([]),
+  recommendedModels: z.array(z.string()).default([...DEFAULT_RECOMMENDED]),
 })
 
 /** Validated per-group facts with every adapter-owned default resolved. */
@@ -91,6 +99,8 @@ export interface ResolvedProtocomOptions {
   groups: ReadonlyMap<GroupKey, ResolvedGroup>
   /** Upstream ids the model menu must not offer. Empty means the whole catalog. */
   hiddenModels: ReadonlySet<string>
+  /** Upstream ids that lead the model menu, most preferred first. */
+  recommendedModels: readonly string[]
 }
 
 /**
@@ -148,5 +158,18 @@ export function resolveAdapterOptions(config: Config): ResolvedProtocomOptions {
       throw new Error('protocom-api: hiddenModels entries must be non-empty model ids')
     }
   }
-  return { baseURL, groups, hiddenModels: new Set(hidden) }
+  const recommended = config.recommendedModels ?? DEFAULT_RECOMMENDED
+  for (const id of recommended) {
+    if (typeof id !== 'string' || id.length === 0) {
+      throw new Error('protocom-api: recommendedModels entries must be non-empty model ids')
+    }
+  }
+  return {
+    baseURL,
+    groups,
+    hiddenModels: new Set(hidden),
+    // Aliases collapse to one key, so picking either id recommends the model
+    // once and the ordering cannot depend on which spelling was stored.
+    recommendedModels: [...new Set(recommended.map(identityKey))],
+  }
 }

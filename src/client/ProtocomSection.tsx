@@ -12,7 +12,7 @@ import type { InjectFace } from '@deepseek-ai/dsh-client-ui-slots'
 import type { CredentialInfo, LlmDiscoveredModel, SettingsNamespaceView } from '@deepseek-ai/dsh-api-remotes/client'
 import { defaultKeyRef, GROUP_DEFAULTS, GROUP_KEYS, providerOf } from '../groups.ts'
 import type { GroupKey, Protocol } from '../groups.ts'
-import { catalogEntry, contextLabel, modelIdentities } from '../model-registry.ts'
+import { catalogEntry, contextLabel, DEFAULT_RECOMMENDED, modelIdentities } from '../model-registry.ts'
 import type { GroupBalance } from '../balance.ts'
 import type { ProtocomOperations } from './operations.ts'
 import { toggleLength, variantChoicesFor } from './variants.ts'
@@ -47,6 +47,7 @@ interface SectionValue {
   baseURL?: string
   groups?: Record<string, GroupSectionValue>
   hiddenModels?: string[]
+  recommendedModels?: string[]
 }
 
 interface PageState {
@@ -369,8 +370,9 @@ function GroupCard({ groupKey, group, credential, writable, revision, baseURL, o
  * complete even while the listing is short or unreachable; the switch only
  * removes an entry from the model menu.
  */
-function ModelVisibilityCard({ hidden, writable, revision, operations, t, onChanged }: {
+function ModelVisibilityCard({ hidden, recommended, writable, revision, operations, t, onChanged }: {
   hidden: readonly string[]
+  recommended: readonly string[]
   writable: boolean
   revision: number | undefined
   operations: ProtocomOperations
@@ -384,26 +386,37 @@ function ModelVisibilityCard({ hidden, writable, revision, operations, t, onChan
   // and hiding either alone would leave the other in the menu.
   const identities = modelIdentities()
   const everyId = identities.flatMap(identity => identity.ids)
+  const recommendedSet = new Set(recommended)
 
-  const write = (next: string[]): void => {
+  const write = (ops: Parameters<ProtocomOperations['writeSettings']>[0]): void => {
     if (busy) return
     setBusy(true)
     setError(undefined)
-    void operations.writeSettings(
-      next.length === 0
-        ? [{ op: 'unset', path: ['hiddenModels'] }]
-        : [{ op: 'set', path: ['hiddenModels'], value: next }],
-      revision,
-    )
+    void operations.writeSettings(ops, revision)
       .then(async (outcome) => {
-        if (outcome.kind !== 'written') {
-          setError(outcome.message)
-          await onChanged()
-          return
-        }
+        if (outcome.kind !== 'written') setError(outcome.message)
         await onChanged()
       })
       .finally(() => { setBusy(false) })
+  }
+
+  /** Hiding is a set; the empty set is the default, so it is unset rather than stored. */
+  const writeHidden = (next: string[]): void => {
+    write(next.length === 0
+      ? [{ op: 'unset', path: ['hiddenModels'] }]
+      : [{ op: 'set', path: ['hiddenModels'], value: next }])
+  }
+
+  /**
+   * Starring appends, so the order the stars were set is the order the menu
+   * leads with; unstarring removes every alias of the model.
+   */
+  const writeRecommended = (ids: readonly string[], starred: boolean): void => {
+    const rest = recommended.filter(id => !ids.includes(id))
+    const next = starred ? rest : [...rest, ids[0] as string]
+    write(next.length === 0
+      ? [{ op: 'unset', path: ['recommendedModels'] }]
+      : [{ op: 'set', path: ['recommendedModels'], value: next }])
   }
 
   return (
@@ -415,7 +428,7 @@ function ModelVisibilityCard({ hidden, writable, revision, operations, t, onChan
             type="button"
             className="protocom-button"
             disabled={!writable || busy || hidden.length === 0}
-            onClick={() => { write([]) }}
+            onClick={() => { writeHidden([]) }}
           >
             {t('selectAll')}
           </button>
@@ -423,7 +436,7 @@ function ModelVisibilityCard({ hidden, writable, revision, operations, t, onChan
             type="button"
             className="protocom-button"
             disabled={!writable || busy || hidden.length >= everyId.length}
-            onClick={() => { write([...everyId]) }}
+            onClick={() => { writeHidden([...everyId]) }}
           >
             {t('selectNone')}
           </button>
@@ -434,30 +447,44 @@ function ModelVisibilityCard({ hidden, writable, revision, operations, t, onChan
       <div className="protocom-model-grid">
         {identities.map(({ displayName, ids, entry }) => {
           const shown = ids.every(id => !hiddenSet.has(id))
+          const starred = recommendedSet.has(ids[0] as string)
           const meta = [
             contextLabel(entry.contextWindow),
             ...entry.vision === true ? [t('tagVision')] : [],
             ...entry.reasoning === undefined ? [] : [t('tagReasoning')],
           ].join(' · ')
           return (
-            <label
+            <div
               key={displayName}
               className={shown ? 'protocom-model-chip is-on' : 'protocom-model-chip is-off'}
               title={ids.join('\n')}
             >
-              <input
-                type="checkbox"
-                checked={shown}
+              <label className="protocom-model-pick">
+                <input
+                  type="checkbox"
+                  checked={shown}
+                  disabled={!writable || busy}
+                  aria-label={displayName}
+                  onChange={() => {
+                    const rest = hidden.filter(id => !ids.includes(id))
+                    writeHidden(shown ? [...rest, ...ids] : rest)
+                  }}
+                />
+                <span className="protocom-model-dot" />
+                <span className="protocom-model-name">{displayName}</span>
+                <span className="protocom-model-meta">{meta}</span>
+              </label>
+              <button
+                type="button"
+                className={starred ? 'protocom-model-star is-on' : 'protocom-model-star'}
                 disabled={!writable || busy}
-                onChange={() => {
-                  const rest = hidden.filter(id => !ids.includes(id))
-                  write(shown ? [...rest, ...ids] : rest)
-                }}
-              />
-              <span className="protocom-model-dot" />
-              <span className="protocom-model-name">{displayName}</span>
-              <span className="protocom-model-meta">{meta}</span>
-            </label>
+                aria-pressed={starred}
+                title={starred ? t('unstarTitle') : t('starTitle')}
+                onClick={() => { writeRecommended(ids, starred) }}
+              >
+                ★
+              </button>
+            </div>
           )
         })}
       </div>
@@ -553,6 +580,7 @@ function Loaded({ operations, t }: { operations: ProtocomOperations; t: Translat
         ))}
         <ModelVisibilityCard
           hidden={section.hiddenModels ?? []}
+          recommended={section.recommendedModels ?? DEFAULT_RECOMMENDED}
           writable={writable}
           revision={revision}
           operations={operations}

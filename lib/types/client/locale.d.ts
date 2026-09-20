@@ -36,6 +36,8 @@ export declare const en: {
     modelsHint: string;
     selectAll: string;
     selectNone: string;
+    starTitle: string;
+    unstarTitle: string;
     tagVision: string;
     tagReasoning: string;
     balance: string;

@@ -38,6 +38,12 @@ export interface Config {
      * model and hiding is the explicit act.
      */
     hiddenModels?: string[];
+    /**
+     * Upstream model ids that lead the model menu, most preferred first. Absent
+     * uses the plugin's shipped recommendation. This orders the menu and nothing
+     * else: a model left off the list stays fully selectable below the picks.
+     */
+    recommendedModels?: string[];
 }
 /** Runtime schema for {@link Config}. */
 export declare const Config: z<Config>;
@@ -69,6 +75,8 @@ export interface ResolvedProtocomOptions {
     groups: ReadonlyMap<GroupKey, ResolvedGroup>;
     /** Upstream ids the model menu must not offer. Empty means the whole catalog. */
     hiddenModels: ReadonlySet<string>;
+    /** Upstream ids that lead the model menu, most preferred first. */
+    recommendedModels: readonly string[];
 }
 /**
  * The one explicit resolve step from raw config to validated connection

@@ -29,9 +29,9 @@ import {
   catalogEntry,
   displayNameWithContext,
   FALLBACK_CONTEXT_WINDOW,
+  identityKey,
   matchRegistry,
   REGISTRY,
-  RETIRED_MODELS,
 } from './model-registry.ts'
 import type { CatalogModel, RegistryReasoning, UpstreamModel } from './model-registry.ts'
 import { decodeVariantId, encodeVariantId, stripVariantId, variantLengths } from './context-variants.ts'
@@ -187,24 +187,28 @@ export class ProtocomAdapter extends LlmAdapter {
    */
   override async listModels(provider: string): Promise<readonly LlmModelInfo[]> {
     const group = this.groupFor(provider)
-    const { hiddenModels } = this.config.options()
-    const retired = new Set(RETIRED_MODELS)
+    const { hiddenModels, recommendedModels } = this.config.options()
     const rows: UpstreamModel[] = REGISTRY.map(entry => ({ id: entry.id }))
     try {
       const upstream = await this.upstreamModels(group)
       const known = new Set(REGISTRY.map(entry => entry.id))
       for (const model of upstream) {
-        if (!known.has(model.id) && !retired.has(model.id)) rows.push(model)
+        if (!known.has(model.id)) rows.push(model)
       }
     } catch {
       // The listing only ever adds; the registry alone still answers.
     }
     // The picker renders this order verbatim and the harness calls it
     // "adapter-preferred", so it is the one lever that leads the menu with the
-    // models worth reaching for. Ties keep registry order.
+    // models worth reaching for. Recommendation decides the head of the list;
+    // everything else keeps registry order behind it.
+    const rankOf = (id: string): number => {
+      const at = recommendedModels.indexOf(identityKey(id))
+      return at === -1 ? Number.MAX_SAFE_INTEGER : at
+    }
     const ranked = rows
       .filter(model => !hiddenModels.has(model.id))
-      .map((model, index) => ({ index, model, rank: catalogEntry(model, GROUP_DEFAULTS[group.key].reasoning).rank }))
+      .map((model, index) => ({ index, model, rank: rankOf(model.id) }))
       .sort((left, right) => left.rank - right.rank || left.index - right.index)
     // The endpoint lists some models under two ids; the menu shows one row per
     // identity, and its first id (registry order) is the one dispatched.
