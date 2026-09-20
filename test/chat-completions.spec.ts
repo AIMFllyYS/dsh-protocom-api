@@ -137,16 +137,25 @@ describe('chat-completions serialization', () => {
     ],
   }
 
-  it('echoes assistant reasoning back as reasoning_content', () => {
+  it('does not replay assistant reasoning unless the route asks for it', () => {
+    // Verified against this endpoint: a replayed assistant turn carrying
+    // reasoning_content is refused with HTTP 400 (loc ('body','input',...,'str')),
+    // and DeepSeek's own API documents the same, so silence is the default.
     const body = serializeChatRequest(base, 'deepseek/deepseek-v4.1-flash')
     const messages = body.messages as { role: string; content: string; reasoning_content?: string }[]
     expect(messages).toEqual([
       { role: 'user', content: 'hi' },
-      { role: 'assistant', content: 'hello', reasoning_content: '想了一下' },
+      { role: 'assistant', content: 'hello' },
       { role: 'user', content: 'again' },
     ])
     expect(body.stream).toBe(true)
     expect(body.thinking).toBeUndefined()
+  })
+
+  it('replays assistant reasoning for a route that asks for it', () => {
+    const body = serializeChatRequest(base, 'deepseek/deepseek-v4.1-flash', undefined, true)
+    const messages = body.messages as { role: string; content: string; reasoning_content?: string }[]
+    expect(messages[1]).toEqual({ role: 'assistant', content: 'hello', reasoning_content: '想了一下' })
   })
 
   it('resolves thinking fields from the effort', () => {

@@ -1,5 +1,32 @@
 import { describe, expect, it } from 'vitest'
 import { DEFAULT_STREAM_IDLE_TIMEOUT_MS, resolveAdapterOptions, resolveBaseURL } from '../src/config.ts'
+import { GROUP_DEFAULTS } from '../src/groups.ts'
+
+describe('shipped group defaults (issue 2a)', () => {
+  it('sends StepFun through the responses protocol', () => {
+    // Verified by request: this relay's chat-completions surface translates to
+    // StepFun's Responses API and renders a replayed assistant message in a
+    // shape the upstream refuses (HTTP 400), so every second turn and tool
+    // round failed there. The same conversation on /v1/responses answers 200.
+    expect(GROUP_DEFAULTS.stepfun.protocol).toBe('responses')
+    const resolved = resolveAdapterOptions({})
+    expect(resolved.groups.get('stepfun')?.protocol).toBe('responses')
+    // The other three groups keep the protocol their models were verified on.
+    expect(resolved.groups.get('aggregate')?.protocol).toBe('chat-completions')
+    expect(resolved.groups.get('codex')?.protocol).toBe('responses')
+    expect(resolved.groups.get('grok')?.protocol).toBe('chat-completions')
+  })
+
+  it('keeps reasoning out of a chat-completions replay unless a group opts in', () => {
+    const byDefault = resolveAdapterOptions({})
+    expect(byDefault.groups.get('aggregate')?.replayReasoning).toBe(false)
+    const optedIn = resolveAdapterOptions({ groups: { aggregate: { replayReasoning: true } } })
+    expect(optedIn.groups.get('aggregate')?.replayReasoning).toBe(true)
+    // An explicit protocol still wins over the shipped one.
+    expect(resolveAdapterOptions({ groups: { stepfun: { protocol: 'chat-completions' } } })
+      .groups.get('stepfun')?.protocol).toBe('chat-completions')
+  })
+})
 
 describe('baseURL validation (P1-1)', () => {
   it('refuses plain http on a non-loopback host', () => {

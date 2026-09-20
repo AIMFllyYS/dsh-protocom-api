@@ -70,11 +70,19 @@ export const GROUP_DEFAULTS: Readonly<Record<GroupKey, {
     protocol: 'responses',
     reasoning: { efforts: ['minimal', 'low', 'medium', 'high', 'xhigh'], defaultEffort: 'medium' },
   },
-  // StepFun publishes every model at the same four lengths (200K/256K/400K/1M),
-  // so the group ships that ladder instead of one entry at a fallback window.
+  // StepFun: the relay's chat-completions surface is a translation onto
+  // StepFun's own Responses API, and that translation is unusable — a replayed
+  // assistant message is rendered as a content-part item the upstream refuses
+  // ("210 validation errors", loc (..., 'EasyInputMessageParam', 'content',
+  // 'str')), so every second turn and every tool round fails with HTTP 400.
+  // Verified by request: the same conversation on /v1/responses answers 200,
+  // tool calls and inline images included, which is why this group ships that
+  // protocol. StepFun also publishes every model at the same four lengths
+  // (200K/256K/400K/1M), so the group ships that ladder rather than one entry
+  // at a fallback window.
   stepfun: {
     displayName: 'Protocom StepFun',
-    protocol: 'chat-completions',
+    protocol: 'responses',
     contextLengths: CONTEXT_LADDER,
   },
   grok: {

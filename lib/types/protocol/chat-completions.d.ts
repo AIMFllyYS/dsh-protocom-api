@@ -49,7 +49,7 @@ export declare function mapUsage(usage: WireUsage): TokenUsage;
  */
 export declare function mapFinishReason(reason: string): FinishReason;
 /** Serialize one request into the chat-completions wire body. */
-export declare function serializeChatRequest(options: GenerateOptions, model: string, images?: RequestImageUrls): Record<string, unknown>;
+export declare function serializeChatRequest(options: GenerateOptions, model: string, images?: RequestImageUrls, replayReasoning?: boolean): Record<string, unknown>;
 /**
  * Consume SSE data payloads (ending with `[DONE]`) and yield StreamChunks.
  * `block-end`s, `usage`, and `finish` are deferred to the `[DONE]` sentinel
@@ -59,4 +59,4 @@ export declare function serializeChatRequest(options: GenerateOptions, model: st
  */
 export declare function translateChatCompletions(payloads: AsyncIterable<string>): AsyncGenerator<StreamChunk>;
 /** Stream one chat-completions call as harness chunks. */
-export declare function streamChatCompletions(connection: ProtocolConnection, options: GenerateOptions, model: string, images?: RequestImageUrls): AsyncGenerator<StreamChunk>;
+export declare function streamChatCompletions(connection: ProtocolConnection, options: GenerateOptions, model: string, images?: RequestImageUrls, replayReasoning?: boolean): AsyncGenerator<StreamChunk>;

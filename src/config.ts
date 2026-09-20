@@ -45,6 +45,14 @@ export interface GroupConfig {
   contextLengths?: number[]
   /** Whether this group appears on the balance endpoint (default `true`). */
   showBalance?: boolean
+  /**
+   * Whether a chat-completions request replays the assistant's
+   * `reasoning_content` (default `false`). Routes disagree: this relay
+   * answers 400 for a replayed assistant turn that carries it, and DeepSeek's
+   * API documents the same. An interleaved-thinking provider that needs its
+   * thinking back turns this on.
+   */
+  replayReasoning?: boolean
 }
 
 /** Plugin configuration: the endpoint base plus the four group profiles. */
@@ -99,6 +107,7 @@ const group: z<GroupConfig> = z.object({
   protocol: z.union(['chat-completions', 'responses']),
   contextLengths: z.array(z.number().step(1).min(1)),
   showBalance: z.boolean().default(true),
+  replayReasoning: z.boolean().default(false),
 })
 
 /** Runtime schema for {@link Config}. */
@@ -128,6 +137,8 @@ export interface ResolvedGroup {
   /** Configured context-variant lengths, when offered. */
   contextLengths?: number[]
   showBalance: boolean
+  /** Whether a chat-completions replay carries the assistant's reasoning. */
+  replayReasoning: boolean
 }
 
 /**
@@ -219,6 +230,7 @@ export function resolveAdapterOptions(config: Config): ResolvedProtocomOptions {
       ...apiKeyRef === undefined ? {} : { apiKeyRef },
       ...effectiveLengths === undefined ? {} : { contextLengths: [...effectiveLengths] },
       showBalance: source.showBalance ?? true,
+      replayReasoning: source.replayReasoning ?? false,
     })
   }
   const hidden = config.hiddenModels ?? []

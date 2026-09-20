@@ -151,7 +151,11 @@ function userContent(
   return parts.length === 0 ? text : parts
 }
 
-function wireMessage(message: Message, images: RequestImageUrls | undefined): WireMessage {
+function wireMessage(
+  message: Message,
+  images: RequestImageUrls | undefined,
+  replayReasoning: boolean,
+): WireMessage {
   if (message.role === 'system') return { role: 'system', content: flattenText(message.content) }
   if (message.role === 'user') {
     const result = message.content.find((block): block is Extract<ContentBlock, { type: 'tool-result' }> =>
@@ -180,7 +184,14 @@ function wireMessage(message: Message, images: RequestImageUrls | undefined): Wi
   return {
     role: 'assistant',
     content: text,
-    ...reasoning.length > 0 ? { reasoning_content: reasoning } : {},
+    // Reasoning is the model's own scratch work, and routes disagree about
+    // whether it may come back: this relay answers 400 for a replayed
+    // assistant turn that carries it (its chat surface translates to the
+    // upstream's Responses API, where the field lands as content the model
+    // rejects), and DeepSeek's own API documents a 400 for the same reason.
+    // A route that needs its thinking back — an interleaved-thinking provider
+    // — asks for it with `replayReasoning: true`.
+    ...replayReasoning && reasoning.length > 0 ? { reasoning_content: reasoning } : {},
     ...toolCalls.length > 0 ? { tool_calls: toolCalls } : {},
   }
 }
@@ -190,10 +201,11 @@ export function serializeChatRequest(
   options: GenerateOptions,
   model: string,
   images?: RequestImageUrls,
+  replayReasoning = false,
 ): Record<string, unknown> {
   const messages: WireMessage[] = []
   if (options.system !== undefined) messages.push({ role: 'system', content: options.system })
-  for (const message of options.messages) messages.push(wireMessage(message, images))
+  for (const message of options.messages) messages.push(wireMessage(message, images, replayReasoning))
   return {
     model,
     messages,
@@ -353,11 +365,12 @@ export async function* streamChatCompletions(
   options: GenerateOptions,
   model: string,
   images?: RequestImageUrls,
+  replayReasoning = false,
 ): AsyncGenerator<StreamChunk> {
   const response = await postSse(
     connection,
     'chat/completions',
-    serializeChatRequest(options, model, images),
+    serializeChatRequest(options, model, images, replayReasoning),
     options.signal,
   )
   yield* translateChatCompletions(parseSse(response.body as ReadableStream<BufferSource>))

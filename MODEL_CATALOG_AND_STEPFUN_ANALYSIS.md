@@ -72,31 +72,35 @@
 - **代码侧**：能力判定三级（设置 → 名录 → 默认放行）；responses 协议补 `input_image`（用户消息）与 content 部件数组（带图的工具结果）；`visionModels` 提供逐模型覆盖。
 - **端到端**：构建产物 + 真实凭据跑 `listModels('protocom-stepfun')` → 3 模型 × 4 档 = 12 条，全部 `text+image`；带真实 PNG 的图片轮次经适配器发出后返回 "Red"，finish = stop。
 
-### 2.2 (a) 二次使用后工具报错：证据与假设
+### 2.2 (a) 第二轮起必 400：根因已确认（0.4.0）
 
-你贴的报错有两个关键信息：
+把「第二轮」拆成单变量实验后，机制完全确定：
 
-1. `loc: ('body', 'input', 'str')` —— 请求体里带的是 **`input`**，也就是 **responses 协议**的形状（chat-completions 用的是 `messages`）。
-2. `210 validation errors` —— 若 `input` 是「`str` ∪ 多种 item 类型的联合」，那么错误数 ≈ **item 数 × union 分支数**。14 个条目 × 15 个分支 = 210，高度吻合。含义是：**我们的每个 input 条目都不匹配任何一种被接受的 item 类型**。
+| 实验 | 结果 |
+|---|---|
+| 单轮纯文本 / 首轮请求工具 | 200 |
+| 回放 assistant 文本（无工具） | **400** |
+| 回放 assistant 文本 + 工具调用 | **400** |
+| 回放 assistant 文本 + 工具结果（两条消息） | **400** |
+| 回放 `reasoning_content`（无工具） | **400** |
+| 回放 content 为空、只有工具调用的 assistant + 工具结果 | 200 |
+| 一轮两个并行工具调用（无 reasoning） | 200 |
+| 6KB 长参数 + 流式 | 200 |
+| 同一会话走 `/v1/responses` | **200** |
 
-结合「第一次正常、第二次报错」：第一轮请求只有 system + user，第二轮开始回放 assistant 的 `function_call` 与 `function_call_output` —— 失败从第二轮开始，正是**回放条目**不被接受。
+上游报错自证：中转站把 chat-completions 转译成 StepFun Responses 请求时，assistant 条目变成 `{"role":"assistant","content":[{"text":"…","type":"output_text"}]}` —— **没有 `type` 字段**，只能匹配要求 `content` 为字符串的 `EasyInputMessageParam` 分支，于是 `210 validation errors`（条目数 × union 分支数）。
 
-假设排序（待证据收敛）：
+因此：**任何回放 assistant 文本（或 reasoning）的请求都必 400**，与工具数量无关；「用两次就报错」的真实边界是「第二个请求起」。原 H1/H2 的猜测方向是对的（H1 的形状、H2 的 reasoning），H3/H4 已排除。
 
-| # | 假设 | 判别方法 |
-|---|---|---|
-| H1 | stepfun 组被配置成 `protocol: responses`，而该 route 期望的 item 形状与我们的不一致（例如要求 `content` 为字符串、要求 `id`/`status`） | 看该组的 `protocol` 配置 + 完整报错里的 item 列表 |
-| H2 | 回放 `reasoning_content` 被拒（第一方 llm-deepseek 同样回放，所以这是**生态惯例**，但 StepFun 未必接受） | 关掉思考或换 effort 后是否仍失败 |
-| H3 | `thinking: {type:'disabled'}` 被拒（GLM 已知会拒；StepFun 可能同样） | 选非 off 的 effort 后是否仍失败 |
-| H4 | 未处理 `GenerateOptions.purpose`（`'compaction'` / `'session-title'`）：第一方 `llm-deepseek` 对 `session-title` 会强制关掉思考，我们原样发送 | 报错是否只出现在压缩/起标题那一轮 |
+**修复**：`stepfun` 分组默认协议改为 `responses`（原生通道，实测含工具调用与内联图片均 200）；补齐 `response.reasoning_text.*` / `reasoning_part.*` 思考词表；`status: incomplete` 且无 `incomplete_details.reason` 按 `max-tokens` 处理；chat-completions 默认不回放 `reasoning_content`（新增 `replayReasoning`）。
 
-### 2.3 诊断能力（0.2.0 已实现，待你复现）
+**端到端验证**：step 1 拿到 `run_code {"code": "console.log(8*9)"}`（finish=tool-calls）→ step 2 回放 reasoning+text+tool-call+tool-result → 200，回答 "…computed 8*9 as 72…"，finish=stop。
 
-`DSH_PROTOCOM_CAPTURE_DIR=<dir>` 时，把每次上游请求的**序列化 body**与上游**非 2xx 的响应体**写成 `<ISO>-<status>.json`（只写 body，不写任何 header，因此不含密钥；默认关闭，含对话内容）。
+### 2.3 诊断能力（0.2.0 已实现；2a 已在 0.4.0 定位，无需样本）
 
-复现步骤：`$env:DSH_PROTOCOM_CAPTURE_DIR = "D:\protocom-capture"; pnpm dsh web` → 在 GUI 里复现「用两次后工具报错」→ 把该目录里的 json 发我。
+`DSH_PROTOCOM_CAPTURE_DIR=<dir>` 时，把每次上游请求的**序列化 body**与上游**非 2xx 的响应体**写成 `<ISO>-<status>.json`（只写 body，不写任何 header，因此不含密钥；默认关闭，含对话内容）。0.4.0 的定位没有用到它——单变量实测已经足够——但它仍是下一个上游怪癖的第一手证据来源，保留。
 
-同时请先试一件事：你的 `settings.yaml` 里 stepfun 组**没有** `protocol`，即走默认的 `chat-completions`（实测 3 个模型在该协议下均可用）。若报错样本里的 `loc` 仍是 `body.input`，说明失败不是出在这个分组上，需要看请求是从哪条 route 发出的。
+顺带解释你观察到的「只有超过一次工具调用才报错」：一轮里的并行调用本身是 200（实测），真正触发 400 的是**回放历史**里的 assistant 文本/reasoning；工具用得越多、轮次越多，命中就越必然。
 
 ---
 
@@ -133,7 +137,7 @@
 |---|---|---|
 | M1 | 1a/1b 的目录收敛 + 分组梯子 + 未知模型 200K | ✅ 0.2.0 |
 | M2 | StepFun 名录条目（1M + vision）+ 多模态打通与实测 | ✅ 0.3.0（`step-5-preview` 收录；`step-3.7-flash` 走默认放行）；**Grok 仍缺模型 id** |
-| M3 | 2a 定位与修复 | ⏳ 捕获开关已就绪（0.2.0），等一次失败样本 |
+| M3 | 2a 定位与修复 | ✅ 0.4.0（根因：chat 门面转译 + reasoning 回放；stepfun 改走 responses 通道，端到端实测通过） |
 | M4 | 设置页 B+C 改造（固定高度） | ✅ 0.3.0（本轮） |
 | M5 | 宿主 issue：`catalog.ts` 的 provider 粒度 try/catch 下沉到单模型 | ⏳ 需在宿主仓库提 issue |
 
@@ -141,7 +145,7 @@
 
 ## 5. 还需要你提供的信息
 
-1. **一次失败的捕获样本**（问题 2a）：`$env:DSH_PROTOCOM_CAPTURE_DIR = "D:\protocom-capture"` 后复现「用两次后工具报错」，把生成的 json 发我。你贴的报错是 `body.input`（responses 形状），而你的 stepfun 组走 chat-completions，所以还需要确认失败发生在哪条 route 上。
-2. **失败时机**：是「第 2 轮对话」还是「同一条消息用两次工具」？换成 `step-3.7-flash` / `step-router-v1` 是否同样失败？
+1. ~~2a 的失败样本~~ **已不需要**：根因实测确认并修复（§2.2）。若更新后仍遇到 400，请开 `DSH_PROTOCOM_CAPTURE_DIR` 抓一份，那份样本会直接指出新的形状。
+2. **更新后请重点试**：阶跃星辰分组连续多轮对话 + 连续工具调用（这是原先必挂的路径）；顺带确认思考内容在界面上正常流式显示。
 3. **Grok 与其它分组的模型 id**：需要 `/v1/models` 里对应分组的返回，才能补名录条目（1M / vision / 思考词表）。
 4. 顺带发现（与本轮无关但影响你）：**你的 aggregate key 当前被端点拒绝（401）**，所以开源聚合组的菜单走的是名录回落；Codex key 同样 401。需要更新这两把 key。

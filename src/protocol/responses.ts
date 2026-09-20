@@ -44,13 +44,16 @@ interface WireEvent {
   /** Complete reasoning text some providers put on a terminal reasoning event. */
   text?: string
   /** Summary part some providers restate complete on `reasoning_summary_part.done`. */
-  part?: { text?: string }
+  part?: { text?: string; type?: string }
   item?: {
     id?: string
     type?: string
     call_id?: string
     name?: string
     arguments?: string
+    /** Complete reasoning a provider discloses only as the finished item. */
+    content?: { type?: string; text?: string }[]
+    summary?: { text?: string }[]
   }
   response?: {
     status?: string
@@ -260,6 +263,20 @@ function acceptComplete(block: OpenBlock, complete: string | undefined): void {
 }
 
 /**
+ * The reasoning text one complete reasoning item carries, when it carries any.
+ * Providers spell the same content as `reasoning_text` parts, as summary
+ * parts, or as both; a provider that streams nothing and only restates the
+ * finished item still delivers its thinking through here.
+ */
+function itemReasoningText(item: NonNullable<WireEvent['item']>): string | undefined {
+  const parts = [
+    ...(item.content ?? []).filter(part => part.type === 'reasoning_text').map(part => part.text ?? ''),
+    ...(item.summary ?? []).map(part => part.text ?? ''),
+  ].filter(text => text.length > 0)
+  return parts.length === 0 ? undefined : parts.join('')
+}
+
+/**
  * Consume responses-protocol SSE payloads and yield StreamChunks. The
  * terminal state must arrive as a `response.completed` / `response.incomplete`
  * / `response.failed` / `error` event, or the `[DONE]` sentinel; `block-end`s,
@@ -372,9 +389,11 @@ export async function* translateResponses(payloads: AsyncIterable<string>): Asyn
         yield { type: 'text-delta', index: textBlock.index, text: event.delta }
         break
       }
-      // Streaming reasoning. Models differ on the spelling: some stream the
-      // plain `response.reasoning.delta`, others the summary variant.
+      // Streaming reasoning. Models differ on the spelling: the plain
+      // `response.reasoning.delta`, the summary variant, or — StepFun's own
+      // — `response.reasoning_text.delta`.
       case 'response.reasoning.delta':
+      case 'response.reasoning_text.delta':
       case 'response.reasoning_summary_text.delta': {
         yield* emitReasoning(typeof event.delta === 'string' ? event.delta : undefined)
         break
@@ -384,6 +403,7 @@ export async function* translateResponses(payloads: AsyncIterable<string>): Asyn
       // doubles its reasoning, while a model that only restates still delivers
       // the complete text as one delta.
       case 'response.reasoning.done':
+      case 'response.reasoning_text.done':
       case 'response.reasoning_summary_text.done': {
         yield* emitReasoning(streamedRemainder(
           reasoningBlock?.text ?? '',
@@ -391,6 +411,7 @@ export async function* translateResponses(payloads: AsyncIterable<string>): Asyn
         ))
         break
       }
+      case 'response.reasoning_part.done':
       case 'response.reasoning_summary_part.done': {
         yield* emitReasoning(streamedRemainder(
           reasoningBlock?.text ?? '',
@@ -400,6 +421,11 @@ export async function* translateResponses(payloads: AsyncIterable<string>): Asyn
       }
       case 'response.output_item.added': {
         const item = event.item
+        if (item?.type === 'reasoning') {
+          // Some providers disclose reasoning only as the finished item.
+          yield* emitReasoning(streamedRemainder(reasoningBlock?.text ?? '', itemReasoningText(item)))
+          break
+        }
         if (item?.type !== 'function_call') break
         const identity = identityOf(item.id ?? event.item_id, event.output_index)
         if (identity === undefined) break
@@ -427,6 +453,14 @@ export async function* translateResponses(payloads: AsyncIterable<string>): Asyn
       }
       case 'response.output_item.done': {
         const item = event.item
+        if (item?.type === 'reasoning') {
+          // The terminal restatement of a reasoning item. Only the part the
+          // deltas have not carried is emitted, so StepFun's own stream (which
+          // sends both) never doubles its thinking while a provider that only
+          // restates the item still delivers it whole.
+          yield* emitReasoning(streamedRemainder(reasoningBlock?.text ?? '', itemReasoningText(item)))
+          break
+        }
         if (item?.type !== 'function_call') break
         const identity = identityOf(item.id ?? event.item_id, event.output_index)
         const block = identity === undefined
@@ -442,9 +476,15 @@ export async function* translateResponses(payloads: AsyncIterable<string>): Asyn
         sawTerminal = true
         if (event.response?.usage) pendingUsage = mapResponseUsage(event.response.usage)
         const reason = event.response?.incomplete_details?.reason
+        // A response that reports itself incomplete without naming a reason
+        // ran out of output budget: StepFun stops mid-reasoning with
+        // `status: "incomplete"` and `incomplete_details: null`, and calling
+        // that a `stop` would present a truncated turn as a finished one.
+        const incomplete = event.type === 'response.incomplete' || event.response?.status === 'incomplete'
         pendingFinish = sawToolCall
           ? { kind: 'tool-calls' }
           : reason === 'max_output_tokens' || reason === 'max_tokens'
+            || (incomplete && reason === undefined)
             ? { kind: 'max-tokens' }
             : { kind: 'stop' }
         break

@@ -2,6 +2,59 @@
 
 All notable changes to `dsh-protocom-api` are documented here.
 
+## [0.4.0] — 阶跃星辰：修复「第二轮起必 400」
+
+一句话：**该分组原先走的 chat-completions 门面在这个中转站上无法回放任何历史**，所以只要不是第一轮请求就必然 400。现已让该分组默认走官方 Responses 通道，并补齐该通道的思考流词表。
+
+### 根因（实测，非推断）
+
+用你的 StepFun 凭据对真实端点做单变量实验：
+
+| 实验 | 结果 |
+|---|---|
+| 单轮纯文本 | 200 |
+| 首轮请求工具（step 1） | 200 |
+| **回放 assistant 文本（无工具）** | **400** |
+| **回放 assistant 文本 + 工具调用** | **400** |
+| **回放 assistant 文本 + 工具结果（两条消息）** | **400** |
+| **回放 `reasoning_content`（哪怕完全没有工具）** | **400** |
+| 回放「content 为空、只有工具调用」的 assistant + 工具结果 | 200 |
+| 一轮里两个并行工具调用（无 reasoning） | 200 |
+| 6KB 长参数 + 流式 | 200 |
+| **同一会话改走 `/v1/responses`** | **200**（工具调用、内联图片都正常） |
+
+上游报错自证了机制：中转站把 chat-completions 请求**转译**成 StepFun 的 Responses 请求，转译后 assistant 条目长这样——
+
+`{"role":"assistant","content":[{"annotations":[],"text":"Hi there!","type":"output_text"}]}`
+
+它**没有 `type` 字段**，只能去匹配 union 里的 `EasyInputMessageParam` 分支，而该分支要求 `content` 是**字符串**，于是报 `210 validation errors ... loc ('body','input',...,'EasyInputMessageParam','content','str') Input should be a valid string`（210 = 条目数 × union 分支数）。所以：
+
+- **只要历史里有任何 assistant 文本（或 reasoning）就会被拒** —— 这才是「用两次就报错」的真实边界，与工具**数量**无关（一轮两个并行调用本身是 200）；
+- assistant 的 `reasoning_content` 同样会被折进那段文本（转译成 `<thinking>…</thinking>`），因此它本身就是独立的 400 触发器。
+
+### 修复
+
+1. **`stepfun` 分组默认协议改为 `responses`**（`src/groups.ts`）：该通道就是 StepFun 官方 Responses API 的原生形状，实测同一会话 200（含工具调用与内联图片）。显式写 `protocol: chat-completions` 仍被尊重，但那条路依旧 400——那是中转站的转译缺陷，插件无法修。
+2. **补齐该通道的思考流词表**（`src/protocol/responses.ts`）：StepFun 用 `response.reasoning_text.delta` / `.done` / `response.reasoning_part.*`（原先只认 `reasoning.delta` 与 `reasoning_summary_text.*`），只在 `output_item.done` 里整段重述时也能拿到。全部走「只补未流过的余量」规则，因此流 + 重述不会双份。
+3. **`status: incomplete` 但没给 `incomplete_details.reason` 的响应按 `max-tokens` 处理**：StepFun 思考被输出预算截断时正是这个形状，原先会被当成正常 `stop`。
+4. **chat-completions 默认不再回放 `reasoning_content`**（新增 `groups.<key>.replayReasoning`，默认 `false`）：该字段是本中转站 400 的独立触发器，DeepSeek 官方 API 也把回放它判为 400；只有需要「交错的思考上下文」的路由才应打开。
+
+### 验证（构建产物 + 真实凭据，走插件自己的代码路径）
+
+`
+step 1 : start:reasoning | start:tool-call | end:reasoning | end:tool-call(run_code {"code": "console.log(8*9)"}) | finish:tool-calls
+step 2 : start:reasoning | start:text | end:reasoning | end:text | finish:stop
+         answer: "Yes — the program computed 8*9 as 72, which is correct."
+`
+
+同一段回放**强制**回 chat-completions 时仍然 `INVALID_REQUEST | Upstream error: 400` ——所以修好它的正是协议本身。
+
+### 行为变更
+
+1. `groups.stepfun.protocol` 默认值由 `chat-completions` 变为 `responses`；显式配置过 `protocol` 的部署不受影响。
+2. chat-completions 请求不再默认回放 `reasoning_content`；需要旧行为的部署加 `replayReasoning: true`。
+3. 阶跃星辰的思考内容现在会**流式显示**（此前 chat 门面根本不吐 reasoning 增量）。
+
 ## [0.3.0] — 分组模型目录与图片输入
 
 本次修掉两个「设置页里根本设不了、界面上根本传不了」的问题：**除开源聚合外的分组无法配置菜单模型**，以及**多模态模型（阶跃星辰 3.7 / 5）无法上传图片**。所有能力判定都改成可验证、可覆盖的数据，而不是写死的白名单。

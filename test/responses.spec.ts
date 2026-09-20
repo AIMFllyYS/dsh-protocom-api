@@ -236,6 +236,78 @@ describe('responses SSE translation', () => {
   })
 })
 
+describe('StepFun reasoning vocabulary (issue 2a)', () => {
+  const row = (id: string, type: string): Record<string, unknown> => ({ id, type, status: null, summary: [] })
+
+  it('streams the reasoning_text spelling and never doubles its restatements', async () => {
+    // Verified against the relay: StepFun streams reasoning as
+    // response.reasoning_text.delta, restates it on ...text.done, repeats it on
+    // ...part.done, and sends the finished item once more.
+    const chunks = await collect([
+      { type: 'response.created', response: { status: 'in_progress', output: [] } },
+      { type: 'response.output_item.added', output_index: 0, item: row('rs_1', 'reasoning') },
+      { type: 'response.reasoning_part.added', item_id: 'rs_1', output_index: 0, part: { type: 'reasoning_text', text: '' } },
+      { type: 'response.reasoning_text.delta', item_id: 'rs_1', output_index: 0, delta: 'think' },
+      { type: 'response.reasoning_text.delta', item_id: 'rs_1', output_index: 0, delta: 'ing' },
+      { type: 'response.reasoning_text.done', item_id: 'rs_1', output_index: 0, text: 'thinking' },
+      { type: 'response.reasoning_part.done', item_id: 'rs_1', output_index: 0, part: { type: 'reasoning_text', text: 'thinking' } },
+      {
+        type: 'response.output_item.done',
+        output_index: 0,
+        item: { ...row('rs_1', 'reasoning'), content: [{ type: 'reasoning_text', text: 'thinking' }] },
+      },
+      { type: 'response.completed', response: { status: 'completed', output: [] } },
+    ])
+    expect(chunks).toEqual([
+      { type: 'block-start', index: 0, blockType: 'reasoning' },
+      { type: 'reasoning-delta', index: 0, text: 'think' },
+      { type: 'reasoning-delta', index: 0, text: 'ing' },
+      { type: 'block-end', index: 0, block: { type: 'reasoning', text: 'thinking' } },
+      { type: 'finish', reason: { kind: 'stop' } },
+    ])
+  })
+
+  it('delivers reasoning a provider only restates as the finished item', async () => {
+    const chunks = await collect([
+      { type: 'response.output_item.added', output_index: 0, item: row('rs_2', 'reasoning') },
+      {
+        type: 'response.output_item.done',
+        output_index: 0,
+        item: { ...row('rs_2', 'reasoning'), content: [{ type: 'reasoning_text', text: 'whole thought' }] },
+      },
+      { type: 'response.completed', response: { status: 'completed', output: [] } },
+    ])
+    expect(chunks).toEqual([
+      { type: 'block-start', index: 0, blockType: 'reasoning' },
+      { type: 'reasoning-delta', index: 0, text: 'whole thought' },
+      { type: 'block-end', index: 0, block: { type: 'reasoning', text: 'whole thought' } },
+      { type: 'finish', reason: { kind: 'stop' } },
+    ])
+  })
+
+  it('reads a summary-only reasoning item too', async () => {
+    const chunks = await collect([
+      {
+        type: 'response.output_item.done',
+        output_index: 0,
+        item: { ...row('rs_3', 'reasoning'), summary: [{ text: 'summary thought' }] },
+      },
+      { type: 'response.completed', response: { status: 'completed', output: [] } },
+    ])
+    expect(chunks.at(-2)).toEqual({ type: 'block-end', index: 0, block: { type: 'reasoning', text: 'summary thought' } })
+  })
+
+  it('reports an incomplete response that names no reason as a token limit', async () => {
+    // StepFun stops mid-reasoning with status "incomplete" and a null
+    // incomplete_details; that is a truncated turn, not a finished one.
+    const chunks = await collect([
+      { type: 'response.reasoning_text.delta', item_id: 'rs_4', output_index: 0, delta: 'thinking hard' },
+      { type: 'response.completed', response: { status: 'incomplete', incomplete_details: null, output: [] } },
+    ])
+    expect(chunks.at(-1)).toEqual({ type: 'finish', reason: { kind: 'max-tokens' } })
+  })
+})
+
 describe('responses serialization', () => {
   const base: GenerateOptions = {
     provider: 'protocom-codex',
