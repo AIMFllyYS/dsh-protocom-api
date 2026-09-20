@@ -36,21 +36,19 @@ import type { AttachmentStore, ImageAttachmentRef, ImageRequestPolicy } from '@d
 import { GROUP_DEFAULTS, groupOf } from './config.ts'
 import type { GroupKey, ResolvedGroup, ResolvedProtocomOptions } from './config.ts'
 import {
-  catalogEntry,
+  acceptsImages,
   displayNameWithContext,
   FALLBACK_CONTEXT_WINDOW,
+  groupCatalog,
   identityKey,
   matchRegistry,
-  REGISTRY,
-  servesGroup,
 } from './model-registry.ts'
-import type { CatalogModel, RegistryReasoning, UpstreamModel } from './model-registry.ts'
+import type { GroupCatalogModel, RegistryReasoning, UpstreamModel } from './model-registry.ts'
 import { decodeVariantId, encodeVariantId, stripVariantId, variantLengths } from './context-variants.ts'
 import { fetchUpstreamModels } from './discovery.ts'
 import { streamChatCompletions } from './protocol/chat-completions.ts'
-import type { RequestImageUrls } from './protocol/chat-completions.ts'
 import { MAX_PROVIDER_RETRY_AFTER_MS } from './protocol/http.ts'
-import type { ProtocolConnection } from './protocol/http.ts'
+import type { ProtocolConnection, RequestImageUrls } from './protocol/http.ts'
 import { streamResponses } from './protocol/responses.ts'
 
 /** How long one fetched model listing is reused per group. */
@@ -233,14 +231,14 @@ export class ProtocomAdapter extends LlmAdapter {
   }
 
   /**
-   * The input modalities one route may advertise. Image input is declared only
-   * for a model the registry verified against the endpoint AND a route whose
-   * protocol can actually carry an image; the responses protocol has no image
-   * mapping yet, so it stays text-only rather than advertising a capability
-   * that would fail at dispatch.
+   * The input modalities one route advertises for one model. Image input is
+   * declared wherever the model accepts it — the deployment's own choice, then
+   * the registry's verified verdict, then permissive — and both wire protocols
+   * carry one, so no protocol-shaped hole is left for a capability to fall
+   * into.
    */
-  private modalitiesOf(group: ResolvedGroup, model: CatalogModel): readonly ModelModality[] {
-    return model.vision && group.protocol === 'chat-completions' ? ['text', 'image'] : ['text']
+  private inputModalitiesFor(upstreamId: string): readonly ModelModality[] {
+    return acceptsImages(upstreamId, this.config.options().visionModels) ? ['text', 'image'] : ['text']
   }
 
   /**
@@ -250,12 +248,8 @@ export class ProtocomAdapter extends LlmAdapter {
    * full window. A chosen length above the model's window is dropped rather
    * than advertised, because the model could not honour it.
    */
-  private contextLengthsFor(
-    group: ResolvedGroup,
-    model: CatalogModel,
-    upstreamId: string,
-  ): number[] | undefined {
-    const chosen = this.config.options().modelContexts.get(identityKey(upstreamId))
+  private contextLengthsFor(group: ResolvedGroup, model: GroupCatalogModel): number[] | undefined {
+    const chosen = this.config.options().modelContexts.get(identityKey(model.upstreamId))
     if (chosen !== undefined && chosen.length > 0) {
       const allowed = chosen.filter(length => length <= model.contextWindow)
       if (allowed.length > 0) return [...allowed].sort((left, right) => left - right)
@@ -264,83 +258,50 @@ export class ProtocomAdapter extends LlmAdapter {
     return variantLengths(model.contextOptions, group.contextLengths)
   }
 
-  /** Whether one exact upstream model accepts image input on this route. */
-  private acceptsImages(group: ResolvedGroup, upstreamId: string): boolean {
-    return matchRegistry(upstreamId)?.vision === true && group.protocol === 'chat-completions'
-  }
-
-  /** The catalog entries one discovered model advertises, one per variant. */
-  private modelEntries(provider: string, group: ResolvedGroup, upstream: UpstreamModel): LlmModelInfo[] {
-    const model = catalogEntry(upstream, GROUP_DEFAULTS[group.key].reasoning)
-    const inputModalities = this.modalitiesOf(group, model)
-    const lengths = this.contextLengthsFor(group, model, upstream.id)
+  /** The catalog entries one model advertises, one per variant. */
+  private modelEntries(provider: string, group: ResolvedGroup, model: GroupCatalogModel): LlmModelInfo[] {
+    const inputModalities = this.inputModalitiesFor(model.upstreamId)
+    const lengths = this.contextLengthsFor(group, model)
     if (lengths === undefined) {
       return [{
         provider,
-        id: upstream.id,
+        id: model.upstreamId,
         name: displayNameWithContext(model.displayName, model.contextWindow),
         inputModalities,
       }]
     }
     return lengths.map(length => ({
       provider,
-      id: encodeVariantId(upstream.id, length),
+      id: encodeVariantId(model.upstreamId, length),
       name: displayNameWithContext(model.displayName, length),
       inputModalities,
     }))
   }
 
   /**
-   * The catalog offered for one route. Membership is that route's own listing —
-   * the credential scopes what the route serves — plus the registry entries
-   * tagged for this group, so a group's menu holds its own models instead of
-   * every group's. Ids the registry does not know still ride along from the
-   * listing, so a newly served model appears without a plugin release. A
-   * missing or empty listing falls back to the whole registry, so a degraded
-   * endpoint cannot empty the menu.
+   * The catalog offered for one route, projected by the same function the
+   * settings panel reads (model-registry's `groupCatalog`), so the models a
+   * user configures for a group are exactly the models that group's menu
+   * offers. Membership is that route's own listing — the credential scopes
+   * what the route serves — plus the registry entries tagged for this group,
+   * minus the ids the endpoint refuses on its chat route. The picker renders
+   * this order verbatim and the harness calls it "adapter-preferred", so the
+   * deployment's recommendation decides the head of the list.
    */
   override async listModels(provider: string): Promise<readonly LlmModelInfo[]> {
     const group = this.groupFor(provider)
-    const { hiddenModels, recommendedModels } = this.config.options()
-    const rows: UpstreamModel[] = []
+    const { hiddenModels, recommendedModels, visionModels } = this.config.options()
     let listing: readonly UpstreamModel[] | undefined
     try {
       listing = await this.upstreamModels(group)
     } catch {
       listing = undefined
     }
-    if (listing !== undefined) rows.push(...listing)
-    for (const entry of REGISTRY) {
-      if (!servesGroup(entry, group.key)) continue
-      if (!rows.some(row => row.id === entry.id)) rows.push({ id: entry.id })
-    }
-    if (rows.length === 0) {
-      // "No listing" and "empty listing" are both no information, not "no
-      // models"; the registry answers so the menu is never emptied.
-      for (const entry of REGISTRY) rows.push({ id: entry.id })
-    }
-    // The picker renders this order verbatim and the harness calls it
-    // "adapter-preferred", so it is the one lever that leads the menu with the
-    // models worth reaching for. Recommendation decides the head of the list;
-    // everything else keeps registry order behind it.
-    const rankOf = (id: string): number => {
-      const at = recommendedModels.indexOf(identityKey(id))
-      return at === -1 ? Number.MAX_SAFE_INTEGER : at
-    }
-    const ranked = rows
-      .filter(model => !hiddenModels.has(model.id))
-      .map((model, index) => ({ index, model, rank: rankOf(model.id) }))
-      .sort((left, right) => left.rank - right.rank || left.index - right.index)
-    // The endpoint lists some models under two ids; the menu shows one row per
-    // identity, and its first id (registry order) is the one dispatched.
-    const seen = new Set<string>()
-    const unique = ranked.filter((row) => {
-      const name = catalogEntry(row.model, GROUP_DEFAULTS[group.key].reasoning).displayName
-      if (seen.has(name)) return false
-      seen.add(name)
-      return true
-    })
-    return unique.flatMap(entry => this.modelEntries(provider, group, entry.model))
+    return groupCatalog(group.key, listing, {
+      hidden: hiddenModels,
+      recommended: recommendedModels,
+      vision: visionModels,
+    }).flatMap(model => this.modelEntries(provider, group, model))
   }
 
   /** Endpoint-disclosed reasoning vocabulary for one model, when the listing says any. */
@@ -385,7 +346,7 @@ export class ProtocomAdapter extends LlmAdapter {
       provider,
       id: model,
       name: displayNameWithContext(displayName, contextWindow),
-      inputModalities: this.acceptsImages(group, upstreamId) ? ['text', 'image'] : ['text'],
+      inputModalities: this.inputModalitiesFor(upstreamId),
       context: { contextWindow },
       ...reasoning === undefined ? {} : { reasoning: reasoningInfo(reasoning) },
     }
@@ -435,9 +396,7 @@ export class ProtocomAdapter extends LlmAdapter {
       // The pre-stream work (image projection, request serialization) is
       // demanded through the watchdog too, so a stall before the first chunk
       // reaches the same idle bound instead of hanging the request silently.
-      const pending = group.protocol === 'responses'
-        ? Promise.resolve(streamResponses(connection, callOptions, model))
-        : this.chatCompletionsCall(connection, callOptions, group, model)
+      const pending = this.protocolCall(connection, callOptions, group, model)
       const started = await watchdog.next(oneShot(pending, watchdog.signal))
       if (started.done === true) {
         throw new LlmError('Protocom adapter produced no stream', 'TRANSPORT')
@@ -476,20 +435,23 @@ export class ProtocomAdapter extends LlmAdapter {
     }
   }
 
-  /** The chat-completions call, with this request's image budget applied first. */
-  private async chatCompletionsCall(
+  /**
+   * The wire call for this request's protocol, with this request's image
+   * budget applied first. Both protocols carry images: an image resolves to an
+   * inline data URL either way, so a group's protocol can no longer decide
+   * whether a multimodal model is reachable with one.
+   */
+  private async protocolCall(
     connection: ProtocolConnection,
     options: GenerateOptions,
     group: ResolvedGroup,
     model: string,
   ): Promise<AsyncIterable<StreamChunk>> {
-    const { images, messages } = await this.resolveRequestImages(options, group, model)
-    return streamChatCompletions(
-      connection,
-      messages === options.messages ? options : { ...options, messages: [...messages] },
-      model,
-      images,
-    )
+    const { images, messages } = await this.resolveRequestImages(options, model)
+    const projected = messages === options.messages ? options : { ...options, messages: [...messages] }
+    return group.protocol === 'responses'
+      ? streamResponses(connection, projected, model, images)
+      : streamChatCompletions(connection, projected, model, images)
   }
 
   /**
@@ -499,20 +461,19 @@ export class ProtocomAdapter extends LlmAdapter {
    * retained image here means the route declared the `image` modality; the
    * guard still covers direct adapter use.
    * @param options - the assembled request.
-   * @param group - the frozen group snapshot this request belongs to.
+   * @param options - the assembled request.
    * @param model - the upstream model id, variant suffix already stripped.
    * @returns provider-ready data URLs (absent when the request has none) and the
    * message projection the caller must serialize.
    */
   private async resolveRequestImages(
     options: GenerateOptions,
-    group: ResolvedGroup,
     model: string,
   ): Promise<{ images: RequestImageUrls | undefined; messages: readonly Message[] }> {
     const refs = new Map<string, ImageAttachmentRef>()
     for (const message of options.messages) collectImageRefs(message.content, refs)
     if (refs.size === 0) return { images: undefined, messages: options.messages }
-    if (!this.acceptsImages(group, model)) {
+    if (!acceptsImages(model, this.config.options().visionModels)) {
       throw new LlmError(`Protocom model "${model}" does not accept image input.`, 'UNSUPPORTED_CONTENT')
     }
     const attachments = this.config.resolveAttachments?.()

@@ -1,9 +1,12 @@
 /**
- * Protocom API settings section: one card per group (enable switch, API key,
- * read-only protocol tag, model probe with context-variant checkboxes, and
- * the balance strip), plus the advanced baseURL override. Every mutation
- * writes through the wire (settings.mutate / credentials.set); the page
- * reloads its snapshot after each landed write.
+ * Protocom API settings section: one collapsible card per group. A card carries
+ * the group's own enable switch, API key, and — the step that follows saving a
+ * key — the exact models that group contributes to the model menu, one control
+ * row each for visibility, context lengths, image input, and menu priority. The
+ * endpoint's raw listing (model ↔ upstream id) stays behind a collapsed row:
+ * it is a diagnostic, not a setting. Every mutation writes through the wire
+ * (settings.mutate / credentials.set); the page reloads its snapshot after each
+ * landed write.
  */
 import type { ReactNode } from 'react';
 import type { InjectFace } from '@deepseek-ai/dsh-client-ui-slots';
@@ -11,7 +14,7 @@ import type { GroupKey } from '../groups.ts';
 import type { GroupBalance } from '../balance-view.ts';
 import type { ProtocomOperations } from './operations.ts';
 import type { en } from './locale.ts';
-/** Injected dependencies of {@link ProtocomSection} (slot `inject`). */
+/** Injected dependencies of {`link ProtocomSection} (slot `inject`). */
 export interface ProtocomInjected {
     /** The Host operations the section invokes. */
     operations: ProtocomOperations;
@@ -35,8 +38,8 @@ export declare function BalanceView({ group, balance, phase, error, onRefresh, t
 }): ReactNode;
 /**
  * Render the Protocom API section content column.
- * @param props - slot-delivered injected dependencies.
- * @returns the section, or null while the shell has not injected yet.
+ * `param props - slot-delivered injected dependencies.
+ * `returns the section, or null while the shell has not injected yet.
  */
 export declare function ProtocomSection(props: ProtocomSectionProps): ReactNode;
 export {};

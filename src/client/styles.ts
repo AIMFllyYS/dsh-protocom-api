@@ -88,7 +88,28 @@ export const SECTION_CSS = `
 .protocom-chip:hover { border-color: var(--dsh-accent, #3a7bfd); }
 .protocom-chip.is-on { background: var(--dsh-accent, #3a7bfd); border-color: transparent; color: #fff; }
 
-.protocom-models { display: flex; flex-direction: column; gap: 1px; max-height: 340px; overflow-y: auto; }
+.protocom-card-toggle {
+  display: inline-flex; align-items: center; gap: 6px; padding: 0; border: 0;
+  background: transparent; color: inherit; font: inherit; cursor: pointer;
+}
+.protocom-card-toggle:hover .protocom-card-name { color: var(--dsh-accent, #3a7bfd); }
+.protocom-caret { width: 10px; text-align: center; font-size: 10px; opacity: 0.5; }
+.protocom-card-body { display: flex; flex-direction: column; gap: 12px; }
+.protocom-models-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.protocom-models-title { font-size: 12.5px; font-weight: 600; }
+.protocom-models-count { font-size: 11.5px; opacity: 0.6; font-variant-numeric: tabular-nums; }
+.protocom-vision {
+  font-size: 11px; padding: 2px 9px; border-radius: 999px; cursor: pointer;
+  border: 1px solid var(--dsh-border, rgba(128, 128, 128, 0.35));
+  background: transparent; color: inherit; opacity: 0.55;
+  transition: opacity 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+}
+.protocom-vision.is-on { opacity: 1; color: var(--dsh-accent, #3a7bfd); border-color: var(--dsh-accent, #3a7bfd); }
+.protocom-vision:disabled { cursor: default; opacity: 0.4; }
+
+/* The one bounded viewport in a card: a group may contribute hundreds of menu
+   entries, and the card must not grow with them. */
+.protocom-models { display: flex; flex-direction: column; gap: 1px; max-height: 340px; min-height: 44px; overflow-y: auto; }
 .protocom-model-row {
   display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
   padding: 5px 8px; border-radius: 9px;

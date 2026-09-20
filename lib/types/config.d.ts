@@ -71,6 +71,16 @@ export interface Config {
      * window; a length above the model's window is ignored.
      */
     modelContexts?: Record<string, number[]>;
+    /**
+     * Per-model image-input capability, keyed by upstream model id (aliases
+     * collapse to one key). The endpoint discloses no modality for any model, so
+     * the plugin's own default is permissive: an id nobody has judged accepts
+     * images, because a wrong "no" makes a documented capability unreachable
+     * while a wrong "yes" costs one upstream error that names the model. `false`
+     * is the explicit "this model is text-only" that removes the image modality
+     * from that model's menu entries.
+     */
+    visionModels?: Record<string, boolean>;
 }
 /** Runtime schema for {@link Config}. */
 export declare const Config: z<Config>;
@@ -108,6 +118,8 @@ export interface ResolvedProtocomOptions {
     recommendedModels: readonly string[];
     /** Context lengths to offer per upstream id, keyed by model identity. */
     modelContexts: ReadonlyMap<string, readonly number[]>;
+    /** Image-input capability per upstream id, keyed by model identity. */
+    visionModels: ReadonlyMap<string, boolean>;
 }
 /**
  * The one explicit resolve step from raw config to validated connection

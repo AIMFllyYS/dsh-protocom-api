@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  acceptsImages,
   catalogEntry,
   CONTEXT_LADDER,
   contextChoicesFor,
@@ -9,8 +10,12 @@ import {
   FALLBACK_CONTEXT_WINDOW,
   identityKey,
   matchRegistry,
+  REFUSED_CHAT_MODEL_IDS,
   REGISTRY,
+  servesChat,
+  servesGroup,
 } from '../src/model-registry.ts'
+import type { RegistryEntry } from '../src/model-registry.ts'
 
 describe('model-registry', () => {
   it('matches known ids with their declared facts', () => {
@@ -69,16 +74,65 @@ describe('model-registry', () => {
     ]) {
       expect(matchRegistry(id)?.displayName, id).toBeTruthy()
     }
+    const stepfun = matchRegistry('step-5-preview')
+    expect(servesGroup(stepfun as RegistryEntry, 'stepfun')).toBe(true)
+    expect(servesGroup(stepfun as RegistryEntry, 'aggregate')).toBe(false)
   })
 
-  it('declares image input only where the endpoint accepted one', () => {
+  it('declares image input where the endpoint accepted one', () => {
     const vision = REGISTRY.filter(entry => entry.vision === true).map(entry => entry.id)
     expect(vision).toContain('kimi-k3')
     expect(vision).toContain('gpt-5.6-sol')
+    expect(vision).toContain('step-5-preview')
+  })
+
+  it('declares the models verified or documented as text-only', () => {
     // Text-only by the vendor's own documentation.
-    expect(matchRegistry('glm-5.3')?.vision).toBeUndefined()
+    expect(matchRegistry('glm-5.3')?.vision).toBe(false)
+    expect(matchRegistry('glm-5.2')?.vision).toBe(false)
     // The endpoint answered 404 "no endpoints found that support image input".
-    expect(matchRegistry('mimo-v2.5-pro')?.vision).toBeUndefined()
+    expect(matchRegistry('mimo-v2.5-pro')?.vision).toBe(false)
+  })
+
+  it('catalogues the StepFun flagship the endpoint answered for', () => {
+    const entry = matchRegistry('step-5-preview')
+    expect(entry?.displayName).toBe('Step 5 Preview')
+    expect(entry?.contextWindow).toBe(1_048_576)
+    expect(entry?.vision).toBe(true)
+    expect(entry?.groups).toEqual(['stepfun'])
+  })
+
+  it('keeps the StepFun ids the endpoint refuses out of every group', () => {
+    // Verified by request with the key that lists them: the audio and
+    // image-editing ids answer 404 and the two Step-3.5 snapshots answer 400,
+    // so none of them can serve a chat turn.
+    expect(REFUSED_CHAT_MODEL_IDS).toEqual([
+      'step-3.5-flash',
+      'step-3.5-flash-2603',
+      'step-explore',
+      'step-image-edit-2',
+      'stepaudio-2.5-asr',
+      'stepaudio-2.5-chat',
+      'stepaudio-2.5-realtime',
+      'stepaudio-2.5-tts',
+    ])
+    expect(servesChat('step-5-preview')).toBe(true)
+    expect(servesChat('stepaudio-2.5-tts')).toBe(false)
+    // A refused id is never also a registry entry: membership would re-offer it.
+    for (const id of REFUSED_CHAT_MODEL_IDS) expect(matchRegistry(id), id).toBeUndefined()
+  })
+
+  it('resolves image input permissively, with the deployment able to say no', () => {
+    // Nobody has judged this id, and the endpoint is the authority on modality,
+    // so it accepts images: a wrong "no" made Step 3.7/5 unreachable with one.
+    expect(acceptsImages('meta/llama-x')).toBe(true)
+    // A verified text-only verdict still blocks...
+    expect(acceptsImages('glm-5.3')).toBe(false)
+    // ...and the deployment can overrule either way.
+    expect(acceptsImages('meta/llama-x', new Map([['meta/llama-x', false]]))).toBe(false)
+    expect(acceptsImages('glm-5.3', new Map([['glm-5.3', true]]))).toBe(true)
+    // A choice made against one alias spelling configures the model once.
+    expect(acceptsImages('deepseek-v4.1-flash', new Map([['deepseek/deepseek-v4.1-flash', false]]))).toBe(false)
   })
 
   it('never offers an off switch to a model that refuses one', () => {
@@ -169,9 +223,9 @@ describe('model-registry', () => {
     expect(group.reasoning?.efforts).toEqual(['low', 'medium', 'high', 'xhigh', 'max'])
   })
 
-  it('treats an unknown model as text-only and unranked', () => {
+  it('treats an unknown model as image-capable and unranked', () => {
     const unknown = catalogEntry({ id: 'meta/llama-x' })
-    expect(unknown.vision).toBe(false)
+    expect(unknown.vision).toBe(true)
     expect(unknown.rank).toBe(Number.MAX_SAFE_INTEGER)
     expect(unknown.contextOptions).toBeUndefined()
   })

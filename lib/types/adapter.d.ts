@@ -63,13 +63,13 @@ export declare class ProtocomAdapter extends LlmAdapter {
     /** Forget cached listings so a configuration change re-interrogates. */
     invalidateListings(): void;
     /**
-     * The input modalities one route may advertise. Image input is declared only
-     * for a model the registry verified against the endpoint AND a route whose
-     * protocol can actually carry an image; the responses protocol has no image
-     * mapping yet, so it stays text-only rather than advertising a capability
-     * that would fail at dispatch.
+     * The input modalities one route advertises for one model. Image input is
+     * declared wherever the model accepts it — the deployment's own choice, then
+     * the registry's verified verdict, then permissive — and both wire protocols
+     * carry one, so no protocol-shaped hole is left for a capability to fall
+     * into.
      */
-    private modalitiesOf;
+    private inputModalitiesFor;
     /**
      * The context lengths one model should be offered at. The picker's per-model
      * choice wins — that is the surface a user actually sets — then the group's
@@ -78,18 +78,17 @@ export declare class ProtocomAdapter extends LlmAdapter {
      * than advertised, because the model could not honour it.
      */
     private contextLengthsFor;
-    /** Whether one exact upstream model accepts image input on this route. */
-    private acceptsImages;
-    /** The catalog entries one discovered model advertises, one per variant. */
+    /** The catalog entries one model advertises, one per variant. */
     private modelEntries;
     /**
-     * The catalog offered for one route. Membership is that route's own listing —
-     * the credential scopes what the route serves — plus the registry entries
-     * tagged for this group, so a group's menu holds its own models instead of
-     * every group's. Ids the registry does not know still ride along from the
-     * listing, so a newly served model appears without a plugin release. A
-     * missing or empty listing falls back to the whole registry, so a degraded
-     * endpoint cannot empty the menu.
+     * The catalog offered for one route, projected by the same function the
+     * settings panel reads (model-registry's `groupCatalog`), so the models a
+     * user configures for a group are exactly the models that group's menu
+     * offers. Membership is that route's own listing — the credential scopes
+     * what the route serves — plus the registry entries tagged for this group,
+     * minus the ids the endpoint refuses on its chat route. The picker renders
+     * this order verbatim and the harness calls it "adapter-preferred", so the
+     * deployment's recommendation decides the head of the list.
      */
     listModels(provider: string): Promise<readonly LlmModelInfo[]>;
     /** Endpoint-disclosed reasoning vocabulary for one model, when the listing says any. */
@@ -99,8 +98,13 @@ export declare class ProtocomAdapter extends LlmAdapter {
     prepareCall(provider: string, model: string, _signal?: AbortSignal): Promise<PreparedAdapterCall>;
     stream(options: GenerateOptions): AsyncIterable<StreamChunk>;
     private streamWithGroup;
-    /** The chat-completions call, with this request's image budget applied first. */
-    private chatCompletionsCall;
+    /**
+     * The wire call for this request's protocol, with this request's image
+     * budget applied first. Both protocols carry images: an image resolves to an
+     * inline data URL either way, so a group's protocol can no longer decide
+     * whether a multimodal model is reachable with one.
+     */
+    private protocolCall;
     /**
      * Resolve every image this request carries into the inline data URL the
      * endpoint accepts, applying the whole-request budget first. The harness
@@ -108,7 +112,7 @@ export declare class ProtocomAdapter extends LlmAdapter {
      * retained image here means the route declared the `image` modality; the
      * guard still covers direct adapter use.
      * @param options - the assembled request.
-     * @param group - the frozen group snapshot this request belongs to.
+     * @param options - the assembled request.
      * @param model - the upstream model id, variant suffix already stripped.
      * @returns provider-ready data URLs (absent when the request has none) and the
      * message projection the caller must serialize.

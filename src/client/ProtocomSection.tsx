@@ -1,9 +1,12 @@
 /**
- * Protocom API settings section: one card per group (enable switch, API key,
- * read-only protocol tag, model probe with context-variant checkboxes, and
- * the balance strip), plus the advanced baseURL override. Every mutation
- * writes through the wire (settings.mutate / credentials.set); the page
- * reloads its snapshot after each landed write.
+ * Protocom API settings section: one collapsible card per group. A card carries
+ * the group's own enable switch, API key, and — the step that follows saving a
+ * key — the exact models that group contributes to the model menu, one control
+ * row each for visibility, context lengths, image input, and menu priority. The
+ * endpoint's raw listing (model ↔ upstream id) stays behind a collapsed row:
+ * it is a diagnostic, not a setting. Every mutation writes through the wire
+ * (settings.mutate / credentials.set); the page reloads its snapshot after each
+ * landed write.
  */
 
 import { useEffect, useState } from 'react'
@@ -12,14 +15,23 @@ import type { InjectFace } from '@deepseek-ai/dsh-client-ui-slots'
 import type { CredentialInfo, LlmDiscoveredModel, SettingsNamespaceView } from '@deepseek-ai/dsh-api-remotes/client'
 import { DEFAULT_BASE_URL_ORIGIN, defaultKeyRef, GROUP_DEFAULTS, GROUP_KEYS, providerOf } from '../groups.ts'
 import type { GroupKey, Protocol } from '../groups.ts'
-import { catalogEntry, contextLabel, DEFAULT_RECOMMENDED, modelIdentities } from '../model-registry.ts'
-import { variantChoicesFor } from './variants.ts'
+import { variantLengths } from '../context-variants.ts'
 import { parseBalanceView } from '../balance-view.ts'
 import type { GroupBalance } from '../balance-view.ts'
+import {
+  CONTEXT_LADDER,
+  contextLabel,
+  DEFAULT_RECOMMENDED,
+  groupCatalog,
+  identityKey,
+  matchRegistry,
+  servesChat,
+} from '../model-registry.ts'
+import type { GroupCatalogModel, UpstreamModel } from '../model-registry.ts'
 import type { ProtocomOperations } from './operations.ts'
 import type { en } from './locale.ts'
 
-/** Injected dependencies of {@link ProtocomSection} (slot `inject`). */
+/** Injected dependencies of {`link ProtocomSection} (slot `inject`). */
 export interface ProtocomInjected {
   /** The Host operations the section invokes. */
   operations: ProtocomOperations
@@ -51,6 +63,7 @@ interface SectionValue {
   hiddenModels?: string[]
   recommendedModels?: string[]
   modelContexts?: Record<string, number[]>
+  visionModels?: Record<string, boolean>
 }
 
 interface PageState {
@@ -59,6 +72,13 @@ interface PageState {
   credentials: Record<string, CredentialInfo>
   error?: string
 }
+
+/** One group's interrogation of its own endpoint listing. */
+type ProbeState =
+  | { phase: 'idle' }
+  | { phase: 'loading' }
+  | { phase: 'ready'; models: readonly LlmDiscoveredModel[] }
+  | { phase: 'error'; message: string }
 
 function sectionOf(view: SettingsNamespaceView | undefined): SectionValue {
   const value = view?.value
@@ -156,46 +176,186 @@ export function BalanceView({ group, balance, phase, error, onRefresh, t }: {
   )
 }
 
-/** One group's card. */
-function GroupCard({ groupKey, group, credential, writable, revision, baseURL, operations, t, onChanged }: {
+/** How many rows a group may hold before its list offers a filter box. */
+const FILTER_THRESHOLD = 8
+
+/** One model's control row inside its group's card. */
+function ModelRow({ model, group, hidden, recommended, contexts, vision, writable, busy, t, onWrite }: {
+  model: GroupCatalogModel
+  group: Required<GroupSectionValue>
+  hidden: readonly string[]
+  recommended: readonly string[]
+  contexts: Readonly<Record<string, number[]>>
+  vision: Readonly<Record<string, boolean>>
+  writable: boolean
+  busy: boolean
+  t: Translator
+  onWrite: (ops: Parameters<ProtocomOperations['writeSettings']>[0]) => void
+}): ReactNode {
+  const key = identityKey(model.upstreamId)
+  const hiddenSet = new Set(hidden)
+  const shown = model.ids.every(id => !hiddenSet.has(id))
+  const starred = recommended.includes(key)
+  // The lengths this model offers when nothing is stored: the group's own
+  // ladder narrowed to the model's window, or its full window when the group
+  // ships no ladder. Exactly what the adapter advertises, so the row and the
+  // menu cannot disagree.
+  const fallback = variantLengths(model.contextOptions, group.contextLengths) ?? [model.contextWindow]
+  const stored = contexts[key]
+  const selected = (stored ?? fallback).filter(length => length <= model.contextWindow)
+  const chosen = selected.length > 0 ? selected : fallback
+  const ladder = model.contextOptions ?? CONTEXT_LADDER
+  const images = vision[key] ?? model.vision
+  const meta = [
+    ...model.reasoning === undefined ? [] : [t('tagReasoning')],
+  ].join(' · ')
+
+  const toggleShown = (): void => {
+    const rest = hidden.filter(id => !model.ids.includes(id))
+    const next = shown ? [...rest, ...model.ids] : rest
+    onWrite(next.length === 0
+      ? [{ op: 'unset', path: ['hiddenModels'] }]
+      : [{ op: 'set', path: ['hiddenModels'], value: next }])
+  }
+
+  const writeContexts = (next: number[]): void => {
+    const isDefault = next.length === fallback.length && next.every((length, index) => length === fallback[index])
+    onWrite(isDefault
+      ? [{ op: 'unset', path: ['modelContexts', key] }]
+      : [{ op: 'set', path: ['modelContexts', key], value: next }])
+  }
+
+  const toggleVision = (): void => {
+    // On is the permissive default, so unsetting is how a model goes back to
+    // "whatever the endpoint does"; off is the explicit text-only verdict.
+    onWrite(images
+      ? [{ op: 'set', path: ['visionModels', key], value: false }]
+      : [{ op: 'unset', path: ['visionModels', key] }])
+  }
+
+  const toggleStar = (): void => {
+    const rest = recommended.filter(id => id !== key)
+    const next = starred ? rest : [...rest, key]
+    onWrite(next.length === 0
+      ? [{ op: 'unset', path: ['recommendedModels'] }]
+      : [{ op: 'set', path: ['recommendedModels'], value: next }])
+  }
+
+  return (
+    <div
+      className={shown ? 'protocom-model-row' : 'protocom-model-row is-off'}
+      title={model.ids.join('\n')}
+    >
+      <label className="protocom-model-pick">
+        <input
+          type="checkbox"
+          checked={shown}
+          disabled={!writable || busy}
+          aria-label={model.displayName}
+          onChange={toggleShown}
+        />
+        <span className="protocom-model-dot" />
+        <span className="protocom-model-name">{model.displayName}</span>
+      </label>
+      {meta.length === 0 ? null : <span className="protocom-model-meta">{meta}</span>}
+      <span className="protocom-model-spacer" />
+      {/* The ladder stays visible while a model is listed so its context set
+          reads as one control, not a hidden setting. */}
+      {shown
+        ? (
+          <span className="protocom-ctx" role="group" aria-label={t('contextTitle')}>
+            {ladder.map((length) => {
+              const on = chosen.includes(length)
+              const last = on && chosen.length === 1
+              return (
+                <button
+                  key={length}
+                  type="button"
+                  className={on ? 'is-on' : undefined}
+                  aria-pressed={on}
+                  disabled={!writable || busy || last}
+                  title={last ? t('contextLastTitle') : t('contextTitle')}
+                  onClick={() => {
+                    writeContexts(on
+                      ? chosen.filter(value => value !== length)
+                      : [...chosen, length].sort((left, right) => left - right))
+                  }}
+                >
+                  {contextLabel(length)}
+                </button>
+              )
+            })}
+          </span>
+        )
+        : null}
+      <button
+        type="button"
+        className={images ? 'protocom-vision is-on' : 'protocom-vision'}
+        disabled={!writable || busy}
+        aria-pressed={images}
+        title={t('visionTitle')}
+        onClick={toggleVision}
+      >
+        {images ? t('tagVision') : t('visionOff')}
+      </button>
+      <button
+        type="button"
+        className={starred ? 'protocom-model-star is-on' : 'protocom-model-star'}
+        disabled={!writable || busy}
+        aria-pressed={starred}
+        title={starred ? t('unstarTitle') : t('starTitle')}
+        onClick={toggleStar}
+      >
+        ★
+      </button>
+    </div>
+  )
+}
+
+/** One group's card: credentials, its own menu models, and its balance. */
+function GroupCard({ groupKey, group, credential, writable, revision, probe, hidden, recommended, contexts, vision, operations, t, onChanged, onProbe }: {
   groupKey: GroupKey
   group: Required<GroupSectionValue>
   credential: CredentialInfo | undefined
   writable: boolean
   revision: number | undefined
-  baseURL: string | undefined
+  probe: ProbeState
+  hidden: readonly string[]
+  recommended: readonly string[]
+  contexts: Readonly<Record<string, number[]>>
+  vision: Readonly<Record<string, boolean>>
   operations: ProtocomOperations
   t: Translator
   onChanged: () => Promise<void>
+  onProbe: () => void
 }): ReactNode {
   const ref = defaultKeyRef(groupKey)
   const [keyDraft, setKeyDraft] = useState('')
   const [keyBusy, setKeyBusy] = useState(false)
   const [keyMessage, setKeyMessage] = useState<{ kind: 'ok' | 'error'; text: string } | undefined>(undefined)
   const [cardError, setCardError] = useState<string | undefined>(undefined)
-  const [probe, setProbe] = useState<
-    | { phase: 'idle' }
-    | { phase: 'loading' }
-    | { phase: 'ready'; models: readonly LlmDiscoveredModel[] }
-    | { phase: 'error'; message: string }
-  >({ phase: 'idle' })
+  const [busy, setBusy] = useState(false)
+  const [open, setOpen] = useState(true)
+  const [filter, setFilter] = useState('')
   const [balance, setBalance] = useState<{
     phase: 'idle' | 'loading' | 'ready' | 'error'
     data: GroupBalance | undefined
     error: string | undefined
   }>({ phase: 'idle', data: undefined, error: undefined })
 
-  const write = async (ops: Parameters<ProtocomOperations['writeSettings']>[0]): Promise<void> => {
+  const write = (ops: Parameters<ProtocomOperations['writeSettings']>[0]): void => {
     setCardError(undefined)
-    const outcome = await operations.writeSettings(ops, revision)
-    if (outcome.kind !== 'written') {
-      setCardError(outcome.message)
-      // A conflict means the card's snapshot is stale: reload so the next
-      // toggle rides the current revision instead of wedging on the old one.
-      await onChanged()
-      return
-    }
-    await onChanged()
+    setBusy(true)
+    void operations.writeSettings(ops, revision)
+      .then(async (outcome) => {
+        if (outcome.kind !== 'written') {
+          setCardError(outcome.message)
+          // A conflict means the card's snapshot is stale: reload so the next
+          // toggle rides the current revision instead of wedging on the old one.
+        }
+        await onChanged()
+      })
+      .finally(() => { setBusy(false) })
   }
 
   const loadBalance = async (): Promise<void> => {
@@ -247,24 +407,44 @@ function GroupCard({ groupKey, group, credential, writable, revision, baseURL, o
       .finally(() => { setKeyBusy(false) })
   }
 
-  const runProbe = (): void => {
-    if (probe.phase === 'loading') return
-    setProbe({ phase: 'loading' })
-    void operations.discoverModels({
-      provider: providerOf(groupKey),
-      ...baseURL === undefined ? {} : { baseURL },
-    }).then((outcome) => {
-      setProbe(outcome.kind === 'found'
-        ? { phase: 'ready', models: outcome.models }
-        : { phase: 'error', message: outcome.message })
-    })
-  }
-
   const credentialConfigured = credential?.configured === true
+  const listing = probe.phase === 'ready' ? probe.models : undefined
+  // The group's own menu, projected exactly as the adapter projects it, so the
+  // rows below are the entries the picker will show. Hidden ids stay in the
+  // list — that is how one gets un-hidden — and the recommendation orders it.
+  const rows = groupCatalog(
+    groupKey,
+    listing?.map((model): UpstreamModel => ({
+      id: model.id,
+      ...model.name === undefined ? {} : { displayName: model.name },
+    })),
+    { recommended },
+  )
+  const needle = filter.trim().toLowerCase()
+  const visibleRows = needle.length === 0
+    ? rows
+    : rows.filter(row => row.displayName.toLowerCase().includes(needle) || row.ids.some(id => id.toLowerCase().includes(needle)))
+  const groupIds = rows.flatMap(row => [...row.ids])
+  const hiddenInGroup = groupIds.filter(id => hidden.includes(id))
+  const entryCount = visibleRows.reduce((total, row) => {
+    const stored = contexts[identityKey(row.upstreamId)]
+    const lengths = stored ?? variantLengths(row.contextOptions, group.contextLengths) ?? [row.contextWindow]
+    return total + Math.max(1, lengths.length)
+  }, 0)
+
   return (
     <li className={group.enabled ? 'protocom-card' : 'protocom-card is-off'}>
       <div className="protocom-card-head">
-        <span className="protocom-card-name">{t(`group${groupKey.charAt(0).toUpperCase()}${groupKey.slice(1)}` as keyof typeof en)}</span>
+        <button
+          type="button"
+          className="protocom-card-toggle"
+          aria-expanded={open}
+          title={open ? t('collapse') : t('expand')}
+          onClick={() => { setOpen(!open) }}
+        >
+          <span className="protocom-caret" aria-hidden="true">{open ? '▾' : '▸'}</span>
+          <span className="protocom-card-name">{t(`group${groupKey.charAt(0).toUpperCase()}${groupKey.slice(1)}` as keyof typeof en)}</span>
+        </button>
         <span className="protocom-tag" title={t('protocol')}>{group.protocol}</span>
         <span className="protocom-head-state">
           <span className={credentialConfigured ? 'protocom-dot is-on' : 'protocom-dot'} />
@@ -274,280 +454,169 @@ function GroupCard({ groupKey, group, credential, writable, revision, baseURL, o
               type="checkbox"
               role="switch"
               checked={group.enabled}
-              disabled={!writable}
+              disabled={!writable || busy}
               aria-label={t('enabled')}
-              onChange={() => { void write([{ op: 'set', path: ['groups', groupKey, 'enabled'], value: !group.enabled }]) }}
+              onChange={() => { write([{ op: 'set', path: ['groups', groupKey, 'enabled'], value: !group.enabled }]) }}
             />
             <span className="protocom-switch-track"><span className="protocom-switch-thumb" /></span>
             {t('enabled')}
           </label>
         </span>
       </div>
-      <div className="protocom-field">
-        <span className="protocom-field-label">{t('apiKey')}</span>
-        <input
-          type="password"
-          className="protocom-input"
-          value={keyDraft}
-          placeholder={credentialConfigured ? t('keyConfigured') : t('keyPlaceholder')}
-          aria-label={`${t('apiKey')} (${ref})`}
-          disabled={!writable || credential?.writable === false}
-          autoComplete="new-password"
-          spellCheck={false}
-          onChange={event => { setKeyDraft(event.target.value) }}
-        />
-        <button type="button" className="protocom-button protocom-button-primary" disabled={!writable || keyBusy || keyDraft.length === 0} onClick={saveKey}>
-          {keyBusy ? t('savingKey') : t('saveKey')}
-        </button>
-      </div>
-      <span className="protocom-key-state">{credentialConfigured ? `${t('keyConfigured')} (${ref})` : `${t('keyMissing')} (${ref})`}</span>
-      {keyMessage === undefined ? null : (
-        <p className={keyMessage.kind === 'ok' ? 'protocom-status' : 'protocom-error'}>
-          {keyMessage.kind === 'ok' ? keyMessage.text : `${t('keyFailed')}: ${keyMessage.text}`}
-        </p>
-      )}
-      {cardError === undefined ? null : <p className="protocom-error">{cardError}</p>}
-      <div className="protocom-field">
-        <button type="button" className="protocom-button protocom-button-primary" disabled={probe.phase === 'loading'} onClick={runProbe}>
-          {probe.phase === 'loading' ? t('probing') : t('probe')}
-        </button>
-      </div>
-      {probe.phase === 'error' ? <p className="protocom-error">{`${t('probeFailed')}: ${probe.message}`}</p> : null}
-      {probe.phase === 'ready' && probe.models.length === 0 ? <p className="protocom-notice">{t('probeEmpty')}</p> : null}
-      {probe.phase === 'ready' && probe.models.length > 0
+      {open
         ? (
-          <>
-            <table className="protocom-probe-table">
-              <thead>
-                <tr>
-                  <th>{t('colModel')}</th>
-                  <th>{t('colId')}</th>
-                </tr>
-              </thead>
-              <tbody>
-                {probe.models.map((model) => {
-                  const entry = catalogEntry(
-                    { id: model.id, ...model.name === undefined ? {} : { displayName: model.name } },
-                    GROUP_DEFAULTS[groupKey].reasoning,
-                  )
-                  return (
-                    <tr key={model.id}>
-                      <td>{entry.displayName}</td>
-                      <td><span className="protocom-probe-id">{model.id}</span></td>
-                    </tr>
-                  )
-                })}
-              </tbody>
-            </table>
-            <p className="protocom-notice">{t('probeHint')}</p>
-          </>
-        )
-        : null}
-      {balanceVisible
-        ? (
-          <BalanceView
-            group={groupKey}
-            balance={balance.data}
-            phase={balance.phase}
-            error={balance.error}
-            onRefresh={() => { void loadBalance() }}
-            t={t}
-          />
-        )
-        : null}
-    </li>
-  )
-}
-
-/**
- * The model-visibility card: every model the registry knows, one toggle each.
- * The catalog is the registry's, not the endpoint listing's, so this list is
- * complete even while the listing is short or unreachable; the switch only
- * removes an entry from the model menu.
- */
-function ModelVisibilityCard({ hidden, recommended, contexts, writable, revision, operations, t, onChanged }: {
-  hidden: readonly string[]
-  recommended: readonly string[]
-  contexts: Readonly<Record<string, number[]>>
-  writable: boolean
-  revision: number | undefined
-  operations: ProtocomOperations
-  t: Translator
-  onChanged: () => Promise<void>
-}): ReactNode {
-  const [busy, setBusy] = useState(false)
-  const [error, setError] = useState<string | undefined>(undefined)
-  const hiddenSet = new Set(hidden)
-  // One row per model identity: the endpoint lists some models under two ids,
-  // and acting on either alone would leave the other in the menu.
-  const identities = modelIdentities()
-  const everyId = identities.flatMap(identity => identity.ids)
-  const recommendedSet = new Set(recommended)
-
-  const write = (ops: Parameters<ProtocomOperations['writeSettings']>[0]): void => {
-    if (busy) return
-    setBusy(true)
-    setError(undefined)
-    void operations.writeSettings(ops, revision)
-      .then(async (outcome) => {
-        if (outcome.kind !== 'written') setError(outcome.message)
-        await onChanged()
-      })
-      .finally(() => { setBusy(false) })
-  }
-
-  /** Hiding is a set; the empty set is the default, so it is unset rather than stored. */
-  const writeHidden = (next: string[]): void => {
-    write(next.length === 0
-      ? [{ op: 'unset', path: ['hiddenModels'] }]
-      : [{ op: 'set', path: ['hiddenModels'], value: next }])
-  }
-
-  /**
-   * The context lengths a model currently offers. Absent means the model is
-   * offered once at its full window, which is what the row shows lit.
-   */
-  const lengthsOf = (ids: readonly string[], fallback: number): number[] => {
-    for (const id of ids) {
-      const stored = contexts[id]
-      if (stored !== undefined && stored.length > 0) return [...stored].sort((left, right) => left - right)
-    }
-    return [fallback]
-  }
-
-  /**
-   * Store one model's context choice under its identity key. Choosing exactly
-   * the model's own window again is the default, so it is unset instead of
-   * written, keeping the stored section free of no-op entries.
-   */
-  const writeContexts = (key: string, next: number[], fallback: number): void => {
-    const isDefault = next.length === 1 && next[0] === fallback
-    write(isDefault
-      ? [{ op: 'unset', path: ['modelContexts', key] }]
-      : [{ op: 'set', path: ['modelContexts', key], value: next }])
-  }
-
-  /**
-   * Starring appends, so the order the stars were set is the order the menu
-   * leads with; unstarring removes every alias of the model.
-   */
-  const writeRecommended = (ids: readonly string[], starred: boolean): void => {
-    const rest = recommended.filter(id => !ids.includes(id))
-    const next = starred ? rest : [...rest, ids[0] as string]
-    write(next.length === 0
-      ? [{ op: 'unset', path: ['recommendedModels'] }]
-      : [{ op: 'set', path: ['recommendedModels'], value: next }])
-  }
-
-  return (
-    <li className="protocom-card">
-      <div className="protocom-card-head">
-        <span className="protocom-card-name">{t('models')}</span>
-        <span className="protocom-head-state">
-          <button
-            type="button"
-            className="protocom-button"
-            disabled={!writable || busy || hidden.length === 0}
-            onClick={() => { writeHidden([]) }}
-          >
-            {t('selectAll')}
-          </button>
-          <button
-            type="button"
-            className="protocom-button"
-            disabled={!writable || busy || hidden.length >= everyId.length}
-            onClick={() => { writeHidden([...everyId]) }}
-          >
-            {t('selectNone')}
-          </button>
-        </span>
-      </div>
-      <p className="protocom-notice">{t('modelsHint')}</p>
-      {error === undefined ? null : <p className="protocom-error">{error}</p>}
-      <div className="protocom-models">
-        {identities.map(({ displayName, ids, entry }) => {
-          const shown = ids.every(id => !hiddenSet.has(id))
-          const starred = recommendedSet.has(ids[0] as string)
-          const selected = lengthsOf(ids, entry.contextWindow)
-          const meta = [
-            ...entry.vision === true ? [t('tagVision')] : [],
-            ...entry.reasoning === undefined ? [] : [t('tagReasoning')],
-          ].join(' · ')
-          return (
-            <div
-              key={displayName}
-              className={shown ? 'protocom-model-row' : 'protocom-model-row is-off'}
-              title={ids.join('\n')}
-            >
-              <label className="protocom-model-pick">
-                <input
-                  type="checkbox"
-                  checked={shown}
-                  disabled={!writable || busy}
-                  aria-label={displayName}
-                  onChange={() => {
-                    const rest = hidden.filter(id => !ids.includes(id))
-                    writeHidden(shown ? [...rest, ...ids] : rest)
-                  }}
-                />
-                <span className="protocom-model-dot" />
-                <span className="protocom-model-name">{displayName}</span>
-              </label>
-              {meta.length === 0 ? null : <span className="protocom-model-meta">{meta}</span>}
-              <span className="protocom-model-spacer" />
-              {/* The ladder stays visible while a model is listed so its
-                  context set reads as one control, not a hidden setting. */}
-              {shown
-                ? (
-                  <span className="protocom-ctx" role="group" aria-label={t('contextTitle')}>
-                    {variantChoicesFor(entry.id).map((length) => {
-                      const on = selected.includes(length)
-                      const last = on && selected.length === 1
-                      return (
-                        <button
-                          key={length}
-                          type="button"
-                          className={on ? 'is-on' : undefined}
-                          aria-pressed={on}
-                          disabled={!writable || busy || last}
-                          title={last ? t('contextLastTitle') : t('contextTitle')}
-                          onClick={() => {
-                            const next = on
-                              ? selected.filter(value => value !== length)
-                              : [...selected, length].sort((left, right) => left - right)
-                            writeContexts(ids[0] as string, next, entry.contextWindow)
-                          }}
-                        >
-                          {contextLabel(length)}
-                        </button>
-                      )
-                    })}
-                  </span>
-                )
-                : null}
-              <button
-                type="button"
-                className={starred ? 'protocom-model-star is-on' : 'protocom-model-star'}
-                disabled={!writable || busy}
-                aria-pressed={starred}
-                title={starred ? t('unstarTitle') : t('starTitle')}
-                onClick={() => { writeRecommended(ids, starred) }}
-              >
-                ★
+          <div className="protocom-card-body">
+            <div className="protocom-field">
+              <span className="protocom-field-label">{t('apiKey')}</span>
+              <input
+                type="password"
+                className="protocom-input"
+                value={keyDraft}
+                placeholder={credentialConfigured ? t('keyConfigured') : t('keyPlaceholder')}
+                aria-label={`${t('apiKey')} (${ref})`}
+                disabled={!writable || credential?.writable === false}
+                autoComplete="new-password"
+                spellCheck={false}
+                onChange={event => { setKeyDraft(event.target.value) }}
+              />
+              <button type="button" className="protocom-button protocom-button-primary" disabled={!writable || keyBusy || keyDraft.length === 0} onClick={saveKey}>
+                {keyBusy ? t('savingKey') : t('saveKey')}
               </button>
             </div>
-          )
-        })}
-      </div>
+            <span className="protocom-key-state">{credentialConfigured ? `${t('keyConfigured')} (${ref})` : `${t('keyMissing')} (${ref})`}</span>
+            {keyMessage === undefined ? null : (
+              <p className={keyMessage.kind === 'ok' ? 'protocom-status' : 'protocom-error'}>
+                {keyMessage.kind === 'ok' ? keyMessage.text : `${t('keyFailed')}: ${keyMessage.text}`}
+              </p>
+            )}
+            {cardError === undefined ? null : <p className="protocom-error">{cardError}</p>}
+            <div className="protocom-models-head">
+              <span className="protocom-models-title">{t('models')}</span>
+              <span className="protocom-models-count">
+                {rows.length === 0
+                  ? ''
+                  : `${rows.length} ${t('modelCount')} · ${entryCount} ${t('menuEntries')}`}
+              </span>
+              <span className="protocom-model-spacer" />
+              <button
+                type="button"
+                className="protocom-button"
+                disabled={probe.phase === 'loading' || !writable}
+                onClick={onProbe}
+              >
+                {probe.phase === 'loading' ? t('probing') : t('probeRefresh')}
+              </button>
+              <button
+                type="button"
+                className="protocom-button"
+                disabled={!writable || busy || hiddenInGroup.length === 0}
+                onClick={() => {
+                  const next = hidden.filter(id => !groupIds.includes(id))
+                  write(next.length === 0
+                    ? [{ op: 'unset', path: ['hiddenModels'] }]
+                    : [{ op: 'set', path: ['hiddenModels'], value: next }])
+                }}
+              >
+                {t('selectAll')}
+              </button>
+              <button
+                type="button"
+                className="protocom-button"
+                disabled={!writable || busy || hiddenInGroup.length >= groupIds.length}
+                onClick={() => { write([{ op: 'set', path: ['hiddenModels'], value: [...new Set([...hidden, ...groupIds])] }]) }}
+              >
+                {t('selectNone')}
+              </button>
+            </div>
+            <p className="protocom-notice">{t('modelsHint')}</p>
+            {probe.phase === 'error' ? (
+              <p className="protocom-error">{`${t('probeFailed')}: ${probe.message}`}</p>
+            ) : null}
+            {probe.phase === 'ready' && probe.models.length === 0 ? <p className="protocom-notice">{t('probeEmpty')}</p> : null}
+            {probe.phase !== 'ready' && !credentialConfigured ? <p className="protocom-notice">{t('probeNeedsKey')}</p> : null}
+            {probe.phase === 'error' ? <p className="protocom-notice">{t('listingFallback')}</p> : null}
+            {rows.length > FILTER_THRESHOLD
+              ? (
+                <input
+                  type="text"
+                  className="protocom-input"
+                  value={filter}
+                  placeholder={t('filterModels')}
+                  aria-label={t('filterModels')}
+                  onChange={event => { setFilter(event.target.value) }}
+                />
+              )
+              : null}
+            <div className="protocom-models">
+              {visibleRows.map(row => (
+                <ModelRow
+                  key={row.displayName}
+                  model={row}
+                  group={group}
+                  hidden={hidden}
+                  recommended={recommended}
+                  contexts={contexts}
+                  vision={vision}
+                  writable={writable}
+                  busy={busy}
+                  t={t}
+                  onWrite={write}
+                />
+              ))}
+            </div>
+            <details className="protocom-advanced">
+              <summary>{t('probeDetails')}</summary>
+              <div className="protocom-advanced-body">
+                {probe.phase === 'ready' && probe.models.length > 0
+                  ? (
+                    <table className="protocom-probe-table">
+                      <thead>
+                        <tr>
+                          <th>{t('colModel')}</th>
+                          <th>{t('colId')}</th>
+                          <th>{t('colServed')}</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {probe.models.map((model) => (
+                          <tr key={model.id}>
+                            {/* The raw mapping, so a name the menu shows can
+                                always be traced back to the id on the wire. */}
+                            <td>{matchRegistry(model.id)?.displayName
+                              ?? (model.name !== undefined && model.name !== model.id ? model.name : model.id)}</td>
+                            <td><span className="protocom-probe-id">{model.id}</span></td>
+                            <td>{servesChat(model.id) ? t('servedYes') : t('servedNo')}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  )
+                  : <p className="protocom-notice">{t('probeHint')}</p>}
+              </div>
+            </details>
+            {balanceVisible
+              ? (
+                <BalanceView
+                  group={groupKey}
+                  balance={balance.data}
+                  phase={balance.phase}
+                  error={balance.error}
+                  onRefresh={() => { void loadBalance() }}
+                  t={t}
+                />
+              )
+              : null}
+          </div>
+        )
+        : null}
     </li>
   )
 }
-
 
 /**
  * Render the Protocom API section content column.
- * @param props - slot-delivered injected dependencies.
- * @returns the section, or null while the shell has not injected yet.
+ * `param props - slot-delivered injected dependencies.
+ * `returns the section, or null while the shell has not injected yet.
  */
 export function ProtocomSection(props: ProtocomSectionProps): ReactNode {
   const { operations, t } = props
@@ -561,6 +630,7 @@ function Loaded({ operations, t }: { operations: ProtocomOperations; t: Translat
   const [allowCustomDraft, setAllowCustomDraft] = useState<boolean | undefined>(undefined)
   const [baseBusy, setBaseBusy] = useState(false)
   const [baseNotice, setBaseNotice] = useState<{ kind: 'ok' | 'error'; text: string } | undefined>(undefined)
+  const [probes, setProbes] = useState<Record<string, ProbeState>>({})
 
   const load = async (): Promise<void> => {
     const view = await operations.describeSettings()
@@ -578,6 +648,39 @@ function Loaded({ operations, t }: { operations: ProtocomOperations; t: Translat
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
+  const baseURL = state.phase === 'ready' ? sectionOf(state.view).baseURL : undefined
+
+  const runProbe = (groupKey: GroupKey): void => {
+    setProbes(current => ({ ...current, [groupKey]: { phase: 'loading' } }))
+    void operations.discoverModels({
+      provider: providerOf(groupKey),
+      ...baseURL === undefined ? {} : { baseURL },
+    }).then((outcome) => {
+      setProbes(current => ({
+        ...current,
+        [groupKey]: outcome.kind === 'found'
+          ? { phase: 'ready', models: outcome.models }
+          : { phase: 'error', message: outcome.message },
+      }))
+    })
+  }
+
+  const section = state.phase === 'ready' ? sectionOf(state.view) : {}
+  // One interrogation per group that can answer: a disabled group has no route
+  // and a keyless one has no credential, and the Host refuses both — that is a
+  // refusal to show as a hint, not as an error banner on page load.
+  const probeKey = GROUP_KEYS
+    .filter(key => groupValueOf(section, key).enabled
+      && state.credentials[defaultKeyRef(key)]?.configured === true
+      && probes[key] === undefined)
+    .join(',')
+  useEffect(() => {
+    for (const key of probeKey.length === 0 ? [] : probeKey.split(',')) void runProbe(key as GroupKey)
+    // Probing once per group that becomes answerable is the intent; a manual
+    // refresh goes through the card's own button.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [probeKey])
+
   if (state.phase === 'loading') return <p className="protocom-notice">{t('loading')}</p>
   if (state.phase === 'error') {
     return (
@@ -589,11 +692,8 @@ function Loaded({ operations, t }: { operations: ProtocomOperations; t: Translat
   }
 
   const view = state.view
-  const section = sectionOf(view)
   const revision = view?.revision
   const writable = revision !== undefined
-  const baseURL = section.baseURL
-
   const allowCustom = allowCustomDraft ?? section.allowCustomBaseURL ?? false
 
   const applyBaseURL = (): void => {
@@ -649,22 +749,17 @@ function Loaded({ operations, t }: { operations: ProtocomOperations; t: Translat
             credential={state.credentials[defaultKeyRef(key)]}
             writable={writable}
             revision={revision}
-            baseURL={baseURL}
+            probe={probes[key] ?? { phase: 'idle' }}
+            hidden={section.hiddenModels ?? []}
+            recommended={section.recommendedModels ?? DEFAULT_RECOMMENDED}
+            contexts={section.modelContexts ?? {}}
+            vision={section.visionModels ?? {}}
             operations={operations}
             t={t}
             onChanged={load}
+            onProbe={() => { runProbe(key) }}
           />
         ))}
-        <ModelVisibilityCard
-          hidden={section.hiddenModels ?? []}
-          recommended={section.recommendedModels ?? DEFAULT_RECOMMENDED}
-          contexts={section.modelContexts ?? {}}
-          writable={writable}
-          revision={revision}
-          operations={operations}
-          t={t}
-          onChanged={load}
-        />
       </ul>
       <details className="protocom-advanced">
         <summary>{t('advanced')}</summary>

@@ -2,6 +2,31 @@
 
 All notable changes to `dsh-protocom-api` are documented here.
 
+## [0.3.0] — 分组模型目录与图片输入
+
+本次修掉两个「设置页里根本设不了、界面上根本传不了」的问题：**除开源聚合外的分组无法配置菜单模型**，以及**多模态模型（阶跃星辰 3.7 / 5）无法上传图片**。所有能力判定都改成可验证、可覆盖的数据，而不是写死的白名单。
+
+### 问题一：设置页只能配置「开源聚合」的模型
+
+- **根因**：面板里唯一的模型配置卡片（「菜单中显示的模型」）是用**静态名录**渲染的（`modelIdentities()`），而名录里 stepfun / grok 一个条目都没有 → 这两个分组在界面上**没有任何一行可勾选**；点「探测模型」只得到一张「模型 / 上游 ID」表格，勾选写不进去。
+- **现在**：每张分组卡片内就是**该分组自己的菜单模型**，一行一个模型，四种控制内联在行内——可见性勾选、上下文档位、「视觉」（是否声明接收图片）、星标置顶；卡片头可折叠，模型列表是固定高度滚动视口（与之前高度一致）。「刷新模型」按钮在同一个标题行，点它就拉该分组自己的 listing。
+- **投影唯一**：面板与适配器共用同一个纯函数 `groupCatalog()`（`src/model-registry.ts`），所以「界面上能配的」=「菜单里会出现的」，不会漂移。
+- **原始映射移到折叠项**：「模型和上游 ID」表格放进默认收起的 `<details>`，并新增「端点提供」一列——端点列了但拒绝服务的 id 会明确标注，而不是混在可选项里。
+
+### 问题二：阶跃星辰 3.7 / 5 无法上传图片
+
+- **根因 1（能力判定过严）**：`catalogEntry()` 对名录未收录的 id 一律 `vision: false`，`acceptsImages()` 又要求名录明确 `vision: true` → 任何未收录模型都被判为纯文本，图片入口直接不可用。现在改为**三级判定**：部署显式设置 → 名录的已验证结论 → **默认放行**（端点才是模态的唯一权威；一个错误的「不支持」会让所有部署都用不了已公布的能力，错误的「支持」只是让上游回一条点名该模型的错误）。
+- **根因 2（协议缺口）**：`acceptsImages()` 曾要求 `protocol === 'chat-completions'`，responses 协议（codex 分组）**完全没有图片映射**。现在 responses 也支持：用户消息走 `input_image` 内联 data URL，工具结果带图时 `function_call_output.output` 用 content 部件数组（纯文本工具结果仍是字符串形式，既有行为不变）。
+- **新增 `visionModels` 设置**：`Record<string, boolean>`，按模型身份键（别名归一）。`false` 才是「这个模型只收文本」；面板行内的「视觉 / 仅文本」开关就是它的入口。
+- **实测收录**：对真实端点逐条发请求验证，新增 `step-5-preview`（Step 5 Preview，1M，`vision: true`，`groups: ['stepfun']`）；`step-3.7-flash` 实测接受内联图片（HTTP 200，回答 red），按未收录模型处理即可放行。
+- **端到端实测**（构建产物 `lib/index.js` + 真实凭据）：`listModels('protocom-stepfun')` 现在返回 **3 个模型 × 4 个上下文档位 = 12 条**，每条都是 `text+image`；带真实 PNG 的图片轮次经适配器发往端点后返回 Red 并正常 `stop`。
+
+### 行为变更（请阅读）
+
+1. **未收录模型现在默认声明可接收图片**。给一个真的只收文本的模型发图，会得到上游 400（模型名在报错里），而不是以前的客户端拒绝。要恢复原来的拒绝，对该模型设置 `visionModels: { <id>: false }`，或在面板里把它切成「仅文本」。
+2. **端点拒绝服务的 id 不再进入模型菜单**。用同一把 StepFun key 实测：`step-3.5-flash` / `step-3.5-flash-2603` 返回 400「this model is not enabled for the Responses API」，`step-explore` / `step-image-edit-2` / `stepaudio-2.5-*` 返回 404「does not exist or you do not have access to it」——11 个 id 里 8 个无法服务。这些 id 现在只出现在折叠的原始表格里（标注「端点提供：否」），不占菜单。名单在 `REFUSED_CHAT_MODEL_IDS`；端点若重新开始服务，删一行即可。
+3. **`glm-5.2` / `zai-org/GLM-5.2` / `glm-5.3` / `mimo-v2.5-pro` 显式标注 `vision: false`**（厂商文档 / 实测 404），语义从「未表态」变成「已验证纯文本」，行为不变。
+
 ## [0.2.0] — 安全加固
 
 本次是一次**收紧型**发布：修掉 3 项高危、4 项中低危，并补齐全部安全控制的回归测试。依据为 `SECURITY_AUDIT_CONSOLIDATED.md` 与 `SECURITY_REMEDIATION_PLAN.md`；逐条落地与验证证据见 `SECURITY_REMEDIATION_REPORT.md`。

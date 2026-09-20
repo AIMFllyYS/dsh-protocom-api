@@ -81,6 +81,16 @@ export interface Config {
    * window; a length above the model's window is ignored.
    */
   modelContexts?: Record<string, number[]>
+  /**
+   * Per-model image-input capability, keyed by upstream model id (aliases
+   * collapse to one key). The endpoint discloses no modality for any model, so
+   * the plugin's own default is permissive: an id nobody has judged accepts
+   * images, because a wrong "no" makes a documented capability unreachable
+   * while a wrong "yes" costs one upstream error that names the model. `false`
+   * is the explicit "this model is text-only" that removes the image modality
+   * from that model's menu entries.
+   */
+  visionModels?: Record<string, boolean>
 }
 
 const group: z<GroupConfig> = z.object({
@@ -100,6 +110,7 @@ export const Config: z<Config> = z.object({
   hiddenModels: z.array(z.string()).default([]),
   recommendedModels: z.array(z.string()).default([...DEFAULT_RECOMMENDED]),
   modelContexts: z.dict(z.array(z.number().step(1).min(1))).default({}),
+  visionModels: z.dict(z.boolean()).default({}),
 })
 
 /** Validated per-group facts with every adapter-owned default resolved. */
@@ -137,6 +148,8 @@ export interface ResolvedProtocomOptions {
   recommendedModels: readonly string[]
   /** Context lengths to offer per upstream id, keyed by model identity. */
   modelContexts: ReadonlyMap<string, readonly number[]>
+  /** Image-input capability per upstream id, keyed by model identity. */
+  visionModels: ReadonlyMap<string, boolean>
 }
 
 /**
@@ -237,11 +250,24 @@ export function resolveAdapterOptions(config: Config): ResolvedProtocomOptions {
     // Keyed by identity so an alias spelling configures the same model once.
     contexts.set(identityKey(id), [...lengths].sort((left, right) => left - right))
   }
+  const vision = new Map<string, boolean>()
+  for (const [id, accepts] of Object.entries(config.visionModels ?? {})) {
+    if (id.length === 0) {
+      throw new Error('protocom-api: visionModels keys must be non-empty model ids')
+    }
+    if (typeof accepts !== 'boolean') {
+      throw new Error(`protocom-api: visionModels["${id}"] must be a boolean`)
+    }
+    // Keyed by identity so a choice made against either alias spelling of one
+    // model configures it once.
+    vision.set(identityKey(id), accepts)
+  }
   return {
     baseURL,
     streamIdleTimeoutMs,
     groups,
     modelContexts: contexts,
+    visionModels: vision,
     hiddenModels: new Set(hidden),
     // Aliases collapse to one key, so picking either id recommends the model
     // once and the ordering cannot depend on which spelling was stored.

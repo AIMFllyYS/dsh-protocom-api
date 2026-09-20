@@ -81,6 +81,37 @@ export declare function matchRegistry(id: string): RegistryEntry | undefined;
 /** Whether one registry entry is a membership source for a group. */
 export declare function servesGroup(entry: RegistryEntry, key: GroupKey): boolean;
 /**
+ * Ids the endpoint's listing advertises but its chat route refuses, verified by
+ * request against `GET /v1/models` and `POST /v1/chat/completions` with the
+ * same StepFun credential: the audio and image-editing models answer 404 "the
+ * model ... does not exist or you do not have access to it", and the two
+ * Step-3.5 snapshots answer 400 "this model is not enabled for the Responses
+ * API".
+ *
+ * A listing is an advertisement, not a promise: eight of the eleven ids one
+ * StepFun key lists cannot serve a chat turn at all, and a menu entry whose
+ * every use ends in an error is the defect this catalog exists to remove. They
+ * are listed here rather than dropped silently — the settings panel names them
+ * — and a model the endpoint starts serving again is one line away from the
+ * menu.
+ */
+export declare const REFUSED_CHAT_MODEL_IDS: readonly string[];
+/** Whether the endpoint's chat route answers for one upstream id. */
+export declare function servesChat(id: string): boolean;
+/**
+ * Whether one model accepts image input, after the deployment's own choice.
+ *
+ * Resolution order is explicit setting, then the registry's verified verdict,
+ * then permissive: the endpoint — not this registry — is the authority on a
+ * model's modality and discloses none, so the registry can only ever be
+ * incomplete. A wrong "no" makes a documented capability unreachable for every
+ * deployment at once; a wrong "yes" costs one upstream error that names the
+ * model. `vision: false` stays the way to say "verified text-only".
+ * @param id - upstream model id, alias resolved through {@link identityKey}.
+ * @param declared - the deployment's per-model choices.
+ */
+export declare function acceptsImages(id: string, declared?: ReadonlyMap<string, boolean>): boolean;
+/**
  * One selectable model identity: a display name and every upstream id that
  * serves it. The endpoint lists some models under both an organization- and a
  * bare-prefixed id, which would otherwise present the same model twice in the
@@ -130,7 +161,7 @@ export interface CatalogModel {
     contextWindow: number;
     contextOptions?: number[];
     reasoning?: RegistryReasoning;
-    /** Whether the model accepts image input. */
+    /** Whether the model accepts image input, after the deployment's override. */
     vision: boolean;
     /** Menu priority; lower sorts earlier. */
     rank: number;
@@ -141,5 +172,56 @@ export interface CatalogModel {
  * display name when it adds information over the raw id. Reasoning metadata
  * resolves registry first, then endpoint-disclosed effort lists, then the
  * group's own default vocabulary.
+ * @param upstream - one listing row, or a hand-built row for a registry entry.
+ * @param groupReasoning - the group's own vocabulary, used when nothing else declares one.
+ * @param declaredVision - the deployment's per-model image capability.
+ * @returns the model as the menu presents it.
  */
-export declare function catalogEntry(upstream: UpstreamModel, groupReasoning?: GroupReasoning): CatalogModel;
+export declare function catalogEntry(upstream: UpstreamModel, groupReasoning?: GroupReasoning, declaredVision?: ReadonlyMap<string, boolean>): CatalogModel;
+/** One model as a group's own model menu presents it. */
+export interface GroupCatalogModel {
+    /** The upstream id this row's menu entries dispatch. */
+    upstreamId: string;
+    /**
+     * Every upstream id that presents this identity, in listing then registry
+     * order. Hiding or starring the identity covers all of them, so no alias can
+     * survive as a second row carrying the same model's name.
+     */
+    ids: readonly string[];
+    displayName: string;
+    contextWindow: number;
+    /** Ladder steps the registry allows this model, when it sizes the model. */
+    contextOptions?: readonly number[];
+    reasoning?: RegistryReasoning;
+    /** Whether the model accepts image input, after the deployment's override. */
+    vision: boolean;
+    rank: number;
+}
+/** Deployment choices a group's catalog projection honours. */
+export interface GroupCatalogOptions {
+    /** Upstream ids the menu must not offer. */
+    hidden?: ReadonlySet<string>;
+    /** Upstream ids that lead the menu, most preferred first. */
+    recommended?: readonly string[];
+    /** Explicit per-model image capability, keyed by model identity. */
+    vision?: ReadonlyMap<string, boolean>;
+}
+/**
+ * One group's own model menu: the models that group's menu offers, in the
+ * order the menu renders them. Membership is the group's live listing — the
+ * credential scopes what the route serves — plus the registry entries tagged
+ * for that group, so a group's menu holds its own models instead of every
+ * group's and a model the endpoint starts listing appears without a plugin
+ * release. Ids the endpoint refuses on its chat route never appear
+ * ({`link servesChat}). A missing or empty listing falls back to the whole
+ * registry, so a degraded endpoint cannot empty the menu.
+ *
+ * The adapter's `listModels` and the settings panel's per-group model editor
+ * both project through here, so the list a user configures cannot drift from
+ * the list the picker shows.
+ * `param key - the group whose catalog is projected.
+ * `param listing - that group's live listing, or `undefined` when unreachable.
+ * `param options - the deployment's visibility, ordering, and modality choices.
+ * `returns one row per model identity, in menu order.
+ */
+export declare function groupCatalog(key: GroupKey, listing: readonly UpstreamModel[] | undefined, options?: GroupCatalogOptions): GroupCatalogModel[];

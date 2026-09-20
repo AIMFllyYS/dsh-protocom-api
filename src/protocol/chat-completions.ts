@@ -15,14 +15,9 @@ import { contentHasImage, EMPTY_RESPONSE_CODE, LlmError, ToolCallId } from '@dee
 import type { ContentBlock, FinishReason, GenerateOptions, Message, StreamChunk, TokenUsage } from '@deepseek-ai/dsh-llm'
 import { DONE, parseSse } from '../sse.ts'
 import { postSse } from './http.ts'
-import type { ProtocolConnection } from './http.ts'
+import type { ProtocolConnection, RequestImageUrls } from './http.ts'
 
-/**
- * Resolved request images, keyed by attachment id: the provider-ready
- * `data:` URL an image block's durable reference stands for. Empty when the
- * request carries no image the adapter retained.
- */
-export type RequestImageUrls = ReadonlyMap<string, string>
+export type { RequestImageUrls } from './http.ts'
 
 /** One content part of a multimodal user message. */
 type WireContentPart =

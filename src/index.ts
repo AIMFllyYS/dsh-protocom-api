@@ -47,6 +47,7 @@ export { decodeVariantId, encodeVariantId, stripVariantId, variantLengths } from
 export { discoverModels, endpointOrigin, fetchUpstreamModels, parseModelsListing } from './discovery.ts'
 export type { DiscoveryHooks } from './discovery.ts'
 export {
+  acceptsImages,
   catalogEntry,
   CONTEXT_LADDER,
   contextChoicesFor,
@@ -54,13 +55,19 @@ export {
   DEFAULT_RECOMMENDED,
   displayNameWithContext,
   FALLBACK_CONTEXT_WINDOW,
+  groupCatalog,
   identityKey,
   matchRegistry,
   modelIdentities,
+  REFUSED_CHAT_MODEL_IDS,
   REGISTRY,
+  servesChat,
+  servesGroup,
 } from './model-registry.ts'
 export type {
   CatalogModel,
+  GroupCatalogModel,
+  GroupCatalogOptions,
   ModelIdentity,
   RegistryEntry,
   RegistryPricing,

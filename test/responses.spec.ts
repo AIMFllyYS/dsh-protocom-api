@@ -266,6 +266,88 @@ describe('responses serialization', () => {
     expect(serializeResponsesRequest({ ...base, reasoningEffort: 'high' as GenerateOptions['reasoningEffort'] }, 'm').reasoning)
       .toEqual({ effort: 'high' })
   })
+
+  it('carries a user image as an inline input_image part', () => {
+    const imageMessage = {
+      role: 'user',
+      content: [
+        { type: 'text', text: 'what is this?' },
+        { type: 'image', attachment: { attachmentId: 'sha256:abc', mediaType: 'image/png' } },
+      ],
+    } as unknown as Message
+    const images = new Map([['sha256:abc', 'data:image/png;base64,AAAA']])
+    const body = serializeResponsesRequest({ ...base, messages: [imageMessage] }, 'm', images)
+    expect(body.input).toEqual([{
+      type: 'message',
+      role: 'user',
+      content: [
+        { type: 'input_text', text: 'what is this?' },
+        { type: 'input_image', image_url: 'data:image/png;base64,AAAA' },
+      ],
+    }])
+  })
+
+  it('degrades an unresolvable image to the text it travelled with', () => {
+    const imageMessage = {
+      role: 'user',
+      content: [
+        { type: 'text', text: 'hi' },
+        { type: 'image', attachment: { attachmentId: 'sha256:missing', mediaType: 'image/png' } },
+      ],
+    } as unknown as Message
+    // An empty content array is a wire error, so the text stands alone.
+    const unresolved = serializeResponsesRequest({ ...base, messages: [imageMessage] }, 'm', new Map())
+    expect(unresolved.input).toEqual([{
+      type: 'message',
+      role: 'user',
+      content: [{ type: 'input_text', text: 'hi' }],
+    }])
+  })
+
+  it('keeps a text-only tool result a string and carries one with an image as parts', () => {
+    const plain = {
+      role: 'user',
+      content: [{ type: 'tool-result', toolCallId: 'call_1', content: [{ type: 'text', text: 'ok' }] }],
+    } as unknown as Message
+    expect(serializeResponsesRequest({ ...base, messages: [plain] }, 'm').input).toEqual([
+      { type: 'function_call_output', call_id: 'call_1', output: 'ok' },
+    ])
+
+    const withImage = {
+      role: 'user',
+      content: [{
+        type: 'tool-result',
+        toolCallId: 'call_2',
+        content: [
+          { type: 'text', text: 'screenshot' },
+          { type: 'image', attachment: { attachmentId: 'sha256:abc', mediaType: 'image/png' } },
+        ],
+      }],
+    } as unknown as Message
+    const images = new Map([['sha256:abc', 'data:image/png;base64,AAAA']])
+    expect(serializeResponsesRequest({ ...base, messages: [withImage] }, 'm', images).input).toEqual([
+      {
+        type: 'function_call_output',
+        call_id: 'call_2',
+        output: [
+          { type: 'input_text', text: 'screenshot' },
+          { type: 'input_image', image_url: 'data:image/png;base64,AAAA' },
+        ],
+      },
+    ])
+  })
+
+  it('still refuses an image on an assistant message', () => {
+    const assistantImage = {
+      role: 'assistant',
+      content: [
+        { type: 'text', text: 'x' },
+        { type: 'image', attachment: { attachmentId: 'sha256:abc', mediaType: 'image/png' } },
+      ],
+    } as unknown as Message
+    expect(() => serializeResponsesRequest({ ...base, messages: [assistantImage] }, 'm', new Map()))
+      .toThrowError(/does not support image content/)
+  })
 })
 
 describe('responses stream completion (P0-2)', () => {

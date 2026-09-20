@@ -198,3 +198,68 @@ describe('pre-stream idle bound (F-6)', () => {
     expect(hanging.readImageRequest).toHaveBeenCalledOnce()
   })
 })
+
+describe('image capability (issues 2a/2b)', () => {
+  const STEPFUN = {
+    baseURL: 'https://relay.test',
+    allowCustomBaseURL: true,
+    groups: { stepfun: { enabled: true, apiKey: 'PROTOCOM_STEPFUN_API_KEY' } },
+  }
+  const image = [{
+    type: 'image',
+    attachment: { attachmentId: `sha256:${'a'.repeat(64)}`, mediaType: 'image/png', width: 1, height: 1, bytes: 1 },
+  }]
+  const attachments = { readImageRequest: vi.fn(async () => ({ mediaType: 'image/png', data: Uint8Array.of(1) })) }
+
+  it('advertises image input for a listed model nobody has judged', async () => {
+    // The endpoint discloses no modality for any model, so a model it lists
+    // and the plugin holds no verdict for must still be reachable with an
+    // image: refusing it is exactly what made Step 3.7/5 unusable with one.
+    const resolved = await adapterFor(STEPFUN).resolveModel('protocom-stepfun', 'step-3.7-flash')
+    expect(resolved.inputModalities).toEqual(['text', 'image'])
+  })
+
+  it('removes the image modality from a model the deployment declared text-only', async () => {
+    const resolved = await adapterFor({ ...STEPFUN, visionModels: { 'step-3.7-flash': false } })
+      .resolveModel('protocom-stepfun', 'step-3.7-flash')
+    expect(resolved.inputModalities).toEqual(['text'])
+  })
+
+  it('refuses an image the deployment declared this model cannot take', async () => {
+    vi.stubGlobal('fetch', vi.fn())
+    const adapter = adapterFor({ ...STEPFUN, visionModels: { 'step-3.7-flash': false } }, attachments)
+    const consume = async (): Promise<void> => {
+      for await (const _chunk of adapter.stream(request('protocom-stepfun', 'step-3.7-flash', image))) {
+        // drain
+      }
+    }
+    await expect(consume()).rejects.toMatchObject({ code: 'UNSUPPORTED_CONTENT' })
+    expect(attachments.readImageRequest).not.toHaveBeenCalled()
+  })
+
+  it('carries an image on a responses-protocol group too', async () => {
+    const bodies: string[] = []
+    vi.stubGlobal('fetch', vi.fn(async (_url: string, init?: RequestInit) => {
+      bodies.push(String(init?.body))
+      const body = new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(new TextEncoder().encode(
+            'data: {"type":"response.completed","response":{"status":"completed"}}\n\n',
+          ))
+          controller.close()
+        },
+      })
+      return new Response(body, { status: 200 })
+    }))
+    const adapter = adapterFor(CODEX, attachments)
+    for await (const _chunk of adapter.stream(request('protocom-codex', 'gpt-5.6-sol', image))) {
+      // drain
+    }
+    // The protocol used to refuse images outright, so a vision model on the
+    // Codex group could not be given one at all.
+    const parsed = JSON.parse(bodies[0] as string) as { input: { content?: { type?: string; image_url?: string }[] }[] }
+    const parts = parsed.input.flatMap(item => item.content ?? [])
+    expect(parts.some(part => part.type === 'input_image'
+      && String(part.image_url).startsWith('data:image/png;base64,'))).toBe(true)
+  })
+})

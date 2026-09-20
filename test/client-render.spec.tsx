@@ -143,3 +143,122 @@ describe('custom endpoint confirmation (F-2)', () => {
     ])
   })
 })
+
+describe('per-group model editing (issue 1)', () => {
+  const TWO_GROUPS = {
+    ns: 'protocom-api',
+    revision: 2,
+    value: {
+      baseURL: 'https://relay.protocom.org',
+      groups: { aggregate: { enabled: true }, stepfun: { enabled: true } },
+    },
+  }
+  /** The ids the stepfun route lists, including one it refuses to serve. */
+  const STEPFUN_LISTING = {
+    kind: 'found',
+    models: [
+      { id: 'step-5-preview', name: 'Step 5 Preview' },
+      { id: 'step-3.7-flash' },
+      { id: 'stepaudio-2.5-tts' },
+    ],
+  }
+
+  function listingOperations(overrides: Partial<ProtocomOperations> = {}): ProtocomOperations {
+    return makeOperations({
+      describeSettings: async () => TWO_GROUPS as never,
+      describeCredentials: async () => ({
+        PROTOCOM_AGGREGATE_API_KEY: { configured: true, writable: true },
+        PROTOCOM_STEPFUN_API_KEY: { configured: true, writable: true },
+      }) as never,
+      discoverModels: vi.fn(async (request: { provider?: string }) => (request.provider === 'protocom-stepfun'
+        ? STEPFUN_LISTING
+        : { kind: 'found', models: [{ id: 'kimi-k3', name: 'Kimi K3' }] })) as never,
+      ...overrides,
+    })
+  }
+
+  async function groupCard(name: string): Promise<HTMLElement> {
+    return (await screen.findByText(name)).closest('li') as HTMLElement
+  }
+
+  /** The bounded list of menu models inside one card. */
+  function modelList(card: HTMLElement): HTMLElement {
+    return card.querySelector('.protocom-models') as HTMLElement
+  }
+
+  it('lists each group its own models, in its own card', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse({})))
+    renderSection(listingOperations())
+    const stepfun = await groupCard(en.groupStepfun)
+    await waitFor(() => expect(within(modelList(stepfun)).getByText('Step 5 Preview')).toBeTruthy())
+    expect(within(modelList(stepfun)).getByText('step-3.7-flash')).toBeTruthy()
+    // An id the endpoint refuses to serve is named in the raw table, never as
+    // an editable row.
+    expect(within(stepfun).queryByLabelText('stepaudio-2.5-tts')).toBeNull()
+    // The aggregate card holds only what the aggregate route lists.
+    const aggregate = await groupCard(en.groupAggregate)
+    await waitFor(() => expect(within(modelList(aggregate)).getByText('Kimi K3')).toBeTruthy())
+    expect(within(modelList(aggregate)).queryByText('Step 5 Preview')).toBeNull()
+  })
+
+  it('keeps the raw model/upstream-id mapping collapsed by default', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse({})))
+    renderSection(listingOperations())
+    const stepfun = await groupCard(en.groupStepfun)
+    await waitFor(() => expect(within(modelList(stepfun)).getByText('Step 5 Preview')).toBeTruthy())
+    const details = stepfun.querySelector('details') as HTMLDetailsElement
+    expect(details.open).toBe(false)
+    expect(details.querySelector('summary')?.textContent).toBe(en.probeDetails)
+    // Both the name and the id cell carry it for an uncurated model.
+    expect(within(details).getAllByText('stepaudio-2.5-tts').length).toBeGreaterThan(0)
+  })
+
+  it('hides a model from the group whose row it is', async () => {
+    const writeSettings = vi.fn(async () => ({ kind: 'written', view: TWO_GROUPS }) as never)
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse({})))
+    renderSection(listingOperations({ writeSettings }))
+    const stepfun = await groupCard(en.groupStepfun)
+    await waitFor(() => expect(within(modelList(stepfun)).getByLabelText('step-3.7-flash')).toBeTruthy())
+    fireEvent.click(within(modelList(stepfun)).getByLabelText('step-3.7-flash'))
+    await waitFor(() => expect(writeSettings).toHaveBeenCalledOnce())
+    expect(writeSettings.mock.calls[0]?.[0]).toEqual([
+      { op: 'set', path: ['hiddenModels'], value: ['step-3.7-flash'] },
+    ])
+  })
+
+  it('declares a model text-only from its own row', async () => {
+    const writeSettings = vi.fn(async () => ({ kind: 'written', view: TWO_GROUPS }) as never)
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse({})))
+    renderSection(listingOperations({ writeSettings }))
+    const stepfun = await groupCard(en.groupStepfun)
+    await waitFor(() => expect(within(modelList(stepfun)).getByText('Step 5 Preview')).toBeTruthy())
+    const row = within(modelList(stepfun)).getByText('Step 5 Preview').closest('.protocom-model-row') as HTMLElement
+    expect(within(row).getByText(en.tagVision)).toBeTruthy()
+    fireEvent.click(within(row).getByTitle(en.visionTitle))
+    await waitFor(() => expect(writeSettings).toHaveBeenCalledOnce())
+    expect(writeSettings.mock.calls[0]?.[0]).toEqual([
+      { op: 'set', path: ['visionModels', 'step-5-preview'], value: false },
+    ])
+  })
+
+  it('keeps the context ladder of the group a model belongs to', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse({})))
+    renderSection(listingOperations())
+    const stepfun = await groupCard(en.groupStepfun)
+    await waitFor(() => expect(within(modelList(stepfun)).getByText('step-3.7-flash')).toBeTruthy())
+    const row = within(modelList(stepfun)).getByText('step-3.7-flash').closest('.protocom-model-row') as HTMLElement
+    expect(within(row).getAllByRole('button').map(button => button.textContent))
+      .toEqual(['200K', '256K', '400K', '1M', en.tagVision, '★'])
+  })
+
+  it('reports the endpoint listing failure without emptying the card', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse({})))
+    renderSection(listingOperations({
+      discoverModels: vi.fn(async () => ({ kind: 'refused', message: 'HTTP 401' })) as never,
+    }))
+    const stepfun = await groupCard(en.groupStepfun)
+    await waitFor(() => expect(within(stepfun).getAllByText(new RegExp(en.probeFailed)).length).toBeGreaterThan(0))
+    // The registry-tagged model is what keeps the card usable meanwhile.
+    expect(within(modelList(stepfun)).getByText('Step 5 Preview')).toBeTruthy()
+  })
+})

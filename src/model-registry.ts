@@ -16,7 +16,7 @@
  * @module dsh-protocom-api/model-registry
  */
 
-import { CONTEXT_1M, CONTEXT_200K, CONTEXT_256K, CONTEXT_LADDER } from './groups.ts'
+import { CONTEXT_1M, CONTEXT_200K, CONTEXT_256K, CONTEXT_LADDER, GROUP_DEFAULTS } from './groups.ts'
 import type { GroupKey, GroupReasoning } from './groups.ts'
 
 export { CONTEXT_LADDER } from './groups.ts'
@@ -119,6 +119,9 @@ export const REGISTRY: readonly RegistryEntry[] = [
     family: 'glm',
     contextWindow: CONTEXT_1M,
     reasoning: GLM_REASONING,
+    // Text-only by the vendor's own documentation. Declared rather than left
+    // absent: an absent verdict now means "unknown", and unknown is permissive.
+    vision: false,
     rank: 2,
   },
   {
@@ -165,6 +168,7 @@ export const REGISTRY: readonly RegistryEntry[] = [
     family: 'glm',
     contextWindow: CONTEXT_1M,
     reasoning: GLM_REASONING,
+    vision: false,
   },
   {
     id: 'glm-5.3',
@@ -172,6 +176,7 @@ export const REGISTRY: readonly RegistryEntry[] = [
     family: 'glm',
     contextWindow: CONTEXT_1M,
     reasoning: GLM_REASONING,
+    vision: false,
   },
   {
     id: 'z-ai/glm-5.3-flash',
@@ -207,6 +212,8 @@ export const REGISTRY: readonly RegistryEntry[] = [
     family: 'mimo',
     contextWindow: CONTEXT_1M,
     reasoning: { efforts: ['off', 'low', 'medium', 'high'], defaultEffort: 'high' },
+    // The endpoint answered 404 "no endpoints found that support image input".
+    vision: false,
   },
   {
     id: 'google/gemini-3.8-flash',
@@ -232,6 +239,20 @@ export const REGISTRY: readonly RegistryEntry[] = [
     reasoning: GPT_REASONING,
     vision: true,
     groups: ['codex'],
+  },
+  {
+    // Verified by request against this endpoint: `step-5-preview` answers a
+    // chat turn carrying an inline image (HTTP 200, "Red"), and StepFun
+    // publishes it at a 1M window. It is the only StepFun id curated here —
+    // the others ride from the group's own listing with the group's ladder,
+    // because sizing a model on a guess would narrow its menu to steps it
+    // cannot honour.
+    id: 'step-5-preview',
+    displayName: 'Step 5 Preview',
+    family: 'step',
+    contextWindow: CONTEXT_1M,
+    vision: true,
+    groups: ['stepfun'],
   },
   // These four answer "not available on this endpoint" on /v1/chat/completions
   // whenever the endpoint lists them, so their facts cannot be verified by
@@ -259,6 +280,55 @@ export function matchRegistry(id: string): RegistryEntry | undefined {
 /** Whether one registry entry is a membership source for a group. */
 export function servesGroup(entry: RegistryEntry, key: GroupKey): boolean {
   return entry.groups?.includes(key) === true
+}
+
+/**
+ * Ids the endpoint's listing advertises but its chat route refuses, verified by
+ * request against `GET /v1/models` and `POST /v1/chat/completions` with the
+ * same StepFun credential: the audio and image-editing models answer 404 "the
+ * model ... does not exist or you do not have access to it", and the two
+ * Step-3.5 snapshots answer 400 "this model is not enabled for the Responses
+ * API".
+ *
+ * A listing is an advertisement, not a promise: eight of the eleven ids one
+ * StepFun key lists cannot serve a chat turn at all, and a menu entry whose
+ * every use ends in an error is the defect this catalog exists to remove. They
+ * are listed here rather than dropped silently — the settings panel names them
+ * — and a model the endpoint starts serving again is one line away from the
+ * menu.
+ */
+export const REFUSED_CHAT_MODEL_IDS: readonly string[] = [
+  'step-3.5-flash',
+  'step-3.5-flash-2603',
+  'step-explore',
+  'step-image-edit-2',
+  'stepaudio-2.5-asr',
+  'stepaudio-2.5-chat',
+  'stepaudio-2.5-realtime',
+  'stepaudio-2.5-tts',
+]
+
+/** Whether the endpoint's chat route answers for one upstream id. */
+export function servesChat(id: string): boolean {
+  return !REFUSED_CHAT_MODEL_IDS.includes(id)
+}
+
+/**
+ * Whether one model accepts image input, after the deployment's own choice.
+ *
+ * Resolution order is explicit setting, then the registry's verified verdict,
+ * then permissive: the endpoint — not this registry — is the authority on a
+ * model's modality and discloses none, so the registry can only ever be
+ * incomplete. A wrong "no" makes a documented capability unreachable for every
+ * deployment at once; a wrong "yes" costs one upstream error that names the
+ * model. `vision: false` stays the way to say "verified text-only".
+ * @param id - upstream model id, alias resolved through {@link identityKey}.
+ * @param declared - the deployment's per-model choices.
+ */
+export function acceptsImages(id: string, declared?: ReadonlyMap<string, boolean>): boolean {
+  const chosen = declared?.get(identityKey(id))
+  if (chosen !== undefined) return chosen
+  return matchRegistry(id)?.vision !== false
 }
 
 /**
@@ -340,7 +410,7 @@ export interface CatalogModel {
   contextWindow: number
   contextOptions?: number[]
   reasoning?: RegistryReasoning
-  /** Whether the model accepts image input. */
+  /** Whether the model accepts image input, after the deployment's override. */
   vision: boolean
   /** Menu priority; lower sorts earlier. */
   rank: number
@@ -352,8 +422,16 @@ export interface CatalogModel {
  * display name when it adds information over the raw id. Reasoning metadata
  * resolves registry first, then endpoint-disclosed effort lists, then the
  * group's own default vocabulary.
+ * @param upstream - one listing row, or a hand-built row for a registry entry.
+ * @param groupReasoning - the group's own vocabulary, used when nothing else declares one.
+ * @param declaredVision - the deployment's per-model image capability.
+ * @returns the model as the menu presents it.
  */
-export function catalogEntry(upstream: UpstreamModel, groupReasoning?: GroupReasoning): CatalogModel {
+export function catalogEntry(
+  upstream: UpstreamModel,
+  groupReasoning?: GroupReasoning,
+  declaredVision?: ReadonlyMap<string, boolean>,
+): CatalogModel {
   const entry = matchRegistry(upstream.id)
   const disclosed: RegistryReasoning | undefined = upstream.reasoningEfforts !== undefined
     && upstream.reasoningEfforts.length > 0
@@ -373,7 +451,7 @@ export function catalogEntry(upstream: UpstreamModel, groupReasoning?: GroupReas
         : upstream.id,
       contextWindow: upstream.contextWindow ?? FALLBACK_CONTEXT_WINDOW,
       ...reasoning === undefined ? {} : { reasoning },
-      vision: false,
+      vision: acceptsImages(upstream.id, declaredVision),
       rank: Number.MAX_SAFE_INTEGER,
     }
   }
@@ -383,7 +461,100 @@ export function catalogEntry(upstream: UpstreamModel, groupReasoning?: GroupReas
     contextWindow: entry.contextWindow,
     contextOptions: contextChoicesFor(entry.contextWindow),
     ...reasoning === undefined ? {} : { reasoning },
-    vision: entry.vision === true,
+    vision: acceptsImages(upstream.id, declaredVision),
     rank: entry.rank ?? Number.MAX_SAFE_INTEGER,
   }
+}
+
+/** One model as a group's own model menu presents it. */
+export interface GroupCatalogModel {
+  /** The upstream id this row's menu entries dispatch. */
+  upstreamId: string
+  /**
+   * Every upstream id that presents this identity, in listing then registry
+   * order. Hiding or starring the identity covers all of them, so no alias can
+   * survive as a second row carrying the same model's name.
+   */
+  ids: readonly string[]
+  displayName: string
+  contextWindow: number
+  /** Ladder steps the registry allows this model, when it sizes the model. */
+  contextOptions?: readonly number[]
+  reasoning?: RegistryReasoning
+  /** Whether the model accepts image input, after the deployment's override. */
+  vision: boolean
+  rank: number
+}
+
+/** One row under construction, whose alias list is still growing. */
+type MutableCatalogRow = Omit<GroupCatalogModel, 'ids'> & { ids: string[] }
+
+/** Deployment choices a group's catalog projection honours. */
+export interface GroupCatalogOptions {
+  /** Upstream ids the menu must not offer. */
+  hidden?: ReadonlySet<string>
+  /** Upstream ids that lead the menu, most preferred first. */
+  recommended?: readonly string[]
+  /** Explicit per-model image capability, keyed by model identity. */
+  vision?: ReadonlyMap<string, boolean>
+}
+
+/**
+ * One group's own model menu: the models that group's menu offers, in the
+ * order the menu renders them. Membership is the group's live listing — the
+ * credential scopes what the route serves — plus the registry entries tagged
+ * for that group, so a group's menu holds its own models instead of every
+ * group's and a model the endpoint starts listing appears without a plugin
+ * release. Ids the endpoint refuses on its chat route never appear
+ * ({`link servesChat}). A missing or empty listing falls back to the whole
+ * registry, so a degraded endpoint cannot empty the menu.
+ *
+ * The adapter's `listModels` and the settings panel's per-group model editor
+ * both project through here, so the list a user configures cannot drift from
+ * the list the picker shows.
+ * `param key - the group whose catalog is projected.
+ * `param listing - that group's live listing, or `undefined` when unreachable.
+ * `param options - the deployment's visibility, ordering, and modality choices.
+ * `returns one row per model identity, in menu order.
+ */
+export function groupCatalog(
+  key: GroupKey,
+  listing: readonly UpstreamModel[] | undefined,
+  options: GroupCatalogOptions = {},
+): GroupCatalogModel[] {
+  const rows: UpstreamModel[] = listing === undefined ? [] : [...listing]
+  for (const entry of REGISTRY) {
+    if (!servesGroup(entry, key)) continue
+    if (!rows.some(row => row.id === entry.id)) rows.push({ id: entry.id })
+  }
+  // "No listing" and "empty listing" are both no information, not "no models".
+  if (rows.length === 0) for (const entry of REGISTRY) rows.push({ id: entry.id })
+  const rankOf = (id: string): number => {
+    const at = options.recommended?.indexOf(identityKey(id)) ?? -1
+    return at === -1 ? Number.MAX_SAFE_INTEGER : at
+  }
+  const ranked = rows
+    .filter(row => servesChat(row.id) && options.hidden?.has(row.id) !== true)
+    .map((row, index) => ({ index, row, rank: rankOf(row.id) }))
+    .sort((left, right) => left.rank - right.rank || left.index - right.index)
+  const byName = new Map<string, MutableCatalogRow>()
+  for (const { row } of ranked) {
+    const model = catalogEntry(row, GROUP_DEFAULTS[key].reasoning, options.vision)
+    const hit = byName.get(model.displayName)
+    if (hit === undefined) {
+      byName.set(model.displayName, {
+        upstreamId: row.id,
+        ids: [row.id],
+        displayName: model.displayName,
+        contextWindow: model.contextWindow,
+        ...model.contextOptions === undefined ? {} : { contextOptions: [...model.contextOptions] },
+        ...model.reasoning === undefined ? {} : { reasoning: model.reasoning },
+        vision: model.vision,
+        rank: model.rank,
+      })
+      continue
+    }
+    hit.ids.push(row.id)
+  }
+  return [...byName.values()]
 }

@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { ProtocomAdapter } from '../src/adapter.ts'
 import { resolveAdapterOptions } from '../src/config.ts'
-import { modelIdentities, REGISTRY } from '../src/model-registry.ts'
+import { groupCatalog, modelIdentities, REGISTRY } from '../src/model-registry.ts'
 
 afterEach(() => {
   vi.unstubAllGlobals()
@@ -205,16 +205,44 @@ describe('per-group catalog membership (issues 1a/1b)', () => {
   it('ships StepFun its published four-step ladder', async () => {
     const listed = await listingAdapter(STEPFUN, [{ id: 'step-5', display_name: 'Step-5' }])
       .listModels('protocom-stepfun')
-    expect(listed.map(model => model.id)).toEqual([
+    const ladder = listed.filter(model => model.id.startsWith('step-5::'))
+    expect(ladder.map(model => model.id)).toEqual([
       'step-5::ctx@204800',
       'step-5::ctx@262144',
       'step-5::ctx@409600',
       'step-5::ctx@1048576',
     ])
-    expect(listed.map(model => model.name)).toEqual([
+    expect(ladder.map(model => model.name)).toEqual([
       'Step-5 [200K]', 'Step-5 [256K]', 'Step-5 [400K]', 'Step-5 [1M]',
     ])
     expect(listed.every(model => !model.name.includes('128K'))).toBe(true)
+    // The registry entry tagged for this group rides along even when the
+    // listing names other ids: that is what keeps the group's own flagship in
+    // its own menu.
+    expect(listed.some(model => model.id.startsWith('step-5-preview::'))).toBe(true)
+  })
+
+  it('offers StepFun image input on the models the endpoint answered for', async () => {
+    const listed = await listingAdapter(STEPFUN, [{ id: 'step-3.7-flash' }, { id: 'stepaudio-2.5-tts' }])
+      .listModels('protocom-stepfun')
+    const flash = listed.filter(model => model.id.startsWith('step-3.7-flash::'))
+    expect(flash).toHaveLength(4)
+    // The endpoint accepted an inline image on this id (HTTP 200, "red"), and
+    // it discloses no modality, so the plugin's permissive default is what
+    // makes a documented capability reachable.
+    expect(flash.every(model => model.inputModalities?.includes('image'))).toBe(true)
+    // An id the endpoint refuses on its chat route is never offered at all.
+    expect(listed.some(model => model.id.startsWith('stepaudio'))).toBe(false)
+  })
+
+  it('lets a deployment declare a model text-only', async () => {
+    const listed = await listingAdapter({
+      ...STEPFUN,
+      visionModels: { 'step-3.7-flash': false },
+    }, [{ id: 'step-3.7-flash' }]).listModels('protocom-stepfun')
+    const flash = listed.filter(model => model.id.startsWith('step-3.7-flash::'))
+    expect(flash).toHaveLength(4)
+    expect(flash.every(model => model.inputModalities?.includes('image'))).toBe(false)
   })
 
   it('lets a deployment override the shipped ladder', async () => {
@@ -223,12 +251,60 @@ describe('per-group catalog membership (issues 1a/1b)', () => {
         stepfun: { enabled: true, apiKey: 'PROTOCOM_STEPFUN_API_KEY', contextLengths: [262_144] },
       },
     }, [{ id: 'step-5', display_name: 'Step-5' }]).listModels('protocom-stepfun')
-    expect(listed.map(model => model.id)).toEqual(['step-5::ctx@262144'])
+    expect(listed.map(model => model.id)).toEqual(['step-5::ctx@262144', 'step-5-preview::ctx@262144'])
   })
 
   it('offers the whole registry only when the listing carries no information', async () => {
     // The safety net survives: a missing listing must not empty the menu.
     const listed = await listingAdapter(AGGREGATE, []).listModels('protocom-aggregate')
     expect(listed).toHaveLength(modelIdentities().length)
+  })
+})
+
+describe('group catalog projection (settings panel parity)', () => {
+  it('keeps the ids the endpoint refuses out of the rows', () => {
+    const rows = groupCatalog('stepfun', [
+      { id: 'stepaudio-2.5-tts' },
+      { id: 'step-3.7-flash' },
+      { id: 'step-5-preview' },
+    ])
+    // The panel edits exactly what the menu offers, so a listed id the
+    // endpoint refuses cannot appear as an editable row either.
+    expect(rows.map(row => row.upstreamId)).toEqual(['step-3.7-flash', 'step-5-preview'])
+  })
+
+  it('collapses aliases into one row that carries every id', () => {
+    const rows = groupCatalog('aggregate', [
+      { id: 'deepseek/deepseek-v4.1-flash' },
+      { id: 'deepseek-v4.1-flash' },
+    ])
+    const flash = rows.filter(row => row.displayName === 'DeepSeek V4.1 Flash')
+    expect(flash).toHaveLength(1)
+    expect(flash[0]?.ids).toEqual(['deepseek/deepseek-v4.1-flash', 'deepseek-v4.1-flash'])
+    expect(flash[0]?.ids).toEqual(['deepseek/deepseek-v4.1-flash', 'deepseek-v4.1-flash'])
+  })
+
+  it('honours the deployment visibility and ordering', () => {
+    const rows = groupCatalog('aggregate', [{ id: 'kimi-k3' }, { id: 'glm-5.3' }], {
+      hidden: new Set(['glm-5.3']),
+      recommended: ['glm-5.3'],
+    })
+    expect(rows.map(row => row.upstreamId)).toEqual(['kimi-k3'])
+    const ordered = groupCatalog('aggregate', [{ id: 'kimi-k3' }, { id: 'glm-5.3' }], {
+      recommended: ['glm-5.3'],
+    })
+    expect(ordered.map(row => row.upstreamId)).toEqual(['glm-5.3', 'kimi-k3'])
+  })
+
+  it('carries the deployment image verdict onto the rows', () => {
+    const rows = groupCatalog('aggregate', [{ id: 'mystery' }, { id: 'kimi-k3' }], {
+      vision: new Map([['mystery', false]]),
+    })
+    expect(rows.find(row => row.upstreamId === 'mystery')?.vision).toBe(false)
+    expect(rows.find(row => row.upstreamId === 'kimi-k3')?.vision).toBe(true)
+  })
+
+  it('falls back to the whole registry when the listing is missing', () => {
+    expect(groupCatalog('aggregate', undefined)).toHaveLength(modelIdentities().length)
   })
 })

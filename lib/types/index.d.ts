@@ -25,8 +25,8 @@ export type { GroupConfig, GroupKey, Protocol, ResolvedGroup, ResolvedProtocomOp
 export { decodeVariantId, encodeVariantId, stripVariantId, variantLengths } from './context-variants.ts';
 export { discoverModels, endpointOrigin, fetchUpstreamModels, parseModelsListing } from './discovery.ts';
 export type { DiscoveryHooks } from './discovery.ts';
-export { catalogEntry, CONTEXT_LADDER, contextChoicesFor, contextLabel, DEFAULT_RECOMMENDED, displayNameWithContext, FALLBACK_CONTEXT_WINDOW, identityKey, matchRegistry, modelIdentities, REGISTRY, } from './model-registry.ts';
-export type { CatalogModel, ModelIdentity, RegistryEntry, RegistryPricing, RegistryReasoning, UpstreamModel, } from './model-registry.ts';
+export { acceptsImages, catalogEntry, CONTEXT_LADDER, contextChoicesFor, contextLabel, DEFAULT_RECOMMENDED, displayNameWithContext, FALLBACK_CONTEXT_WINDOW, groupCatalog, identityKey, matchRegistry, modelIdentities, REFUSED_CHAT_MODEL_IDS, REGISTRY, servesChat, servesGroup, } from './model-registry.ts';
+export type { CatalogModel, GroupCatalogModel, GroupCatalogOptions, ModelIdentity, RegistryEntry, RegistryPricing, RegistryReasoning, UpstreamModel, } from './model-registry.ts';
 export declare const name = "protocom-api";
 export declare const inject: string[];
 export declare function apply(ctx: Context, config: Config): void;

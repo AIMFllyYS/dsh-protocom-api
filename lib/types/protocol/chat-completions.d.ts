@@ -11,13 +11,8 @@
  * @module dsh-protocom-api/protocol/chat-completions
  */
 import type { FinishReason, GenerateOptions, StreamChunk, TokenUsage } from '@deepseek-ai/dsh-llm';
-import type { ProtocolConnection } from './http.ts';
-/**
- * Resolved request images, keyed by attachment id: the provider-ready
- * `data:` URL an image block's durable reference stands for. Empty when the
- * request carries no image the adapter retained.
- */
-export type RequestImageUrls = ReadonlyMap<string, string>;
+import type { ProtocolConnection, RequestImageUrls } from './http.ts';
+export type { RequestImageUrls } from './http.ts';
 /** Token accounting as the endpoint reports it. */
 export interface WireUsage {
     prompt_tokens: number;

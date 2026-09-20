@@ -16,7 +16,8 @@ DeepSeek Harness (DSH) v1.5 插件：接入 **Protocom 官方 API**（OpenAI 兼
 - **思考强度二级菜单**：模型菜单自动出现 Effort 子菜单。DeepSeek 系 `off/low/high/max`，Kimi K3 `low/high`，Codex 分组 `minimal/low/medium/high/xhigh`（走 responses 协议 `reasoning.effort`），Grok 分组优先采用上游披露的 effort 元数据。思考内容以 `reasoning-delta` 流式接入，聊天界面折叠显示。
 - **缓存感知的用量统计**：`cached_tokens` → `cacheReadTokens` 不相交换算，DSH 自带的缓存命中率、每轮 TPS、token 明细全部正确生效。
 - **余额与用量显示**：设置页每个分组卡片内嵌余额区——限额模式显示剩余额度大数字 + 用量进度条（>80% 警示），订阅/钱包模式显示余额与套餐；附今日用量、速率窗口、计费倍率、到期时间与手动刷新。
-- **引导式设置页**：设置 → 「Protocom API」整页，中英双语。分组卡片带启用开关（switch）、密钥状态圆点、保存密钥即自动启用分组、探测结果表格内直接勾选上下文变体（chips）。
+- **图片输入（多模态）**：模型是否可接收图片按「显式设置 → 名录已验证结论 → 默认放行」判定；`visionModels` 可逐个模型声明纯文本。chat-completions 与 responses 两条协议都支持内联 base64 图片（含工具结果里的图）。实测：阶跃星辰 `step-5-preview`、`step-3.7-flash` 均可直接发图。
+- **引导式设置页**：设置 → 「Protocom API」整页，中英双语。每张分组卡片可折叠，卡片内就是**该分组自己的菜单模型**（一行一个）：可见性勾选、上下文档位、视觉开关、星标置顶，列表固定高度滚动；「刷新模型」拉取该分组自己的 listing；原始「模型和上游 ID」表格收在折叠项里。分组卡片带启用开关（switch）、密钥状态圆点、保存密钥即自动启用分组。
 
 ## 首次安装
 
@@ -101,18 +102,20 @@ Host 提供 `GET /api/protocom-api/balance`，它挂在 Host 的共享、带围�
 
 ## 常见问题
 
-## 常见问题
-
 - **探测报 "group is disabled"**：该分组未启用。打开卡片上的启用开关，或直接保存一次密钥（会自动启用）。
 - **探测报 401**：key 未配置或无效；确认密钥已保存且状态圆点为绿色。
-- **上下文变体不生效**：确认已在探测结果里勾选了长度档位（写回该分组 `contextLengths`）。
+- **某个分组在设置页里看不到模型行**：该分组未启用或未配置密钥。启用并保存密钥后面板会自动拉取该分组自己的 listing（也可点「刷新模型」）。
+- **上下文变体不生效**：在**该分组卡片内**对应模型行上勾选档位（写回 `modelContexts`）。分组自带的梯子（StepFun 为 200K/256K/400K/1M）未手动改过时不落盘。
+- **上传图片没有入口 / 报 `UNSUPPORTED_CONTENT`**：说明该模型的图片能力被显式关闭了（`visionModels` 为 `false`，或名录标注 `vision: false`，如 GLM 系）。在对应模型行点「仅文本 / 视觉」切换即可。
+- **某个模型明明列在端点里却不在菜单**：它的 id 在 `REFUSED_CHAT_MODEL_IDS` 里——实测该端点拒绝为它服务（404/400）。展开卡片的「模型和上游 ID」可看到它被标注为「端点提供：否」。
+- **发图后上游报错点名该模型**：未收录模型默认放行图片，遇到真正纯文本的模型时由上游拒绝。把该模型切成「仅文本」即可恢复本地拦截。
 
 ## 开发
 
 ```bash
 pnpm install
 pnpm run build   # tsdown → lib/index.js（Host，ESM）+ lib/client.js（Web client，CJS 工厂）；tsc -b → lib/types
-pnpm run test    # vitest，130 用例（含安全回归）
+pnpm run test    # vitest，182 用例（含安全回归）
 pnpm run check:consistency   # 构建后断言 lib/ 与 src/ 一致（CI 闸门：build && git diff --exit-code）
 ```
 

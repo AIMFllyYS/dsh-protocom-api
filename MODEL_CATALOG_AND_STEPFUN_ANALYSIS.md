@@ -1,7 +1,7 @@
 # 系统性分析：模型菜单、阶跃星辰适配与设置页 UX
 
 > 本文对应三个报告问题。结论分三类：**已确认根因**（源码级证据）、**本轮已修**、**待你提供证据后精确修复**。
-> 本轮改动已落地并通过 155 条用例；未决项集中在「阶跃星辰 5 的二次工具报错」。
+> 0.3.0 已落地并通过 182 条用例；未决项只剩「阶跃星辰的二次工具报错」（需一次失败样本）与宿主侧的分组粒度问题。
 
 ---
 
@@ -12,8 +12,8 @@
 | 1a | 配了 aggregate + stepfun，底部菜单只看到 aggregate | 名录是**全局**的，每个 group 都把整份名录当自己的目录；本组真实模型被追加到 28 行之后 → 视口被第一组占满 | **已修**：目录成员改为「本 route 的 listing + 本组登记条目」 |
 | 1b | 出现 128K 选项 | 未登记模型回落到 `FALLBACK_CONTEXT_WINDOW = 131072`，而 `contextChoicesFor(131072)` 返回 `[131072]`；名录里**没有任何 stepfun 条目**，所以该组每个模型都恰好是「128K」 | **已修**：回落改为梯子下限 200K；StepFun 组直接下发 200K/256K/400K/1M |
 | 2a | 阶跃星辰 5 用两次后工具报错 | **未定**：报错体显示 `body.input` 期望 `str` 却收到列表，说明请求走了 responses 形状；210 条校验错误 ≈ 条目数 × union 分支数，即**我们的 input 条目匹配不上任何一种被接受的 item 类型**。需要协议配置与完整报错才能定位 | 待证据 |
-| 2b | 1M 上下文 + 多模态 | 名录无 StepFun 条目 → `vision` 恒为 `false` → 发图直接 `UNSUPPORTED_CONTENT`；上下文按未知模型处理 | **部分已修**（上下文梯子）；多模态待模型 id |
-| 3 | 模型配置放到对应供应商板块 | 现在「模型可见性/上下文/推荐」是一张全局卡片，与分组卡片分离 | 方案已给出，待确认 |
+| 2b | 1M 上下文 + 多模态 | 名录无 StepFun 条目 → `vision` 恒为 `false`；且 `acceptsImages` 额外要求 `protocol === 'chat-completions'`，responses 组连映射都没有 | **已修**：能力判定改为「显式设置 → 名录结论 → 默认放行」，responses 协议补上 `input_image` 映射；`step-5-preview` 已实测收录（1M + 图片 200） |
+| 3 | 模型配置放到对应供应商板块 | 「模型可见性/上下文/推荐」原是一张全局卡片（且只渲染静态名录），与分组卡片分离 | **已修**：模型配置内联进每张分组卡片，原始 ID 映射折叠收起 |
 
 ---
 
@@ -47,20 +47,30 @@
 4. **分组自带上下文梯子**（`src/groups.ts`）：`GROUP_DEFAULTS.stepfun.contextLengths = [200K, 256K, 400K, 1M]`，`resolveAdapterOptions` 在部署未指定时采用；设置页也按「生效值」显示。
 5. 新增 6 条回归用例（见 `test/catalog.spec.ts` 的 `per-group catalog membership`）。
 
-### 1.3 待办
+### 1.3 0.3.0 追加
 
-- 补 stepfun / grok 的名录条目（需要模型 id，见 §5）。
-- R4 只能缓解不能根治（在宿主 `catalog.ts`）：插件侧已让 `resolveModel` 尽量不抛；若要根治需宿主把 try/catch 下沉到单个模型。可提 issue。
+1. **面板改成「每组自己的菜单模型」**：删除全局可见性卡片，改为每张分组卡片内渲染 `groupCatalog()` 的结果（=适配器 `listModels` 用的同一个投影），行内四控：可见性 / 上下文档位 / 视觉 / 星标；卡片可折叠，模型列表 `max-height: 340px` 固定视口。
+2. **「模型和上游 ID」折叠**：默认收起的 `<details>`，新增「端点提供」列。
+3. **StepFun 实测收录**：`step-5-preview`（1M、vision、`groups: ['stepfun']`）；`REFUSED_CHAT_MODEL_IDS` 收录 8 个端点拒绝服务的 id。
+4. 仍待办：补 grok 名录条目（缺模型 id）；R4 需宿主把 `catalog.ts` 的 try/catch 从 provider 粒度下沉到单模型。
 
 ---
 
 ## 2. 问题二：阶跃星辰 5 适配
 
-### 2.1 (b) 1M 上下文与多模态：已确认缺口
+### 2.1 (b) 1M 上下文与多模态：已修复并实测
 
-- `contextWindow`：名录无 stepfun 条目时按未知模型处理。**现已**由分组梯子给出 200K/256K/400K/1M 四档；补名录条目后模型自身窗口（1M）才会成为「不配置 contextLengths 时的默认」。
-- `vision`：`catalogEntry()` 对未收录 id 一律 `vision: false`，`acceptsImages()` 再要求 `matchRegistry(id)?.vision === true && protocol === 'chat-completions'` → **当前发图必然 `UNSUPPORTED_CONTENT`**。补一条 `vision: true` 的 StepFun 5 条目即可打通（`chat-completions` 路径已支持 base64 data URL 图片，代码无需改动）。
-- 需要你确认：中转站的 StepFun 5 是否接受 OpenAI 风格的 `image_url: { url: 'data:image/png;base64,...' }`；若它要求单独的上传接口，则需要新增一条映射。
+- **实测（真实端点 + 你的 StepFun 凭据）**：`/v1/models` 列出 11 个 step-* id，其中只有 3 个能服务：
+  | id | 文本轮 | 图片轮 |
+  |---|---|---|
+  | `step-5-preview` | 200 | **200（回答 "Red"，带 1M 窗口）** |
+  | `step-3.7-flash` | 200 | **200（回答 "red"）** |
+  | `step-router-v1` | 200 | — |
+  | `step-3.5-flash` / `step-3.5-flash-2603` | 400「not enabled for the Responses API」 | 400 |
+  | `step-explore` / `step-image-edit-2` / `stepaudio-2.5-*`（5 个） | 404「does not exist or you do not have access to it」 | 404 |
+- **形态确认**：中转站接受 OpenAI 风格 `image_url: { url: 'data:image/png;base64,...' }`，无需上传接口。
+- **代码侧**：能力判定三级（设置 → 名录 → 默认放行）；responses 协议补 `input_image`（用户消息）与 content 部件数组（带图的工具结果）；`visionModels` 提供逐模型覆盖。
+- **端到端**：构建产物 + 真实凭据跑 `listModels('protocom-stepfun')` → 3 模型 × 4 档 = 12 条，全部 `text+image`；带真实 PNG 的图片轮次经适配器发出后返回 "Red"，finish = stop。
 
 ### 2.2 (a) 二次使用后工具报错：证据与假设
 
@@ -80,10 +90,13 @@
 | H3 | `thinking: {type:'disabled'}` 被拒（GLM 已知会拒；StepFun 可能同样） | 选非 off 的 effort 后是否仍失败 |
 | H4 | 未处理 `GenerateOptions.purpose`（`'compaction'` / `'session-title'`）：第一方 `llm-deepseek` 对 `session-title` 会强制关掉思考，我们原样发送 | 报错是否只出现在压缩/起标题那一轮 |
 
-### 2.3 建议的诊断能力（本轮未实现，等你确认）
+### 2.3 诊断能力（0.2.0 已实现，待你复现）
 
-加一个**显式开关**的线上捕获：`DSH_PROTOCOM_CAPTURE_DIR=<dir>` 时，把每次上游请求的**序列化 body**与上游**非 2xx 的响应体**写成 JSON 落到该目录（只写 body，不写任何 header，因此不含密钥；目录默认关闭，文档标注含对话内容）。
-拿到一次失败样本后，`input` 的具体形状与被拒原因即可确定，2a 可以一次改对，而不是猜。
+`DSH_PROTOCOM_CAPTURE_DIR=<dir>` 时，把每次上游请求的**序列化 body**与上游**非 2xx 的响应体**写成 `<ISO>-<status>.json`（只写 body，不写任何 header，因此不含密钥；默认关闭，含对话内容）。
+
+复现步骤：`$env:DSH_PROTOCOM_CAPTURE_DIR = "D:\protocom-capture"; pnpm dsh web` → 在 GUI 里复现「用两次后工具报错」→ 把该目录里的 json 发我。
+
+同时请先试一件事：你的 `settings.yaml` 里 stepfun 组**没有** `protocol`，即走默认的 `chat-completions`（实测 3 个模型在该协议下均可用）。若报错样本里的 `loc` 仍是 `body.input`，说明失败不是出在这个分组上，需要看请求是从哪条 route 发出的。
 
 ---
 
@@ -95,40 +108,40 @@
 - 另有一张**全局**「菜单中显示的模型」卡片：勾选可见性、选上下文档位、星标推荐。
 - 底部模型菜单是**宿主**的组件（`packages/client/ui-model-selection`），插件不能改它的布局，只能决定**每个 provider 提供哪些行**。
 
-### 3.2 方案（推荐 B）
+### 3.2 0.3.0 实现（B + C 合并为一屏）
 
-- **A. 折叠菜单栏**：只能通过「减少行数」间接实现——1a 修好后每组只剩自己的模型，菜单自然变短。**已部分达成。**
-- **B. 把模型配置搬进对应分组卡片（推荐）**：每张分组卡片改为三段式流程
-  1. **接入**：启用开关 + API key + 保存；
-  2. **探测**：探测模型 → 结果表格；
-  3. **选用**：在探测结果里直接勾选「进菜单 / 上下文档位 / 置顶」，即把现在全局卡片的三个动作**内联到该组的探测表格行**。
-  全局卡片保留为「总览」或直接移除。
-- **C. 供应商内的模型子面板**：卡片内加一个可折叠区，展示该组当前**生效**的模型（来自 `listModels`），与探测结果并列。
+每张分组卡片 = 折叠头（分组名 / 协议标签 / 凭据圆点 / 启用开关）+ 卡片体：
 
-推荐 **B + C**：先做 B（勾选内联），C 作为「生效视图」的补充。
+1. **接入**：API key 输入 + 保存 + 状态行；
+2. **选用**（B+C）：标题行「菜单中显示的模型 + 3 个模型 · 12 个菜单项」+「刷新模型」+「全部显示 / 全部隐藏」+ 筛选框（>8 行时出现）+ 固定高度滚动视口，每行 = 可见性勾选 / 模型名 / 思考标记 / 上下文档位分段控件 / 视觉开关 / 星标；
+3. **诊断**：默认收起的 `<details>`「模型和上游 ID」，含「端点提供」列；
+4. **余额**：原样保留在卡片底部。
+
+- **数据来源**：面板不再用静态名录，而是对自己那条 route 调用 `discoverModels({ provider })`（页面加载时对该组自动探测一次，条件为「已启用 + 凭据已配置」），再经 `groupCatalog()` 投影——与适配器 `listModels` 完全同一条路径。
+- **全局卡片**：已删除（其功能全部内联到分组卡片）。
+- **为什么以前只能配「开源聚合」**：全局卡片渲染的是 `modelIdentities()`（静态名录），而名录里没有 stepfun / grok 条目 → 那两个分组**一行都没有**。
 
 ### 3.3 固定高度约束
 
-你要求「保持一个固定的容器上下高度，跟之前差不多」。做法：分组卡片的三段用固定行高与固定高度的滚动区（探测表格沿用现有 `max-height` + `overflow`），**不引入会撑高的新容器**；模型选用区与探测表格共用同一个滚动视口。
+分组卡片的模型区是唯一会随数据增长的容器，已固定为 `max-height: 340px` + `overflow-y: auto`（与改造前同一数值）；卡片体其余部分行数固定，因此整卡高度不随模型数量变化。折叠头可以随时把整卡收起。
 
 ---
 
 ## 4. 里程碑
 
-| 里程碑 | 内容 | 出口条件 |
+| 里程碑 | 内容 | 状态 |
 |---|---|---|
-| M1（已完成） | 1a/1b 的目录收敛 + 分组梯子 + 未知模型 200K | 155 用例全绿；`stepfun` 组模型默认展示四档 |
-| M2 | 补 StepFun 5 / Grok 名录条目（1M + vision）+ 多模态验证 | 发图不再 `UNSUPPORTED_CONTENT`；四档默认由模型窗口决定 |
-| M3 | 2a 定位与修复（依赖证据）+ 捕获开关 | 复现失败样本并回归 |
-| M4 | 设置页 B+C 改造（固定高度） | 视觉验收；分组内完成「接入→探测→选用」 |
-| M5 | 宿主 issue：`catalog.ts` 的 provider 粒度 try/catch 下沉到单模型 | 单个坏模型不再整组消失 |
+| M1 | 1a/1b 的目录收敛 + 分组梯子 + 未知模型 200K | ✅ 0.2.0 |
+| M2 | StepFun 名录条目（1M + vision）+ 多模态打通与实测 | ✅ 0.3.0（`step-5-preview` 收录；`step-3.7-flash` 走默认放行）；**Grok 仍缺模型 id** |
+| M3 | 2a 定位与修复 | ⏳ 捕获开关已就绪（0.2.0），等一次失败样本 |
+| M4 | 设置页 B+C 改造（固定高度） | ✅ 0.3.0（本轮） |
+| M5 | 宿主 issue：`catalog.ts` 的 provider 粒度 try/catch 下沉到单模型 | ⏳ 需在宿主仓库提 issue |
 
 ---
 
-## 5. 需要你提供的信息
+## 5. 还需要你提供的信息
 
-1. **StepFun 组的协议配置**：`settings.yaml` 里 `groups.stepfun.protocol` 是 `chat-completions` 还是 `responses`？（报错里的 `input` 指向后者，但默认值是前者。）
-2. **完整的 400 报错体**：你贴的内容被截断了；需要 `detail` 里 `errors` 数组的前 2–3 条（含 `loc` 与 `input` 原文），或按 `DSH_PROTOCOM_CAPTURE_DIR` 方案给我一份失败请求样本。
-3. **StepFun 5 的准确模型 id**（`/v1/models` 里 stepfun 组返回的那一串），以及是否还有其它 stepfun 模型要一起收录。
-4. **多模态形态**：中转站的 StepFun 5 是否接受 `image_url` + base64 data URL。
-5. **失败时机**：是「第 2 轮对话」还是「同一条消息用两次工具」？换 effort / 关思考后是否仍失败？
+1. **一次失败的捕获样本**（问题 2a）：`$env:DSH_PROTOCOM_CAPTURE_DIR = "D:\protocom-capture"` 后复现「用两次后工具报错」，把生成的 json 发我。你贴的报错是 `body.input`（responses 形状），而你的 stepfun 组走 chat-completions，所以还需要确认失败发生在哪条 route 上。
+2. **失败时机**：是「第 2 轮对话」还是「同一条消息用两次工具」？换成 `step-3.7-flash` / `step-router-v1` 是否同样失败？
+3. **Grok 与其它分组的模型 id**：需要 `/v1/models` 里对应分组的返回，才能补名录条目（1M / vision / 思考词表）。
+4. 顺带发现（与本轮无关但影响你）：**你的 aggregate key 当前被端点拒绝（401）**，所以开源聚合组的菜单走的是名录回落；Codex key 同样 401。需要更新这两把 key。

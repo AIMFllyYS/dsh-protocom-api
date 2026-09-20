@@ -3,7 +3,9 @@
  * handling: requests map messages to `input` items and the reasoning effort
  * to `reasoning.effort`; stream events resolve through their payload `type`
  * field, terminating at `response.completed` / `response.failed` rather than
- * relying on a `[DONE]` sentinel. Tool calls stream twice on this protocol —
+ * relying on a `[DONE]` sentinel. Images ride as inline base64
+ * `input_image` parts, so a multimodal model is reachable on either wire
+ * protocol. Tool calls stream twice on this protocol —
  * identity on `response.output_item.added`, arguments on
  * `response.function_call_arguments.delta`, and the complete item once more on
  * `response.output_item.done` — so the terminal item only ever contributes the
@@ -19,7 +21,7 @@ import { contentHasImage, EMPTY_RESPONSE_CODE, LlmError, ToolCallId } from '@dee
 import type { ContentBlock, FinishReason, GenerateOptions, Message, StreamChunk, TokenUsage } from '@deepseek-ai/dsh-llm'
 import { DONE, parseSseUntilEof } from '../sse.ts'
 import { postSse } from './http.ts'
-import type { ProtocolConnection } from './http.ts'
+import type { ProtocolConnection, RequestImageUrls } from './http.ts'
 
 /** Token accounting as the responses endpoint reports it. */
 export interface WireResponseUsage {
@@ -92,25 +94,54 @@ function inputTextItem(role: 'system' | 'user', text: string): Record<string, un
   return { type: 'message', role, content: [{ type: 'input_text', text }] }
 }
 
-function wireInput(message: Message): Record<string, unknown>[] {
-  if (contentHasImage(message.content)) {
-    throw new LlmError('The protocom-api responses adapter does not support image content.', 'UNSUPPORTED_CONTENT')
+/** One content part of a multimodal input item. */
+type WireInputPart =
+  | { type: 'input_text'; text: string }
+  | { type: 'input_image'; image_url: string }
+
+/**
+ * The content parts of one input item: the block's text first, then every image
+ * this request retained as the inline data URL the endpoint accepts. An item
+ * whose parts all failed to resolve still carries its text, because an empty
+ * content array is a wire error and the text is what keeps the replayed turn
+ * faithful.
+ */
+function inputParts(blocks: readonly ContentBlock[], images: RequestImageUrls | undefined): WireInputPart[] {
+  const text = flattenText(blocks)
+  const parts: WireInputPart[] = text.length > 0 ? [{ type: 'input_text', text }] : []
+  for (const block of blocks) {
+    if (block.type !== 'image') continue
+    const url = images?.get(String(block.attachment.attachmentId))
+    if (url !== undefined) parts.push({ type: 'input_image', image_url: url })
   }
+  return parts.length === 0 ? [{ type: 'input_text', text }] : parts
+}
+
+function wireInput(message: Message, images: RequestImageUrls | undefined): Record<string, unknown>[] {
   if (message.role === 'system') return [inputTextItem('system', flattenText(message.content))]
   if (message.role === 'user') {
     const result = message.content.find((block): block is Extract<ContentBlock, { type: 'tool-result' }> =>
       block.type === 'tool-result')
     if (result !== undefined) {
-      if (contentHasImage(result.content)) {
-        throw new LlmError('The protocom-api responses adapter does not support image content.', 'UNSUPPORTED_CONTENT')
-      }
+      const parts = inputParts(result.content, images)
       return [{
         type: 'function_call_output',
         call_id: String(result.toolCallId),
-        output: flattenText(result.content),
+        // A text-only tool result keeps the historical string form, so nothing
+        // about the common path changes; only a result carrying an image needs
+        // the content-part form the protocol also accepts.
+        output: parts.length === 1 && parts[0]?.type === 'input_text' ? parts[0].text : parts,
       }]
     }
-    return [inputTextItem('user', flattenText(message.content))]
+    return [{ type: 'message', role: 'user', content: inputParts(message.content, images) }]
+  }
+  // Assistant output is declared text-only, so an image here is a caller bug
+  // rather than something the protocol could carry.
+  if (contentHasImage(message.content)) {
+    throw new LlmError(
+      'The protocom-api responses adapter does not support image content on an assistant message.',
+      'UNSUPPORTED_CONTENT',
+    )
   }
   // Reasoning blocks cannot be replayed: the protocol's reasoning items carry
   // server-issued signatures a stateless client cannot reconstruct, so only
@@ -137,9 +168,13 @@ function wireInput(message: Message): Record<string, unknown>[] {
  * maps to `reasoning.effort`; `off` and an absent effort both omit the field
  * (the protocol has no explicit disabled spelling).
  */
-export function serializeResponsesRequest(options: GenerateOptions, model: string): Record<string, unknown> {
+export function serializeResponsesRequest(
+  options: GenerateOptions,
+  model: string,
+  images?: RequestImageUrls,
+): Record<string, unknown> {
   const input: Record<string, unknown>[] = []
-  for (const message of options.messages) input.push(...wireInput(message))
+  for (const message of options.messages) input.push(...wireInput(message, images))
   const effort = options.reasoningEffort
   return {
     model,
@@ -485,11 +520,12 @@ export async function* streamResponses(
   connection: ProtocolConnection,
   options: GenerateOptions,
   model: string,
+  images?: RequestImageUrls,
 ): AsyncGenerator<StreamChunk> {
   const response = await postSse(
     connection,
     'responses',
-    serializeResponsesRequest(options, model),
+    serializeResponsesRequest(options, model, images),
     options.signal,
   )
   yield* translateResponses(parseSseUntilEof(response.body as ReadableStream<BufferSource>))

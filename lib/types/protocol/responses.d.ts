@@ -3,7 +3,9 @@
  * handling: requests map messages to `input` items and the reasoning effort
  * to `reasoning.effort`; stream events resolve through their payload `type`
  * field, terminating at `response.completed` / `response.failed` rather than
- * relying on a `[DONE]` sentinel. Tool calls stream twice on this protocol —
+ * relying on a `[DONE]` sentinel. Images ride as inline base64
+ * `input_image` parts, so a multimodal model is reachable on either wire
+ * protocol. Tool calls stream twice on this protocol —
  * identity on `response.output_item.added`, arguments on
  * `response.function_call_arguments.delta`, and the complete item once more on
  * `response.output_item.done` — so the terminal item only ever contributes the
@@ -15,7 +17,7 @@
  * @module dsh-protocom-api/protocol/responses
  */
 import type { GenerateOptions, StreamChunk, TokenUsage } from '@deepseek-ai/dsh-llm';
-import type { ProtocolConnection } from './http.ts';
+import type { ProtocolConnection, RequestImageUrls } from './http.ts';
 /** Token accounting as the responses endpoint reports it. */
 export interface WireResponseUsage {
     input_tokens: number;
@@ -39,7 +41,7 @@ export declare function mapResponseUsage(usage: WireResponseUsage): TokenUsage;
  * maps to `reasoning.effort`; `off` and an absent effort both omit the field
  * (the protocol has no explicit disabled spelling).
  */
-export declare function serializeResponsesRequest(options: GenerateOptions, model: string): Record<string, unknown>;
+export declare function serializeResponsesRequest(options: GenerateOptions, model: string, images?: RequestImageUrls): Record<string, unknown>;
 /**
  * Consume responses-protocol SSE payloads and yield StreamChunks. The
  * terminal state must arrive as a `response.completed` / `response.incomplete`
@@ -49,4 +51,4 @@ export declare function serializeResponsesRequest(options: GenerateOptions, mode
  */
 export declare function translateResponses(payloads: AsyncIterable<string>): AsyncGenerator<StreamChunk>;
 /** Stream one responses-protocol call as harness chunks. */
-export declare function streamResponses(connection: ProtocolConnection, options: GenerateOptions, model: string): AsyncGenerator<StreamChunk>;
+export declare function streamResponses(connection: ProtocolConnection, options: GenerateOptions, model: string, images?: RequestImageUrls): AsyncGenerator<StreamChunk>;

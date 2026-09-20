@@ -6,6 +6,13 @@
  *
  * @module dsh-protocom-api/protocol/http
  */
+/**
+ * Resolved request images, keyed by attachment id: the provider-ready `data:`
+ * URL an image block's durable reference stands for. Empty when the request
+ * carries no image the adapter retained. Lives beside the transport because
+ * both wire protocols carry images.
+ */
+export type RequestImageUrls = ReadonlyMap<string, string>;
 /** Connection facts frozen for one request. */
 export interface ProtocolConnection {
     /** Endpoint root; `/v1/<path>` is appended. */
