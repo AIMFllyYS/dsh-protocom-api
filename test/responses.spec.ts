@@ -147,6 +147,71 @@ describe('responses SSE translation', () => {
     ])
   })
 
+  it('streams the plain reasoning vocabulary and folds its restatement without doubling', async () => {
+    // Captured from the live endpoint: the reasoning item opens first, the
+    // deltas carry the text, and `response.reasoning.done` restates it whole.
+    const chunks = await collect([
+      { type: 'response.output_item.added', output_index: 0, item: { type: 'reasoning', id: 'rs_1', summary: [] } },
+      { type: 'response.reasoning.delta', item_id: 'rs_1', output_index: 0, content_index: 0, delta: 'We need' },
+      { type: 'response.reasoning.delta', item_id: 'rs_1', output_index: 0, content_index: 0, delta: ' answer.' },
+      { type: 'response.reasoning.done', item_id: 'rs_1', output_index: 0, content_index: 0, text: 'We need answer.' },
+      { type: 'response.output_text.delta', delta: 'ok' },
+      { type: 'response.completed', response: { status: 'completed' } },
+    ])
+    expect(chunks.filter(chunk => chunk.type === 'reasoning-delta')).toEqual([
+      { type: 'reasoning-delta', index: 0, text: 'We need' },
+      { type: 'reasoning-delta', index: 0, text: ' answer.' },
+    ])
+    expect(chunks.filter(chunk => chunk.type === 'block-end')).toEqual([
+      { type: 'block-end', index: 0, block: { type: 'reasoning', text: 'We need answer.' } },
+      { type: 'block-end', index: 1, block: { type: 'text', text: 'ok' } },
+    ])
+  })
+
+  it('delivers reasoning a model only ever restates complete', async () => {
+    const chunks = await collect([
+      { type: 'response.reasoning_summary_text.done', item_id: 'item_1', output_index: 0, summary_index: 0, text: 'whole chain' },
+      { type: 'response.output_text.delta', delta: 'ok' },
+      { type: 'response.completed', response: { status: 'completed' } },
+    ])
+    expect(chunks.filter(chunk => chunk.type === 'reasoning-delta')).toEqual([
+      { type: 'reasoning-delta', index: 0, text: 'whole chain' },
+    ])
+    expect(chunks.filter(chunk => chunk.type === 'block-end')).toEqual([
+      { type: 'block-end', index: 0, block: { type: 'reasoning', text: 'whole chain' } },
+      { type: 'block-end', index: 1, block: { type: 'text', text: 'ok' } },
+    ])
+  })
+
+  it('folds a summary part restatement into the block its deltas opened', async () => {
+    const chunks = await collect([
+      { type: 'response.reasoning_summary_part.added', item_id: 'item_1', output_index: 0, summary_index: 0, part: { type: 'summary_text', text: '' } },
+      { type: 'response.reasoning_summary_text.delta', item_id: 'item_1', output_index: 0, summary_index: 0, delta: 'The' },
+      { type: 'response.reasoning_summary_text.delta', item_id: 'item_1', output_index: 0, summary_index: 0, delta: ' user' },
+      { type: 'response.reasoning_summary_text.done', item_id: 'item_1', output_index: 0, summary_index: 0, text: 'The user' },
+      { type: 'response.reasoning_summary_part.done', item_id: 'item_1', output_index: 0, summary_index: 0, part: { type: 'summary_text', text: 'The user' } },
+      { type: 'response.output_text.delta', delta: 'ok' },
+      { type: 'response.completed', response: { status: 'completed' } },
+    ])
+    expect(chunks.filter(chunk => chunk.type === 'reasoning-delta')).toEqual([
+      { type: 'reasoning-delta', index: 0, text: 'The' },
+      { type: 'reasoning-delta', index: 0, text: ' user' },
+    ])
+  })
+
+  it('drops a terminal restatement that does not extend the streamed reasoning', async () => {
+    const chunks = await collect([
+      { type: 'response.reasoning.delta', delta: 'streamed' },
+      { type: 'response.reasoning.done', text: 'something else entirely' },
+      { type: 'response.output_text.delta', delta: 'ok' },
+      { type: 'response.completed', response: { status: 'completed' } },
+    ])
+    expect(chunks.filter(chunk => chunk.type === 'block-end')).toEqual([
+      { type: 'block-end', index: 0, block: { type: 'reasoning', text: 'streamed' } },
+      { type: 'block-end', index: 1, block: { type: 'text', text: 'ok' } },
+    ])
+  })
+
   it('reports a failed response as an error finish', async () => {
     const chunks = await collect([
       { type: 'response.output_text.delta', delta: 'partial' },

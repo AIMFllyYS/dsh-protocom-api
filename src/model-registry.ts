@@ -145,11 +145,16 @@ export const REGISTRY: readonly RegistryEntry[] = [
     vision: true,
   },
   {
+    // Advertised as a reasoning model, but the endpoint's Moonshot route
+    // rejects `reasoning_effort` outright ("invalid moonshotai provider
+    // options", HTTP 400) while accepting `thinking` and streaming no
+    // reasoning at all. Declaring an effort vocabulary here would make every
+    // request fail, because the picker's default effort goes out on the wire;
+    // without one the request carries neither field, which the route serves.
     id: 'moonshotai/Kimi-K2.7-Code',
     displayName: 'Kimi K2.7 Code',
     family: 'kimi',
     contextWindow: CONTEXT_256K,
-    reasoning: { efforts: ['off', 'low', 'medium', 'high'], defaultEffort: 'medium' },
     vision: true,
   },
   {

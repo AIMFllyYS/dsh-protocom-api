@@ -32,6 +32,17 @@ describe('model-registry', () => {
     expect(entry?.vision).toBe(true)
   })
 
+  it('advertises no reasoning vocabulary for a route that rejects the effort field', () => {
+    // Verified against the endpoint: sending `reasoning_effort` to the
+    // Moonshot route fails the whole request with HTTP 400 "invalid moonshotai
+    // provider options", so a declared default effort would make the model
+    // unusable rather than merely mute.
+    const entry = matchRegistry('moonshotai/Kimi-K2.7-Code')
+    expect(entry?.displayName).toBe('Kimi K2.7 Code')
+    expect(entry?.reasoning).toBeUndefined()
+    expect(entry?.vision).toBe(true)
+  })
+
   it('recommends the models whose reasoning content actually streams', () => {
     // The shipped recommendation orders the menu; it removes nothing.
     expect(DEFAULT_RECOMMENDED).toEqual(['kimi-k3', 'glm-5.2', 'mimo-v2.5'])

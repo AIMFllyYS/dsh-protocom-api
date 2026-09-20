@@ -7,7 +7,10 @@
  * identity on `response.output_item.added`, arguments on
  * `response.function_call_arguments.delta`, and the complete item once more on
  * `response.output_item.done` — so the terminal item only ever contributes the
- * part the deltas have not already carried.
+ * part the deltas have not already carried. Reasoning streams under three
+ * vocabularies (`response.reasoning.delta`, `response.reasoning_summary_text.delta`,
+ * and one complete restatement on the `...done` events) and all three fold
+ * into a single reasoning block by the same remainder rule.
  *
  * @module dsh-protocom-api/protocol/responses
  */

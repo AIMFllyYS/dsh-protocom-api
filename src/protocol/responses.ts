@@ -7,7 +7,10 @@
  * identity on `response.output_item.added`, arguments on
  * `response.function_call_arguments.delta`, and the complete item once more on
  * `response.output_item.done` — so the terminal item only ever contributes the
- * part the deltas have not already carried.
+ * part the deltas have not already carried. Reasoning streams under three
+ * vocabularies (`response.reasoning.delta`, `response.reasoning_summary_text.delta`,
+ * and one complete restatement on the `...done` events) and all three fold
+ * into a single reasoning block by the same remainder rule.
  *
  * @module dsh-protocom-api/protocol/responses
  */
@@ -36,6 +39,10 @@ interface WireEvent {
   output_index?: number
   /** Complete argument text some providers put on `function_call_arguments.done`. */
   arguments?: string
+  /** Complete reasoning text some providers put on a terminal reasoning event. */
+  text?: string
+  /** Summary part some providers restate complete on `reasoning_summary_part.done`. */
+  part?: { text?: string }
   item?: {
     id?: string
     type?: string
@@ -186,12 +193,12 @@ function acceptIdentity(current: string | undefined, incoming: unknown): string 
 }
 
 /**
- * The part of a function call's arguments the deltas have not carried yet.
- * Providers resend the complete text on the `...done` events, so only what
- * extends the streamed prefix is new; text that does not extend it is dropped
- * rather than replayed as duplicate or corrupt arguments.
+ * The part of a complete text the deltas have not carried yet. Providers
+ * resend the complete value on the `...done` events — tool-call arguments and
+ * reasoning alike — so only what extends the streamed prefix is new; text that
+ * does not extend it is dropped rather than replayed as duplicate content.
  */
-function argumentsRemainder(streamed: string, complete: string | undefined): string | undefined {
+function streamedRemainder(streamed: string, complete: string | undefined): string | undefined {
   if (complete === undefined || complete.length === 0) return undefined
   if (!complete.startsWith(streamed)) return undefined
   return complete.slice(streamed.length)
@@ -266,6 +273,24 @@ export async function* translateResponses(payloads: AsyncIterable<string>): Asyn
     }
   }
 
+  /**
+   * Append reasoning text and yield the delta carrying it. The endpoint
+   * streams reasoning under three vocabularies — a plain `delta` on
+   * `response.reasoning.delta`, a summary `delta` on
+   * `response.reasoning_summary_text.delta`, and a complete restatement on the
+   * `...done` events — so every spelling funnels through here and the block
+   * opens on whichever one carries the first text.
+   */
+  function* emitReasoning(fragment: string | undefined): Generator<StreamChunk> {
+    if (fragment === undefined || fragment.length === 0) return
+    if (reasoningBlock === undefined) {
+      reasoningBlock = open('reasoning')
+      yield { type: 'block-start', index: reasoningBlock.index, blockType: 'reasoning' }
+    }
+    reasoningBlock.text += fragment
+    yield { type: 'reasoning-delta', index: reasoningBlock.index, text: fragment }
+  }
+
   for await (const payload of payloads) {
     if (payload === DONE) break
     let event: WireEvent
@@ -286,14 +311,30 @@ export async function* translateResponses(payloads: AsyncIterable<string>): Asyn
         yield { type: 'text-delta', index: textBlock.index, text: event.delta }
         break
       }
+      // Streaming reasoning. Models differ on the spelling: some stream the
+      // plain `response.reasoning.delta`, others the summary variant.
+      case 'response.reasoning.delta':
       case 'response.reasoning_summary_text.delta': {
-        if (typeof event.delta !== 'string' || event.delta.length === 0) break
-        if (!reasoningBlock) {
-          reasoningBlock = open('reasoning')
-          yield { type: 'block-start', index: reasoningBlock.index, blockType: 'reasoning' }
-        }
-        reasoningBlock.text += event.delta
-        yield { type: 'reasoning-delta', index: reasoningBlock.index, text: event.delta }
+        yield* emitReasoning(typeof event.delta === 'string' ? event.delta : undefined)
+        break
+      }
+      // Terminal reasoning: the whole text once more. Only the part the deltas
+      // have not carried is emitted, so a model that streams AND restates never
+      // doubles its reasoning, while a model that only restates still delivers
+      // the complete text as one delta.
+      case 'response.reasoning.done':
+      case 'response.reasoning_summary_text.done': {
+        yield* emitReasoning(streamedRemainder(
+          reasoningBlock?.text ?? '',
+          typeof event.text === 'string' ? event.text : undefined,
+        ))
+        break
+      }
+      case 'response.reasoning_summary_part.done': {
+        yield* emitReasoning(streamedRemainder(
+          reasoningBlock?.text ?? '',
+          typeof event.part?.text === 'string' ? event.part.text : undefined,
+        ))
         break
       }
       case 'response.output_item.added': {
@@ -319,7 +360,7 @@ export async function* translateResponses(payloads: AsyncIterable<string>): Asyn
         if (identity === undefined) break
         const block = toolBlockFor(identity)
         yield* announce(block, undefined, undefined)
-        yield* emitArguments(block, argumentsRemainder(block.text, event.arguments) ?? '')
+        yield* emitArguments(block, streamedRemainder(block.text, event.arguments) ?? '')
         break
       }
       case 'response.output_item.done': {
@@ -330,7 +371,7 @@ export async function* translateResponses(payloads: AsyncIterable<string>): Asyn
           ? open('tool-call')
           : toolBlockFor(identity)
         yield* announce(block, item.call_id, item.name)
-        yield* emitArguments(block, argumentsRemainder(block.text, item.arguments) ?? '')
+        yield* emitArguments(block, streamedRemainder(block.text, item.arguments) ?? '')
         break
       }
       case 'response.completed':
