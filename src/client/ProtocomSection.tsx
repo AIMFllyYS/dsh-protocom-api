@@ -418,7 +418,12 @@ function GroupCard({ groupKey, group, credential, writable, revision, probe, hid
       id: model.id,
       ...model.name === undefined ? {} : { displayName: model.name },
     })),
-    { recommended },
+    {
+      recommended,
+      // Only once the group has actually been interrogated: an unprobed group
+      // must not present every other group's models as its own menu.
+      registryFallback: probe.phase === 'ready' || probe.phase === 'error',
+    },
   )
   const needle = filter.trim().toLowerCase()
   const visibleRows = needle.length === 0

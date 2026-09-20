@@ -307,4 +307,15 @@ describe('group catalog projection (settings panel parity)', () => {
   it('falls back to the whole registry when the listing is missing', () => {
     expect(groupCatalog('aggregate', undefined)).toHaveLength(modelIdentities().length)
   })
+
+  it('offers only the group\'s own registry entries when the fallback is off', () => {
+    // A configuration surface must not present every group's models as one
+    // group's menu before it has interrogated that group.
+    expect(groupCatalog('grok', undefined, { registryFallback: false })).toEqual([])
+    expect(groupCatalog('stepfun', undefined, { registryFallback: false }).map(row => row.upstreamId))
+      .toEqual(['step-5-preview'])
+    // The adapter keeps the fallback on, so a degraded endpoint cannot empty
+    // the picker.
+    expect(groupCatalog('grok', undefined, { registryFallback: true }).length).toBeGreaterThan(0)
+  })
 })

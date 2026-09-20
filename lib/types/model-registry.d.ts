@@ -205,6 +205,14 @@ export interface GroupCatalogOptions {
     recommended?: readonly string[];
     /** Explicit per-model image capability, keyed by model identity. */
     vision?: ReadonlyMap<string, boolean>;
+    /**
+     * Whether a group with no rows at all falls back to the whole registry
+     * (default true). The adapter leaves this on, because an unreachable listing
+     * must not empty the model menu. A configuration surface turns it off until
+     * it has actually interrogated the group, so a group nobody has probed does
+     * not advertise every other group's models.
+     */
+    registryFallback?: boolean;
 }
 /**
  * One group's own model menu: the models that group's menu offers, in the

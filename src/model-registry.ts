@@ -497,6 +497,14 @@ export interface GroupCatalogOptions {
   recommended?: readonly string[]
   /** Explicit per-model image capability, keyed by model identity. */
   vision?: ReadonlyMap<string, boolean>
+  /**
+   * Whether a group with no rows at all falls back to the whole registry
+   * (default true). The adapter leaves this on, because an unreachable listing
+   * must not empty the model menu. A configuration surface turns it off until
+   * it has actually interrogated the group, so a group nobody has probed does
+   * not advertise every other group's models.
+   */
+  registryFallback?: boolean
 }
 
 /**
@@ -528,7 +536,9 @@ export function groupCatalog(
     if (!rows.some(row => row.id === entry.id)) rows.push({ id: entry.id })
   }
   // "No listing" and "empty listing" are both no information, not "no models".
-  if (rows.length === 0) for (const entry of REGISTRY) rows.push({ id: entry.id })
+  if (rows.length === 0 && options.registryFallback !== false) {
+    for (const entry of REGISTRY) rows.push({ id: entry.id })
+  }
   const rankOf = (id: string): number => {
     const at = options.recommended?.indexOf(identityKey(id)) ?? -1
     return at === -1 ? Number.MAX_SAFE_INTEGER : at

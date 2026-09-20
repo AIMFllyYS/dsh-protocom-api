@@ -251,6 +251,15 @@ describe('per-group model editing (issue 1)', () => {
       .toEqual(['200K', '256K', '400K', '1M', en.tagVision, '★'])
   })
 
+  it('shows nothing before a group has been interrogated', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse({})))
+    // A group with no key is never probed, and must not borrow the registry:
+    // that is the twenty-eight-row noise this section exists to remove.
+    renderSection(makeOperations())
+    const grok = await groupCard(en.groupGrok)
+    expect(grok.querySelectorAll('.protocom-model-row')).toHaveLength(0)
+  })
+
   it('reports the endpoint listing failure without emptying the card', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => jsonResponse({})))
     renderSection(listingOperations({
