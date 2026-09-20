@@ -5,17 +5,18 @@
  * @module dsh-protocom-api/client/variants
  */
 
-import { matchRegistry } from '../model-registry.ts'
+import { CONTEXT_LADDER, contextChoicesFor, matchRegistry } from '../model-registry.ts'
 
-/** The four standard lengths offered for a model the registry does not size. */
-export const STANDARD_VARIANT_CHOICES = [131_072, 262_144, 524_288, 1_048_576] as const
+/** The standard lengths offered for a model the registry does not size. */
+export const STANDARD_VARIANT_CHOICES = CONTEXT_LADDER
 
 /**
- * The checkbox lengths one probe row shows: the registry's declared options
- * when known, the standard four otherwise.
+ * The lengths one model may be offered: the ladder steps its own window
+ * clears, or the standard ladder for an id the registry does not size.
  */
 export function variantChoicesFor(upstreamId: string): readonly number[] {
-  return matchRegistry(upstreamId)?.contextOptions ?? STANDARD_VARIANT_CHOICES
+  const entry = matchRegistry(upstreamId)
+  return entry === undefined ? CONTEXT_LADDER : contextChoicesFor(entry.contextWindow)
 }
 
 /** Add or remove one length, keeping the group list sorted and unique. */

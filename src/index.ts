@@ -35,6 +35,8 @@ export { discoverModels, fetchUpstreamModels, parseModelsListing } from './disco
 export type { DiscoveryHooks } from './discovery.ts'
 export {
   catalogEntry,
+  CONTEXT_LADDER,
+  contextChoicesFor,
   contextLabel,
   DEFAULT_RECOMMENDED,
   displayNameWithContext,

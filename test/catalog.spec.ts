@@ -51,6 +51,20 @@ describe('catalog composition', () => {
     expect(listed.some(model => model.name.startsWith('DeepSeek V4.1 Flash'))).toBe(false)
   })
 
+  it('still honours a group-wide contextLengths as the fallback', async () => {
+    const listed = await offlineAdapter({
+      groups: {
+        aggregate: {
+          enabled: true,
+          apiKey: 'PROTOCOM_AGGREGATE_API_KEY',
+          contextLengths: [204_800, 262_144],
+        },
+      },
+    }).listModels('protocom-aggregate')
+    expect(listed.filter(model => model.id.startsWith('kimi-k3')).map(model => model.id))
+      .toEqual(['kimi-k3::ctx@204800', 'kimi-k3::ctx@262144'])
+  })
+
   it('lists one entry per model until context variants are asked for', async () => {
     const listed = await offlineAdapter(ENABLED).listModels('protocom-aggregate')
     const kimi = listed.filter(model => model.id === 'kimi-k3')
@@ -61,19 +75,43 @@ describe('catalog composition', () => {
     expect(glm[0]?.inputModalities).toEqual(['text'])
   })
 
-  it('expands one model into a context variant per selected length', async () => {
+  it('expands one model into a context variant per chosen length', async () => {
+    // The per-model choice is what the settings picker writes.
     const listed = await offlineAdapter({
-      groups: {
-        aggregate: {
-          enabled: true,
-          apiKey: 'PROTOCOM_AGGREGATE_API_KEY',
-          contextLengths: [131_072, 262_144],
-        },
-      },
+      ...ENABLED,
+      modelContexts: { 'kimi-k3': [204_800, 262_144] },
     }).listModels('protocom-aggregate')
     const kimi = listed.filter(model => model.id.startsWith('kimi-k3'))
-    expect(kimi.map(model => model.name)).toEqual(['Kimi K3 [128K]', 'Kimi K3 [256K]'])
-    expect(kimi.map(model => model.id)).toEqual(['kimi-k3::ctx@131072', 'kimi-k3::ctx@262144'])
+    expect(kimi.map(model => model.name)).toEqual(['Kimi K3 [200K]', 'Kimi K3 [256K]'])
+    expect(kimi.map(model => model.id)).toEqual(['kimi-k3::ctx@204800', 'kimi-k3::ctx@262144'])
+  })
+
+  it('drops a chosen length the model cannot honour', async () => {
+    // 1M on a 256K model would be a menu entry that cannot be served.
+    const listed = await offlineAdapter({
+      ...ENABLED,
+      modelContexts: { 'kimi-k3': [262_144, 1_048_576] },
+    }).listModels('protocom-aggregate')
+    expect(listed.filter(model => model.id.startsWith('kimi-k3')).map(model => model.name))
+      .toEqual(['Kimi K3 [256K]'])
+  })
+
+  it('applies a per-model choice made against an alias', async () => {
+    const listed = await offlineAdapter({
+      ...ENABLED,
+      modelContexts: { 'zai-org/GLM-5.2': [204_800, 262_144] },
+    }).listModels('protocom-aggregate')
+    expect(listed.filter(model => model.id.startsWith('glm-5.2')).map(model => model.name))
+      .toEqual(['GLM-5.2 [200K]', 'GLM-5.2 [256K]'])
+  })
+
+  it('refuses an empty or malformed per-model context choice', () => {
+    expect(() => resolveAdapterOptions({ ...ENABLED, modelContexts: { 'kimi-k3': [] } }))
+      .toThrowError(/must list at least one length/)
+    expect(() => resolveAdapterOptions({ ...ENABLED, modelContexts: { 'kimi-k3': [0] } }))
+      .toThrowError(/must be positive integers/)
+    expect(() => resolveAdapterOptions({ ...ENABLED, modelContexts: { 'kimi-k3': [262_144, 262_144] } }))
+      .toThrowError(/must not repeat/)
   })
 
   it('shows one menu row per model identity, not per upstream id', async () => {

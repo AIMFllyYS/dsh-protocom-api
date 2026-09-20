@@ -44,6 +44,13 @@ export interface Config {
      * else: a model left off the list stays fully selectable below the picks.
      */
     recommendedModels?: string[];
+    /**
+     * Context lengths to offer per upstream model id. Each listed length becomes
+     * its own model-menu entry (`Name [256K]`, `Name [1M]`), so a user picks the
+     * context by picking the entry. An absent model offers one entry at its full
+     * window; a length above the model's window is ignored.
+     */
+    modelContexts?: Record<string, number[]>;
 }
 /** Runtime schema for {@link Config}. */
 export declare const Config: z<Config>;
@@ -77,6 +84,8 @@ export interface ResolvedProtocomOptions {
     hiddenModels: ReadonlySet<string>;
     /** Upstream ids that lead the model menu, most preferred first. */
     recommendedModels: readonly string[];
+    /** Context lengths to offer per upstream id, keyed by model identity. */
+    modelContexts: ReadonlyMap<string, readonly number[]>;
 }
 /**
  * The one explicit resolve step from raw config to validated connection

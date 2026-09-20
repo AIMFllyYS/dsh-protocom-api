@@ -38,6 +38,8 @@ export declare const en: {
     selectNone: string;
     starTitle: string;
     unstarTitle: string;
+    contextTitle: string;
+    contextLastTitle: string;
     tagVision: string;
     tagReasoning: string;
     balance: string;

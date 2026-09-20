@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import {
   catalogEntry,
+  CONTEXT_LADDER,
+  contextChoicesFor,
   contextLabel,
   DEFAULT_RECOMMENDED,
   displayNameWithContext,
@@ -17,7 +19,6 @@ describe('model-registry', () => {
     expect(prefixed?.displayName).toBe('DeepSeek V4.1 Flash')
     expect(bare?.displayName).toBe('DeepSeek V4.1 Flash')
     expect(prefixed?.contextWindow).toBe(1_048_576)
-    expect(prefixed?.contextOptions).toEqual([262_144, 524_288, 1_048_576])
     expect(prefixed?.reasoning).toEqual({ efforts: ['off', 'low', 'high', 'max'], defaultEffort: 'off' })
     // Verified against the endpoint: the flash model accepts image input.
     expect(prefixed?.vision).toBe(true)
@@ -27,7 +28,6 @@ describe('model-registry', () => {
     const entry = matchRegistry('kimi-k3')
     expect(entry?.displayName).toBe('Kimi K3')
     expect(entry?.contextWindow).toBe(262_144)
-    expect(entry?.contextOptions).toEqual([131_072, 262_144])
     expect(entry?.reasoning).toEqual({ efforts: ['low', 'high'], defaultEffort: 'high' })
     expect(entry?.vision).toBe(true)
   })
@@ -110,12 +110,22 @@ describe('model-registry', () => {
     }
   })
 
-  it('formats context labels as 128K/256K/512K/1M', () => {
-    expect(contextLabel(131_072)).toBe('128K')
+  it('formats context labels as 200K/256K/400K/1M', () => {
+    expect(contextLabel(204_800)).toBe('200K')
     expect(contextLabel(262_144)).toBe('256K')
-    expect(contextLabel(524_288)).toBe('512K')
+    expect(contextLabel(409_600)).toBe('400K')
     expect(contextLabel(1_048_576)).toBe('1M')
     expect(displayNameWithContext('Kimi K3', 262_144)).toBe('Kimi K3 [256K]')
+  })
+
+  it('offers only the ladder steps a model can actually honour', () => {
+    // 1M is the whole ladder; a 256K model can only honour its first two steps.
+    expect(contextChoicesFor(1_048_576)).toEqual([204_800, 262_144, 409_600, 1_048_576])
+    expect(contextChoicesFor(262_144)).toEqual([204_800, 262_144])
+    // A window below the whole ladder still offers itself, so a model is never
+    // left without a choice.
+    expect(contextChoicesFor(131_072)).toEqual([131_072])
+    expect(CONTEXT_LADDER[0]).toBe(204_800)
   })
 
   it('uses the endpoint display name for unknown ids when it adds information', () => {

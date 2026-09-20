@@ -35,8 +35,6 @@ export interface RegistryEntry {
     family: string;
     /** Combined request/response context capacity in tokens. */
     contextWindow: number;
-    /** Selectable context lengths; absence offers only {@link contextWindow} itself. */
-    contextOptions?: number[];
     reasoning?: RegistryReasoning;
     /**
      * Whether this model accepts image input through the endpoint. Verified by
@@ -52,6 +50,20 @@ export interface RegistryEntry {
 }
 /** Context capacity assumed for a model the registry does not size. */
 export declare const FALLBACK_CONTEXT_WINDOW = 131072;
+/**
+ * The context ladder the picker offers, smallest first: 200K is the floor
+ * every model clears, then the two common steps, then the 1M ceiling. A model
+ * is only ever offered the steps at or below its own window, so the choice a
+ * user makes is always one the model can actually honour.
+ */
+export declare const CONTEXT_LADDER: readonly number[];
+/**
+ * The ladder steps one model can offer. A window below the whole ladder still
+ * offers itself, so no model is left without a choice.
+ * @param contextWindow - the model's declared capacity.
+ * @returns the offered lengths, smallest first.
+ */
+export declare function contextChoicesFor(contextWindow: number): number[];
 /**
  * The initial registry. Order is presentation order, but the adapter re-sorts
  * by {@link RegistryEntry.rank} so the recommended models lead the menu.

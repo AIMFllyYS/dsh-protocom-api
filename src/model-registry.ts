@@ -39,8 +39,6 @@ export interface RegistryEntry {
   family: string
   /** Combined request/response context capacity in tokens. */
   contextWindow: number
-  /** Selectable context lengths; absence offers only {@link contextWindow} itself. */
-  contextOptions?: number[]
   reasoning?: RegistryReasoning
   /**
    * Whether this model accepts image input through the endpoint. Verified by
@@ -80,11 +78,24 @@ const GPT_REASONING: RegistryReasoning = {
   defaultEffort: 'medium',
 }
 
-/** Context lengths offered for a 1M model: 256K, 512K, and the full window. */
-const LENGTHS_1M = [CONTEXT_256K, 524_288, CONTEXT_1M]
+/**
+ * The context ladder the picker offers, smallest first: 200K is the floor
+ * every model clears, then the two common steps, then the 1M ceiling. A model
+ * is only ever offered the steps at or below its own window, so the choice a
+ * user makes is always one the model can actually honour.
+ */
+export const CONTEXT_LADDER: readonly number[] = [204_800, CONTEXT_256K, 409_600, CONTEXT_1M]
 
-/** Context lengths offered for a 256K model. */
-const LENGTHS_256K = [131_072, CONTEXT_256K]
+/**
+ * The ladder steps one model can offer. A window below the whole ladder still
+ * offers itself, so no model is left without a choice.
+ * @param contextWindow - the model's declared capacity.
+ * @returns the offered lengths, smallest first.
+ */
+export function contextChoicesFor(contextWindow: number): number[] {
+  const offered = CONTEXT_LADDER.filter(length => length <= contextWindow)
+  return offered.length > 0 ? [...offered] : [contextWindow]
+}
 
 /**
  * The initial registry. Order is presentation order, but the adapter re-sorts
@@ -96,7 +107,6 @@ export const REGISTRY: readonly RegistryEntry[] = [
     displayName: 'Kimi K3',
     family: 'kimi',
     contextWindow: CONTEXT_256K,
-    contextOptions: LENGTHS_256K,
     reasoning: { efforts: ['low', 'high'], defaultEffort: 'high' },
     vision: true,
     rank: 1,
@@ -106,7 +116,6 @@ export const REGISTRY: readonly RegistryEntry[] = [
     displayName: 'GLM-5.2',
     family: 'glm',
     contextWindow: CONTEXT_1M,
-    contextOptions: LENGTHS_1M,
     reasoning: GLM_REASONING,
     rank: 2,
   },
@@ -115,7 +124,6 @@ export const REGISTRY: readonly RegistryEntry[] = [
     displayName: 'MiMo V2.5',
     family: 'mimo',
     contextWindow: CONTEXT_1M,
-    contextOptions: LENGTHS_1M,
     reasoning: { efforts: ['off', 'low', 'medium', 'high'], defaultEffort: 'high' },
     vision: true,
     rank: 3,
@@ -125,7 +133,6 @@ export const REGISTRY: readonly RegistryEntry[] = [
     displayName: 'DeepSeek V4.1 Flash',
     family: 'deepseek',
     contextWindow: CONTEXT_1M,
-    contextOptions: LENGTHS_1M,
     reasoning: { efforts: ['off', 'low', 'high', 'max'], defaultEffort: 'off' },
     vision: true,
   },
@@ -134,7 +141,6 @@ export const REGISTRY: readonly RegistryEntry[] = [
     displayName: 'DeepSeek V4.1 Flash',
     family: 'deepseek',
     contextWindow: CONTEXT_1M,
-    contextOptions: LENGTHS_1M,
     reasoning: { efforts: ['off', 'low', 'high', 'max'], defaultEffort: 'off' },
     vision: true,
   },
@@ -143,7 +149,6 @@ export const REGISTRY: readonly RegistryEntry[] = [
     displayName: 'Kimi K2.7 Code',
     family: 'kimi',
     contextWindow: CONTEXT_256K,
-    contextOptions: LENGTHS_256K,
     reasoning: { efforts: ['off', 'low', 'medium', 'high'], defaultEffort: 'medium' },
     vision: true,
   },
@@ -152,7 +157,6 @@ export const REGISTRY: readonly RegistryEntry[] = [
     displayName: 'GLM-5.2',
     family: 'glm',
     contextWindow: CONTEXT_1M,
-    contextOptions: LENGTHS_1M,
     reasoning: GLM_REASONING,
   },
   {
@@ -160,7 +164,6 @@ export const REGISTRY: readonly RegistryEntry[] = [
     displayName: 'GLM-5.3',
     family: 'glm',
     contextWindow: CONTEXT_1M,
-    contextOptions: LENGTHS_1M,
     reasoning: GLM_REASONING,
   },
   {
@@ -168,7 +171,6 @@ export const REGISTRY: readonly RegistryEntry[] = [
     displayName: 'GLM-5.3 Flash',
     family: 'glm',
     contextWindow: CONTEXT_1M,
-    contextOptions: LENGTHS_1M,
     reasoning: GLM_REASONING,
     vision: true,
   },
@@ -177,20 +179,18 @@ export const REGISTRY: readonly RegistryEntry[] = [
     displayName: 'GLM-5.3 FlashX',
     family: 'glm',
     contextWindow: CONTEXT_1M,
-    contextOptions: LENGTHS_1M,
     reasoning: GLM_REASONING,
     vision: true,
   },
-  { id: 'Qwen/Qwen3.8-27B', displayName: 'Qwen3.8 27B', family: 'qwen', contextWindow: CONTEXT_1M, contextOptions: LENGTHS_1M, vision: true },
-  { id: 'qwen3.8-max', displayName: 'Qwen3.8 Max', family: 'qwen', contextWindow: CONTEXT_1M, contextOptions: LENGTHS_1M },
-  { id: 'Qwen/Qwen3.7-Flash', displayName: 'Qwen3.7 Flash', family: 'qwen', contextWindow: CONTEXT_256K, contextOptions: LENGTHS_256K, vision: true },
-  { id: 'Qwen/Qwen3.8-Omni-Flash', displayName: 'Qwen3.8 Omni Flash', family: 'qwen', contextWindow: CONTEXT_1M, contextOptions: LENGTHS_1M, vision: true },
+  { id: 'Qwen/Qwen3.8-27B', displayName: 'Qwen3.8 27B', family: 'qwen', contextWindow: CONTEXT_1M, vision: true },
+  { id: 'qwen3.8-max', displayName: 'Qwen3.8 Max', family: 'qwen', contextWindow: CONTEXT_1M },
+  { id: 'Qwen/Qwen3.7-Flash', displayName: 'Qwen3.7 Flash', family: 'qwen', contextWindow: CONTEXT_256K, vision: true },
+  { id: 'Qwen/Qwen3.8-Omni-Flash', displayName: 'Qwen3.8 Omni Flash', family: 'qwen', contextWindow: CONTEXT_1M, vision: true },
   {
     id: 'MiniMaxAI/MiniMax-M3',
     displayName: 'MiniMax M3',
     family: 'minimax',
     contextWindow: CONTEXT_1M,
-    contextOptions: LENGTHS_1M,
     reasoning: { efforts: ['low', 'medium', 'high'], defaultEffort: 'high' },
     vision: true,
   },
@@ -199,7 +199,6 @@ export const REGISTRY: readonly RegistryEntry[] = [
     displayName: 'MiMo V2.5 Pro',
     family: 'mimo',
     contextWindow: CONTEXT_1M,
-    contextOptions: LENGTHS_1M,
     reasoning: { efforts: ['off', 'low', 'medium', 'high'], defaultEffort: 'high' },
   },
   {
@@ -207,15 +206,13 @@ export const REGISTRY: readonly RegistryEntry[] = [
     displayName: 'Gemini 3.8 Flash',
     family: 'gemini',
     contextWindow: CONTEXT_1M,
-    contextOptions: LENGTHS_1M,
     vision: true,
   },
   {
     id: 'gpt-5.6-sol',
     displayName: 'GPT-5.6 Sol',
     family: 'gpt',
-    contextWindow: 1_050_000,
-    contextOptions: LENGTHS_1M,
+    contextWindow: CONTEXT_1M,
     reasoning: GPT_REASONING,
     vision: true,
   },
@@ -223,8 +220,7 @@ export const REGISTRY: readonly RegistryEntry[] = [
     id: 'gpt-5.6-luna',
     displayName: 'GPT-5.6 Luna',
     family: 'gpt',
-    contextWindow: 1_050_000,
-    contextOptions: LENGTHS_1M,
+    contextWindow: CONTEXT_1M,
     reasoning: GPT_REASONING,
     vision: true,
   },
@@ -234,16 +230,16 @@ export const REGISTRY: readonly RegistryEntry[] = [
   // catalogued rather than blocked — the picker's toggles are how a deployment
   // says which models it wants, and a model that starts serving should simply
   // start working.
-  { id: 'google/gemini-3.7-flash', displayName: 'Gemini 3.7 Flash', family: 'gemini', contextWindow: CONTEXT_1M, contextOptions: LENGTHS_1M, vision: true },
-  { id: 'tencent/hy4-preview', displayName: 'HY-4 Preview', family: 'hunyuan', contextWindow: CONTEXT_256K, contextOptions: LENGTHS_256K },
-  { id: 'inclusionai/ling-3.0-flash-sante:free', displayName: 'Ling 3.0 Flash Sante', family: 'inclusionai', contextWindow: CONTEXT_256K, contextOptions: LENGTHS_256K },
-  { id: 'Qwen/Qwen3.8-Flash', displayName: 'Qwen3.8 Flash', family: 'qwen', contextWindow: CONTEXT_1M, contextOptions: LENGTHS_1M, vision: true },
+  { id: 'google/gemini-3.7-flash', displayName: 'Gemini 3.7 Flash', family: 'gemini', contextWindow: CONTEXT_1M, vision: true },
+  { id: 'tencent/hy4-preview', displayName: 'HY-4 Preview', family: 'hunyuan', contextWindow: CONTEXT_256K },
+  { id: 'inclusionai/ling-3.0-flash-sante:free', displayName: 'Ling 3.0 Flash Sante', family: 'inclusionai', contextWindow: CONTEXT_256K },
+  { id: 'Qwen/Qwen3.8-Flash', displayName: 'Qwen3.8 Flash', family: 'qwen', contextWindow: CONTEXT_1M, vision: true },
   // Context values below follow each model's published ceiling; the two marked
   // unverified follow their family's documented window.
-  { id: 'tencent/hy3-paid', displayName: 'HY-3', family: 'hunyuan', contextWindow: CONTEXT_256K, contextOptions: LENGTHS_256K },
-  { id: 'meituan/LongCat-2.0:free', displayName: 'LongCat 2.0', family: 'longcat', contextWindow: CONTEXT_256K, contextOptions: LENGTHS_256K },
-  { id: 'poolside/laguna-s-2.1-free', displayName: 'Laguna S 2.1 Free', family: 'poolside', contextWindow: CONTEXT_256K, contextOptions: LENGTHS_256K },
-  { id: 'meta/muse-spark-1.3-contributor', displayName: 'Muse Spark 1.3 Contributor', family: 'meta', contextWindow: CONTEXT_1M, contextOptions: LENGTHS_1M, vision: true },
+  { id: 'tencent/hy3-paid', displayName: 'HY-3', family: 'hunyuan', contextWindow: CONTEXT_256K },
+  { id: 'meituan/LongCat-2.0:free', displayName: 'LongCat 2.0', family: 'longcat', contextWindow: CONTEXT_256K },
+  { id: 'poolside/laguna-s-2.1-free', displayName: 'Laguna S 2.1 Free', family: 'poolside', contextWindow: CONTEXT_256K },
+  { id: 'meta/muse-spark-1.3-contributor', displayName: 'Muse Spark 1.3 Contributor', family: 'meta', contextWindow: CONTEXT_1M, vision: true },
 ]
 
 /** Find the registry entry for one upstream id. */
@@ -371,7 +367,7 @@ export function catalogEntry(upstream: UpstreamModel, groupReasoning?: GroupReas
     upstreamId: upstream.id,
     displayName: entry.displayName,
     contextWindow: entry.contextWindow,
-    ...entry.contextOptions === undefined ? {} : { contextOptions: [...entry.contextOptions] },
+    contextOptions: contextChoicesFor(entry.contextWindow),
     ...reasoning === undefined ? {} : { reasoning },
     vision: entry.vision === true,
     rank: entry.rank ?? Number.MAX_SAFE_INTEGER,

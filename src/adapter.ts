@@ -152,6 +152,27 @@ export class ProtocomAdapter extends LlmAdapter {
     return model.vision && group.protocol === 'chat-completions' ? ['text', 'image'] : ['text']
   }
 
+  /**
+   * The context lengths one model should be offered at. The picker's per-model
+   * choice wins — that is the surface a user actually sets — then the group's
+   * own `contextLengths`, then nothing, which offers the model once at its
+   * full window. A chosen length above the model's window is dropped rather
+   * than advertised, because the model could not honour it.
+   */
+  private contextLengthsFor(
+    group: ResolvedGroup,
+    model: CatalogModel,
+    upstreamId: string,
+  ): number[] | undefined {
+    const chosen = this.config.options().modelContexts.get(identityKey(upstreamId))
+    if (chosen !== undefined && chosen.length > 0) {
+      const allowed = chosen.filter(length => length <= model.contextWindow)
+      if (allowed.length > 0) return [...allowed].sort((left, right) => left - right)
+      return undefined
+    }
+    return variantLengths(model.contextOptions, group.contextLengths)
+  }
+
   /** Whether one exact upstream model accepts image input on this route. */
   private acceptsImages(group: ResolvedGroup, upstreamId: string): boolean {
     return matchRegistry(upstreamId)?.vision === true && group.protocol === 'chat-completions'
@@ -161,7 +182,7 @@ export class ProtocomAdapter extends LlmAdapter {
   private modelEntries(provider: string, group: ResolvedGroup, upstream: UpstreamModel): LlmModelInfo[] {
     const model = catalogEntry(upstream, GROUP_DEFAULTS[group.key].reasoning)
     const inputModalities = this.modalitiesOf(group, model)
-    const lengths = variantLengths(model.contextOptions, group.contextLengths)
+    const lengths = this.contextLengthsFor(group, model, upstream.id)
     if (lengths === undefined) {
       return [{
         provider,

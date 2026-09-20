@@ -13,9 +13,9 @@ import type { CredentialInfo, LlmDiscoveredModel, SettingsNamespaceView } from '
 import { defaultKeyRef, GROUP_DEFAULTS, GROUP_KEYS, providerOf } from '../groups.ts'
 import type { GroupKey, Protocol } from '../groups.ts'
 import { catalogEntry, contextLabel, DEFAULT_RECOMMENDED, modelIdentities } from '../model-registry.ts'
+import { variantChoicesFor } from './variants.ts'
 import type { GroupBalance } from '../balance.ts'
 import type { ProtocomOperations } from './operations.ts'
-import { toggleLength, variantChoicesFor } from './variants.ts'
 import type { en } from './locale.ts'
 
 /** Injected dependencies of {@link ProtocomSection} (slot `inject`). */
@@ -48,6 +48,7 @@ interface SectionValue {
   groups?: Record<string, GroupSectionValue>
   hiddenModels?: string[]
   recommendedModels?: string[]
+  modelContexts?: Record<string, number[]>
 }
 
 interface PageState {
@@ -305,7 +306,6 @@ function GroupCard({ groupKey, group, credential, writable, revision, baseURL, o
                 <tr>
                   <th>{t('colModel')}</th>
                   <th>{t('colId')}</th>
-                  <th>{t('colVariants')}</th>
                 </tr>
               </thead>
               <tbody>
@@ -318,27 +318,6 @@ function GroupCard({ groupKey, group, credential, writable, revision, baseURL, o
                     <tr key={model.id}>
                       <td>{entry.displayName}</td>
                       <td><span className="protocom-probe-id">{model.id}</span></td>
-                      <td>
-                        {variantChoicesFor(model.id).map(length => (
-                          <label
-                            key={length}
-                            className={group.contextLengths.includes(length) ? 'protocom-chip is-on' : 'protocom-chip'}
-                          >
-                            <input
-                              type="checkbox"
-                              checked={group.contextLengths.includes(length)}
-                              disabled={!writable}
-                              onChange={() => {
-                                const next = toggleLength(group.contextLengths, length)
-                                void write(next.length === 0
-                                  ? [{ op: 'unset', path: ['groups', groupKey, 'contextLengths'] }]
-                                  : [{ op: 'set', path: ['groups', groupKey, 'contextLengths'], value: next }])
-                              }}
-                            />
-                            {contextLabel(length)}
-                          </label>
-                        ))}
-                      </td>
                     </tr>
                   )
                 })}
@@ -370,9 +349,10 @@ function GroupCard({ groupKey, group, credential, writable, revision, baseURL, o
  * complete even while the listing is short or unreachable; the switch only
  * removes an entry from the model menu.
  */
-function ModelVisibilityCard({ hidden, recommended, writable, revision, operations, t, onChanged }: {
+function ModelVisibilityCard({ hidden, recommended, contexts, writable, revision, operations, t, onChanged }: {
   hidden: readonly string[]
   recommended: readonly string[]
+  contexts: Readonly<Record<string, number[]>>
   writable: boolean
   revision: number | undefined
   operations: ProtocomOperations
@@ -382,8 +362,8 @@ function ModelVisibilityCard({ hidden, recommended, writable, revision, operatio
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | undefined>(undefined)
   const hiddenSet = new Set(hidden)
-  // One chip per model identity: the endpoint lists some models under two ids,
-  // and hiding either alone would leave the other in the menu.
+  // One row per model identity: the endpoint lists some models under two ids,
+  // and acting on either alone would leave the other in the menu.
   const identities = modelIdentities()
   const everyId = identities.flatMap(identity => identity.ids)
   const recommendedSet = new Set(recommended)
@@ -405,6 +385,30 @@ function ModelVisibilityCard({ hidden, recommended, writable, revision, operatio
     write(next.length === 0
       ? [{ op: 'unset', path: ['hiddenModels'] }]
       : [{ op: 'set', path: ['hiddenModels'], value: next }])
+  }
+
+  /**
+   * The context lengths a model currently offers. Absent means the model is
+   * offered once at its full window, which is what the row shows lit.
+   */
+  const lengthsOf = (ids: readonly string[], fallback: number): number[] => {
+    for (const id of ids) {
+      const stored = contexts[id]
+      if (stored !== undefined && stored.length > 0) return [...stored].sort((left, right) => left - right)
+    }
+    return [fallback]
+  }
+
+  /**
+   * Store one model's context choice under its identity key. Choosing exactly
+   * the model's own window again is the default, so it is unset instead of
+   * written, keeping the stored section free of no-op entries.
+   */
+  const writeContexts = (key: string, next: number[], fallback: number): void => {
+    const isDefault = next.length === 1 && next[0] === fallback
+    write(isDefault
+      ? [{ op: 'unset', path: ['modelContexts', key] }]
+      : [{ op: 'set', path: ['modelContexts', key], value: next }])
   }
 
   /**
@@ -444,19 +448,19 @@ function ModelVisibilityCard({ hidden, recommended, writable, revision, operatio
       </div>
       <p className="protocom-notice">{t('modelsHint')}</p>
       {error === undefined ? null : <p className="protocom-error">{error}</p>}
-      <div className="protocom-model-grid">
+      <div className="protocom-models">
         {identities.map(({ displayName, ids, entry }) => {
           const shown = ids.every(id => !hiddenSet.has(id))
           const starred = recommendedSet.has(ids[0] as string)
+          const selected = lengthsOf(ids, entry.contextWindow)
           const meta = [
-            contextLabel(entry.contextWindow),
             ...entry.vision === true ? [t('tagVision')] : [],
             ...entry.reasoning === undefined ? [] : [t('tagReasoning')],
           ].join(' · ')
           return (
             <div
               key={displayName}
-              className={shown ? 'protocom-model-chip is-on' : 'protocom-model-chip is-off'}
+              className={shown ? 'protocom-model-row' : 'protocom-model-row is-off'}
               title={ids.join('\n')}
             >
               <label className="protocom-model-pick">
@@ -472,8 +476,39 @@ function ModelVisibilityCard({ hidden, recommended, writable, revision, operatio
                 />
                 <span className="protocom-model-dot" />
                 <span className="protocom-model-name">{displayName}</span>
-                <span className="protocom-model-meta">{meta}</span>
               </label>
+              {meta.length === 0 ? null : <span className="protocom-model-meta">{meta}</span>}
+              <span className="protocom-model-spacer" />
+              {/* The ladder stays visible while a model is listed so its
+                  context set reads as one control, not a hidden setting. */}
+              {shown
+                ? (
+                  <span className="protocom-ctx" role="group" aria-label={t('contextTitle')}>
+                    {variantChoicesFor(entry.id).map((length) => {
+                      const on = selected.includes(length)
+                      const last = on && selected.length === 1
+                      return (
+                        <button
+                          key={length}
+                          type="button"
+                          className={on ? 'is-on' : undefined}
+                          aria-pressed={on}
+                          disabled={!writable || busy || last}
+                          title={last ? t('contextLastTitle') : t('contextTitle')}
+                          onClick={() => {
+                            const next = on
+                              ? selected.filter(value => value !== length)
+                              : [...selected, length].sort((left, right) => left - right)
+                            writeContexts(ids[0] as string, next, entry.contextWindow)
+                          }}
+                        >
+                          {contextLabel(length)}
+                        </button>
+                      )
+                    })}
+                  </span>
+                )
+                : null}
               <button
                 type="button"
                 className={starred ? 'protocom-model-star is-on' : 'protocom-model-star'}
@@ -491,6 +526,7 @@ function ModelVisibilityCard({ hidden, recommended, writable, revision, operatio
     </li>
   )
 }
+
 
 /**
  * Render the Protocom API section content column.
@@ -581,6 +617,7 @@ function Loaded({ operations, t }: { operations: ProtocomOperations; t: Translat
         <ModelVisibilityCard
           hidden={section.hiddenModels ?? []}
           recommended={section.recommendedModels ?? DEFAULT_RECOMMENDED}
+          contexts={section.modelContexts ?? {}}
           writable={writable}
           revision={revision}
           operations={operations}

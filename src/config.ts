@@ -52,6 +52,13 @@ export interface Config {
    * else: a model left off the list stays fully selectable below the picks.
    */
   recommendedModels?: string[]
+  /**
+   * Context lengths to offer per upstream model id. Each listed length becomes
+   * its own model-menu entry (`Name [256K]`, `Name [1M]`), so a user picks the
+   * context by picking the entry. An absent model offers one entry at its full
+   * window; a length above the model's window is ignored.
+   */
+  modelContexts?: Record<string, number[]>
 }
 
 const group: z<GroupConfig> = z.object({
@@ -68,6 +75,7 @@ export const Config: z<Config> = z.object({
   groups: z.dict(group).default({}),
   hiddenModels: z.array(z.string()).default([]),
   recommendedModels: z.array(z.string()).default([...DEFAULT_RECOMMENDED]),
+  modelContexts: z.dict(z.array(z.number().step(1).min(1))).default({}),
 })
 
 /** Validated per-group facts with every adapter-owned default resolved. */
@@ -101,6 +109,8 @@ export interface ResolvedProtocomOptions {
   hiddenModels: ReadonlySet<string>
   /** Upstream ids that lead the model menu, most preferred first. */
   recommendedModels: readonly string[]
+  /** Context lengths to offer per upstream id, keyed by model identity. */
+  modelContexts: ReadonlyMap<string, readonly number[]>
 }
 
 /**
@@ -164,9 +174,27 @@ export function resolveAdapterOptions(config: Config): ResolvedProtocomOptions {
       throw new Error('protocom-api: recommendedModels entries must be non-empty model ids')
     }
   }
+  const contexts = new Map<string, readonly number[]>()
+  for (const [id, lengths] of Object.entries(config.modelContexts ?? {})) {
+    if (id.length === 0) {
+      throw new Error('protocom-api: modelContexts keys must be non-empty model ids')
+    }
+    if (lengths.length === 0) {
+      throw new Error(`protocom-api: modelContexts["${id}"] must list at least one length`)
+    }
+    if (lengths.some(length => !Number.isSafeInteger(length) || length <= 0)) {
+      throw new Error(`protocom-api: modelContexts["${id}"] lengths must be positive integers`)
+    }
+    if (new Set(lengths).size !== lengths.length) {
+      throw new Error(`protocom-api: modelContexts["${id}"] lengths must not repeat`)
+    }
+    // Keyed by identity so an alias spelling configures the same model once.
+    contexts.set(identityKey(id), [...lengths].sort((left, right) => left - right))
+  }
   return {
     baseURL,
     groups,
+    modelContexts: contexts,
     hiddenModels: new Set(hidden),
     // Aliases collapse to one key, so picking either id recommends the model
     // once and the ordering cannot depend on which spelling was stored.

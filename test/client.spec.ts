@@ -13,18 +13,20 @@ describe('variantChoicesFor', () => {
     expect(variantChoicesFor('some-unknown-model')).toEqual(STANDARD_VARIANT_CHOICES)
   })
 
-  it('offers the registry lengths for a listed model', () => {
-    expect(variantChoicesFor('deepseek/deepseek-v4.1-flash')).toEqual([262_144, 524_288, 1_048_576])
+  it('offers the ladder steps a listed model can honour', () => {
+    // A 1M model offers the whole ladder; a 256K model only its first two.
+    expect(variantChoicesFor('deepseek/deepseek-v4.1-flash')).toEqual([204_800, 262_144, 409_600, 1_048_576])
+    expect(variantChoicesFor('kimi-k3')).toEqual([204_800, 262_144])
   })
 })
 
 describe('toggleLength', () => {
   it('adds a length, keeping the list sorted and unique', () => {
-    expect(toggleLength([1_048_576, 131_072], 524_288)).toEqual([131_072, 524_288, 1_048_576])
+    expect(toggleLength([1_048_576, 204_800], 409_600)).toEqual([204_800, 409_600, 1_048_576])
     expect(toggleLength([], 262_144)).toEqual([262_144])
   })
 
   it('removes a length already present', () => {
-    expect(toggleLength([131_072, 524_288], 131_072)).toEqual([524_288])
+    expect(toggleLength([204_800, 409_600], 204_800)).toEqual([409_600])
   })
 })

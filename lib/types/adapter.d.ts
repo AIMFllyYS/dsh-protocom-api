@@ -60,6 +60,14 @@ export declare class ProtocomAdapter extends LlmAdapter {
      * that would fail at dispatch.
      */
     private modalitiesOf;
+    /**
+     * The context lengths one model should be offered at. The picker's per-model
+     * choice wins — that is the surface a user actually sets — then the group's
+     * own `contextLengths`, then nothing, which offers the model once at its
+     * full window. A chosen length above the model's window is dropped rather
+     * than advertised, because the model could not honour it.
+     */
+    private contextLengthsFor;
     /** Whether one exact upstream model accepts image input on this route. */
     private acceptsImages;
     /** The catalog entries one discovered model advertises, one per variant. */
