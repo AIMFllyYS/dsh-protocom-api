@@ -10,11 +10,12 @@ import { useEffect, useState } from 'react'
 import type { ReactNode } from 'react'
 import type { InjectFace } from '@deepseek-ai/dsh-client-ui-slots'
 import type { CredentialInfo, LlmDiscoveredModel, SettingsNamespaceView } from '@deepseek-ai/dsh-api-remotes/client'
-import { defaultKeyRef, GROUP_DEFAULTS, GROUP_KEYS, providerOf } from '../groups.ts'
+import { DEFAULT_BASE_URL_ORIGIN, defaultKeyRef, GROUP_DEFAULTS, GROUP_KEYS, providerOf } from '../groups.ts'
 import type { GroupKey, Protocol } from '../groups.ts'
 import { catalogEntry, contextLabel, DEFAULT_RECOMMENDED, modelIdentities } from '../model-registry.ts'
 import { variantChoicesFor } from './variants.ts'
-import type { GroupBalance } from '../balance.ts'
+import { parseBalanceView } from '../balance-view.ts'
+import type { GroupBalance } from '../balance-view.ts'
 import type { ProtocomOperations } from './operations.ts'
 import type { en } from './locale.ts'
 
@@ -45,6 +46,7 @@ interface GroupSectionValue {
 /** The plugin's redacted section value. */
 interface SectionValue {
   baseURL?: string
+  allowCustomBaseURL?: boolean
   groups?: Record<string, GroupSectionValue>
   hiddenModels?: string[]
   recommendedModels?: string[]
@@ -68,7 +70,9 @@ function groupValueOf(section: SectionValue, key: GroupKey): Required<GroupSecti
   return {
     enabled: raw.enabled ?? false,
     protocol: raw.protocol ?? GROUP_DEFAULTS[key].protocol,
-    contextLengths: raw.contextLengths ?? [],
+    // The card shows the effective lengths, so a group that ships a ladder
+    // (StepFun) reads as configured before the deployment stores its own.
+    contextLengths: raw.contextLengths ?? [...GROUP_DEFAULTS[key].contextLengths ?? []],
     showBalance: raw.showBalance ?? true,
   }
 }
@@ -78,7 +82,7 @@ function formatAmount(value: number, unit: string | undefined): string {
 }
 
 /** The balance strip of one group card. */
-function BalanceView({ group, balance, phase, error, onRefresh, t }: {
+export function BalanceView({ group, balance, phase, error, onRefresh, t }: {
   group: GroupKey
   balance: GroupBalance | undefined
   phase: 'idle' | 'loading' | 'ready' | 'error'
@@ -198,11 +202,21 @@ function GroupCard({ groupKey, group, credential, writable, revision, baseURL, o
     setBalance(previous => ({ ...previous, phase: 'loading', error: undefined }))
     try {
       const response = await fetch(`/api/protocom-api/balance?group=${groupKey}`)
+      // The route is fenced by the Host carrier, so an unauthenticated request
+      // or a profile without the connection service answers 401/403/404. That
+      // is "no balance surface here", not a failure worth a red message.
+      if (response.status === 401 || response.status === 403 || response.status === 404) {
+        setBalance({ phase: 'error', data: undefined, error: t('balanceUnavailable') })
+        return
+      }
       if (!response.ok) {
         const body = await response.json().catch(() => undefined) as { error?: string } | undefined
-        throw new Error(body?.error ?? `HTTP ${response.status}`)
+        throw new Error(typeof body?.error === 'string' ? body.error : `HTTP ${response.status}`)
       }
-      const data = await response.json() as GroupBalance
+      // The body is a trust boundary: re-validate rather than asserting, so a
+      // malformed reply cannot reach toFixed/slice and crash the strip.
+      const data = parseBalanceView(await response.json())
+      if (data === undefined) throw new Error(t('balanceUnavailable'))
       setBalance({ phase: 'ready', data, error: undefined })
     } catch (error: unknown) {
       setBalance({ phase: 'error', data: undefined, error: error instanceof Error ? error.message : String(error) })
@@ -220,7 +234,7 @@ function GroupCard({ groupKey, group, credential, writable, revision, baseURL, o
     if (keyDraft.length === 0 || keyBusy) return
     setKeyBusy(true)
     setKeyMessage(undefined)
-    void operations.storeApiKey(groupKey, ref, keyDraft)
+    void operations.storeApiKey(groupKey, ref, keyDraft, revision)
       .then(async (failure) => {
         if (failure !== undefined) {
           setKeyMessage({ kind: 'error', text: failure })
@@ -278,6 +292,8 @@ function GroupCard({ groupKey, group, credential, writable, revision, baseURL, o
           placeholder={credentialConfigured ? t('keyConfigured') : t('keyPlaceholder')}
           aria-label={`${t('apiKey')} (${ref})`}
           disabled={!writable || credential?.writable === false}
+          autoComplete="new-password"
+          spellCheck={false}
           onChange={event => { setKeyDraft(event.target.value) }}
         />
         <button type="button" className="protocom-button protocom-button-primary" disabled={!writable || keyBusy || keyDraft.length === 0} onClick={saveKey}>
@@ -542,6 +558,7 @@ export function ProtocomSection(props: ProtocomSectionProps): ReactNode {
 function Loaded({ operations, t }: { operations: ProtocomOperations; t: Translator }): ReactNode {
   const [state, setState] = useState<PageState>({ phase: 'loading', credentials: {} })
   const [baseDraft, setBaseDraft] = useState<string | undefined>(undefined)
+  const [allowCustomDraft, setAllowCustomDraft] = useState<boolean | undefined>(undefined)
   const [baseBusy, setBaseBusy] = useState(false)
   const [baseNotice, setBaseNotice] = useState<{ kind: 'ok' | 'error'; text: string } | undefined>(undefined)
 
@@ -577,11 +594,35 @@ function Loaded({ operations, t }: { operations: ProtocomOperations; t: Translat
   const writable = revision !== undefined
   const baseURL = section.baseURL
 
+  const allowCustom = allowCustomDraft ?? section.allowCustomBaseURL ?? false
+
   const applyBaseURL = (): void => {
     if (baseDraft === undefined || baseBusy) return
+    let origin: string | undefined
+    try {
+      origin = new URL(baseDraft).origin
+    } catch {
+      origin = undefined
+    }
+    const needsCustom = origin !== undefined && origin !== DEFAULT_BASE_URL_ORIGIN
+    if (needsCustom && !allowCustom) {
+      setBaseNotice({ kind: 'error', text: t('allowCustomRequired') })
+      return
+    }
     setBaseBusy(true)
     setBaseNotice(undefined)
-    void operations.writeSettings([{ op: 'set', path: ['baseURL'], value: baseDraft }], revision)
+    // Both fields ride one atomic write so they can never diverge, and applying
+    // the shipped endpoint *clears* the confirmation instead of leaving a
+    // sticky opt-in that a later single-field write could ride on.
+    void operations.writeSettings(needsCustom
+      ? [
+        { op: 'set', path: ['allowCustomBaseURL'], value: true },
+        { op: 'set', path: ['baseURL'], value: baseDraft },
+      ]
+      : [
+        { op: 'unset', path: ['allowCustomBaseURL'] },
+        { op: 'set', path: ['baseURL'], value: baseDraft },
+      ], revision)
       .then(async (outcome) => {
         if (outcome.kind !== 'written') {
           setBaseNotice({ kind: 'error', text: outcome.message })
@@ -637,6 +678,17 @@ function Loaded({ operations, t }: { operations: ProtocomOperations; t: Translat
             disabled={!writable}
             onChange={event => { setBaseDraft(event.target.value) }}
           />
+          <label className="protocom-check">
+            <input
+              type="checkbox"
+              checked={allowCustom}
+              disabled={!writable}
+              aria-label={t('allowCustom')}
+              onChange={event => { setAllowCustomDraft(event.target.checked) }}
+            />
+            {t('allowCustom')}
+          </label>
+          <p className="protocom-notice">{t('allowCustomHint')}</p>
           <button type="button" className="protocom-button" disabled={!writable || baseBusy} onClick={applyBaseURL}>
             {baseBusy ? t('applying') : t('apply')}
           </button>

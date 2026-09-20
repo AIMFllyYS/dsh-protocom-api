@@ -1,7 +1,11 @@
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { ProtocomAdapter } from '../src/adapter.ts'
 import { resolveAdapterOptions } from '../src/config.ts'
 import { modelIdentities, REGISTRY } from '../src/model-registry.ts'
+
+afterEach(() => {
+  vi.unstubAllGlobals()
+})
 
 /** An adapter whose credential always fails, so no listing is ever reachable. */
 function offlineAdapter(config: Parameters<typeof resolveAdapterOptions>[0]): ProtocomAdapter {
@@ -162,5 +166,69 @@ describe('catalog composition', () => {
       .toThrowError(/hiddenModels entries must be non-empty/)
     expect(() => resolveAdapterOptions({ ...ENABLED, hiddenModels: [7 as unknown as string] }))
       .toThrowError(/hiddenModels entries must be non-empty/)
+  })
+})
+
+const AGGREGATE = { groups: { aggregate: { enabled: true, apiKey: 'PROTOCOM_AGGREGATE_API_KEY' } } }
+const STEPFUN = { groups: { stepfun: { enabled: true, apiKey: 'PROTOCOM_STEPFUN_API_KEY' } } }
+const CODEX = { groups: { codex: { enabled: true, apiKey: 'PROTOCOM_CODEX_API_KEY' } } }
+
+/** An adapter whose route lists exactly these models. */
+function listingAdapter(
+  config: Parameters<typeof resolveAdapterOptions>[0],
+  models: readonly Record<string, unknown>[],
+): ProtocomAdapter {
+  vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ data: models }), { status: 200 })))
+  const options = resolveAdapterOptions(config)
+  return new ProtocomAdapter({ options: () => options, resolveApiKey: async () => 'listing-key' })
+}
+
+describe('per-group catalog membership (issues 1a/1b)', () => {
+  it('offers a route its own listed models and no foreign registry rows', async () => {
+    const listed = await listingAdapter(AGGREGATE, [{ id: 'step-5' }]).listModels('protocom-aggregate')
+    expect(listed.map(model => model.id)).toEqual(['step-5'])
+    expect(listed.some(model => model.id.startsWith('kimi'))).toBe(false)
+  })
+
+  it('still offers a registry entry tagged for the group when the listing omits it', async () => {
+    const listed = await listingAdapter(CODEX, [{ id: 'something-else' }]).listModels('protocom-codex')
+    expect(listed.map(model => model.id).sort()).toEqual(['gpt-5.6-luna', 'gpt-5.6-sol', 'something-else'])
+  })
+
+  it('assumes the ladder floor, never 128K, for a model nothing sizes', async () => {
+    const listed = await listingAdapter(AGGREGATE, [{ id: 'mystery-model' }]).listModels('protocom-aggregate')
+    expect(listed).toHaveLength(1)
+    expect(listed[0]?.name).toBe('mystery-model [200K]')
+    expect(listed[0]?.name).not.toContain('128K')
+  })
+
+  it('ships StepFun its published four-step ladder', async () => {
+    const listed = await listingAdapter(STEPFUN, [{ id: 'step-5', display_name: 'Step-5' }])
+      .listModels('protocom-stepfun')
+    expect(listed.map(model => model.id)).toEqual([
+      'step-5::ctx@204800',
+      'step-5::ctx@262144',
+      'step-5::ctx@409600',
+      'step-5::ctx@1048576',
+    ])
+    expect(listed.map(model => model.name)).toEqual([
+      'Step-5 [200K]', 'Step-5 [256K]', 'Step-5 [400K]', 'Step-5 [1M]',
+    ])
+    expect(listed.every(model => !model.name.includes('128K'))).toBe(true)
+  })
+
+  it('lets a deployment override the shipped ladder', async () => {
+    const listed = await listingAdapter({
+      groups: {
+        stepfun: { enabled: true, apiKey: 'PROTOCOM_STEPFUN_API_KEY', contextLengths: [262_144] },
+      },
+    }, [{ id: 'step-5', display_name: 'Step-5' }]).listModels('protocom-stepfun')
+    expect(listed.map(model => model.id)).toEqual(['step-5::ctx@262144'])
+  })
+
+  it('offers the whole registry only when the listing carries no information', async () => {
+    // The safety net survives: a missing listing must not empty the menu.
+    const listed = await listingAdapter(AGGREGATE, []).listModels('protocom-aggregate')
+    expect(listed).toHaveLength(modelIdentities().length)
   })
 })

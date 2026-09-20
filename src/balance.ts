@@ -1,136 +1,50 @@
 /**
  * Balance queries against the Protocom official API's usage endpoint, with a
- * 60-second per-group cache and the loopback-only HTTP surface the web
- * settings page polls. Quota-limited and subscription/wallet deployments
- * answer with different shapes; both normalize into {@link GroupBalance}.
- * The billing-rate endpoint is absent on simple deployments, so its failure
- * is never fatal.
+ * 60-second per-group cache and a fenced Fetch surface the settings page polls.
+ * Quota-limited and subscription/wallet deployments answer with different
+ * shapes; both normalize into {@link GroupBalance}. The billing-rate endpoint
+ * is absent on simple deployments, so its failure is never fatal.
+ *
+ * The HTTP surface is a Host `connection.fetch` route, not a self-registered
+ * `webServer` exact route. Reachability is entirely the active carrier's
+ * policy: the Web carrier applies the Host/Origin fence plus browser
+ * authentication before dispatching here, while the desktop and webworker
+ * carriers serve `/api/*` directly over their IPC channel, which is their own
+ * trust boundary. This handler therefore implements no authorization of its own
+ * and never inspects the peer address.
  *
  * @module dsh-protocom-api/balance
  */
 
 import { attributionHeaders, LlmError } from '@deepseek-ai/dsh-llm'
-import type { IncomingMessage, ServerResponse } from 'node:http'
+import { normalizeUsage, parseRateMultiplier } from './balance-view.ts'
+import type { GroupBalance } from './balance-view.ts'
 import type { GroupKey, ResolvedGroup, ResolvedProtocomOptions } from './config.ts'
+
+export { parseBalanceView, parseRateMultiplier } from './balance-view.ts'
+export type { GroupBalance } from './balance-view.ts'
 
 const RATE_MULTIPLIER_PATH = '/v1/sub2api/billing'
 
-/** One group's normalized account state. */
-export interface GroupBalance {
-  mode?: string
-  status?: string
-  unit?: string
-  /** Quota-limited deployments: the cap, the spend, and what remains. */
-  limit?: number
-  used?: number
-  remaining?: number
-  /** Subscription/wallet deployments: the remaining balance and plan name. */
-  balance?: number
-  planName?: string
-  /** Subscription daily allowance fields, when disclosed. */
-  dailyUsageUsd?: number
-  dailyLimitUsd?: number
-  expiresAt?: string
-  /** Today's counters, when disclosed. */
-  todayRequests?: number
-  todayCost?: number
-  /** Current rate-window consumption, when disclosed. */
-  rpm?: number
-  tpm?: number
-  /** Billing rate multipliers, when the deployment reports them. */
-  rateMultiplier?: number
-  groupRateMultiplier?: number
-}
-
-function numberField(value: unknown): number | undefined {
-  return typeof value === 'number' && Number.isFinite(value) ? value : undefined
-}
-
-function stringField(value: unknown): string | undefined {
-  return typeof value === 'string' && value.length > 0 ? value : undefined
-}
-
-interface WireUsageReport {
-  mode?: unknown
-  status?: unknown
-  unit?: unknown
-  remaining?: unknown
-  balance?: unknown
-  planName?: unknown
-  quota?: { limit?: unknown; used?: unknown; remaining?: unknown }
-  subscription?: {
-    daily_usage_usd?: unknown
-    daily_limit_usd?: unknown
-    expires_at?: unknown
-  }
-  usage?: {
-    today?: { requests?: unknown; cost?: unknown }
-    rpm?: unknown
-    tpm?: unknown
-  }
-}
+/**
+ * How long one group's failure keeps the next caller from hitting the upstream
+ * again. Successes are cached for {@link BalanceService.TTL_MS}; failures are
+ * not, so without this a deployment whose upstream is down would issue a fresh
+ * request per poll (and the fan-out multiplied that). The window is short
+ * enough that a repaired key recovers promptly, and
+ * {@link BalanceService.invalidate} clears it outright.
+ */
+export const BALANCE_FAILURE_BACKOFF_MS = 5_000
 
 /**
- * Normalize one `/v1/usage` reply. Quota deployments carry `quota{limit,used,
- * remaining}`; subscription deployments carry `balance`, `planName`, and a
- * `subscription` block. Unrecognized fields are ignored, and both shapes may
- * coexist.
+ * Normalize one `/v1/usage` reply, refusing a body that is not an object.
+ * @throws LlmError code `BALANCE_FAILED` for a non-object reply.
  */
 export function parseUsage(body: unknown): GroupBalance {
   if (body === null || typeof body !== 'object' || Array.isArray(body)) {
     throw new LlmError('the usage endpoint did not answer with an object', 'BALANCE_FAILED')
   }
-  const report = body as WireUsageReport
-  const today = report.usage?.today
-  const balance: GroupBalance = {}
-  const mode = stringField(report.mode)
-  if (mode !== undefined) balance.mode = mode
-  const status = stringField(report.status)
-  if (status !== undefined) balance.status = status
-  const unit = stringField(report.unit)
-  if (unit !== undefined) balance.unit = unit
-  const limit = numberField(report.quota?.limit)
-  if (limit !== undefined) balance.limit = limit
-  const used = numberField(report.quota?.used)
-  if (used !== undefined) balance.used = used
-  const remaining = numberField(report.quota?.remaining ?? report.remaining)
-  if (remaining !== undefined) balance.remaining = remaining
-  const balanceField = numberField(report.balance)
-  if (balanceField !== undefined) balance.balance = balanceField
-  const planName = stringField(report.planName)
-  if (planName !== undefined) balance.planName = planName
-  const dailyUsageUsd = numberField(report.subscription?.daily_usage_usd)
-  if (dailyUsageUsd !== undefined) balance.dailyUsageUsd = dailyUsageUsd
-  const dailyLimitUsd = numberField(report.subscription?.daily_limit_usd)
-  if (dailyLimitUsd !== undefined) balance.dailyLimitUsd = dailyLimitUsd
-  const expiresAt = stringField(report.subscription?.expires_at)
-  if (expiresAt !== undefined) balance.expiresAt = expiresAt
-  const todayRequests = numberField(today?.requests)
-  if (todayRequests !== undefined) balance.todayRequests = todayRequests
-  const todayCost = numberField(today?.cost)
-  if (todayCost !== undefined) balance.todayCost = todayCost
-  const rpm = numberField(report.usage?.rpm)
-  if (rpm !== undefined) balance.rpm = rpm
-  const tpm = numberField(report.usage?.tpm)
-  if (tpm !== undefined) balance.tpm = tpm
-  return balance
-}
-
-interface WireRateMultiplier {
-  group_rate_multiplier?: unknown
-  resolved_rate_multiplier?: unknown
-}
-
-/** Normalize one billing-rate reply; absent fields stay absent. */
-export function parseRateMultiplier(body: unknown): Pick<GroupBalance, 'rateMultiplier' | 'groupRateMultiplier'> {
-  const parsed: Pick<GroupBalance, 'rateMultiplier' | 'groupRateMultiplier'> = {}
-  if (body === null || typeof body !== 'object' || Array.isArray(body)) return parsed
-  const report = body as WireRateMultiplier
-  const rateMultiplier = numberField(report.resolved_rate_multiplier)
-  if (rateMultiplier !== undefined) parsed.rateMultiplier = rateMultiplier
-  const groupRateMultiplier = numberField(report.group_rate_multiplier)
-  if (groupRateMultiplier !== undefined) parsed.groupRateMultiplier = groupRateMultiplier
-  return parsed
+  return normalizeUsage(body)
 }
 
 /** Inputs the balance service reads from the owning plugin. */
@@ -139,41 +53,64 @@ export interface BalanceHooks {
   options: () => ResolvedProtocomOptions
   /** Resolve one group's bearer token. */
   resolveApiKey: (group: ResolvedGroup) => Promise<string>
+  /** Local sink for failure detail deliberately kept out of HTTP responses. */
+  log?: (message: string) => void
 }
 
-/** Per-group balance queries with a 60-second cache. */
+function cacheKey(key: GroupKey, includeRates: boolean): string {
+  return `${key}|${includeRates ? 'rates' : 'plain'}`
+}
+
+/** Per-group balance queries with a 60-second cache and a bounded failure backoff. */
 export class BalanceService {
   /** Cache lifetime for one group's balance. */
   static readonly TTL_MS = 60_000
-  private readonly cache = new Map<GroupKey, { at: number; value: Promise<GroupBalance> }>()
+  private readonly cache = new Map<string, { at: number; value: Promise<GroupBalance> }>()
+  private readonly failedAt = new Map<GroupKey, number>()
 
   constructor(private readonly hooks: BalanceHooks) {}
 
   /** Forget every cached balance (a configuration change may alter any group). */
   invalidate(): void {
     this.cache.clear()
+    this.failedAt.clear()
   }
 
-  /** One group's balance, served from cache while fresh. */
-  balance(key: GroupKey): Promise<GroupBalance> {
+  /**
+   * One group's balance, served from cache while fresh.
+   * @param key - the group to query.
+   * @param includeRates - whether to also read the optional billing-rate endpoint.
+   */
+  balance(key: GroupKey, includeRates = false): Promise<GroupBalance> {
     const options = this.hooks.options()
     const group = options.groups.get(key)
     if (group === undefined || !group.enabled) {
       return Promise.reject(new LlmError(`protocom-api: group "${key}" is not enabled`, 'BALANCE_FAILED'))
     }
-    const hit = this.cache.get(key)
+    const entryKey = cacheKey(key, includeRates)
+    const hit = this.cache.get(entryKey)
     if (hit !== undefined && Date.now() - hit.at < BalanceService.TTL_MS) return hit.value
-    const value = this.fetchBalance(options.baseURL, group)
-    value.catch(() => {
-      // A failed fetch must not be cached: the next caller retries instead of
-      // replaying one outage until the TTL expires.
-      if (this.cache.get(key)?.value === value) this.cache.delete(key)
-    })
-    this.cache.set(key, { at: Date.now(), value })
+    const failedAt = this.failedAt.get(key)
+    if (failedAt !== undefined && Date.now() - failedAt < BALANCE_FAILURE_BACKOFF_MS) {
+      // Negative cache: a failing group must not fan out to the upstream on
+      // every poll. It clears on its own and on any configuration change.
+      return Promise.reject(new LlmError(`protocom-api: group "${key}" balance is backing off after a failure`, 'BALANCE_FAILED'))
+    }
+    const value = this.fetchBalance(options.baseURL, group, includeRates)
+    value.then(
+      () => { this.failedAt.delete(key) },
+      () => {
+        this.failedAt.set(key, Date.now())
+        // A failed fetch must not be cached: the next caller retries instead of
+        // replaying one outage until the TTL expires.
+        if (this.cache.get(entryKey)?.value === value) this.cache.delete(entryKey)
+      },
+    )
+    this.cache.set(entryKey, { at: Date.now(), value })
     return value
   }
 
-  private async fetchBalance(baseURL: string, group: ResolvedGroup): Promise<GroupBalance> {
+  private async fetchBalance(baseURL: string, group: ResolvedGroup, includeRates: boolean): Promise<GroupBalance> {
     const apiKey = await this.hooks.resolveApiKey(group)
     const headers = {
       'accept': 'application/json',
@@ -196,7 +133,9 @@ export class BalanceService {
     }
     const balance = parseUsage(await response.json())
     // Simple deployments do not mount the rate endpoint: any failure there
-    // (404, network, malformed body) leaves the balance answer intact.
+    // (404, network, malformed body) leaves the balance answer intact. The
+    // fan-out path skips it entirely, halving upstream calls per poll.
+    if (!includeRates) return balance
     try {
       const rates = await fetch(`${baseURL}${RATE_MULTIPLIER_PATH}`, { method: 'GET', headers })
       if (rates.ok) return { ...balance, ...parseRateMultiplier(await rates.json()) }
@@ -207,59 +146,71 @@ export class BalanceService {
   }
 }
 
-const LOOPBACK_ADDRESSES = new Set(['127.0.0.1', '::1', '::ffff:127.0.0.1'])
+/**
+ * Response headers every balance answer carries. Account state is live and
+ * sensitive, so it is never cacheable and never sniffable as another type.
+ */
+const JSON_HEADERS: Readonly<Record<string, string>> = {
+  'content-type': 'application/json; charset=utf-8',
+  'cache-control': 'no-store',
+  'x-content-type-options': 'nosniff',
+}
 
-function send(res: ServerResponse, status: number, body: unknown): void {
-  res.writeHead(status, { 'content-type': 'application/json; charset=utf-8' })
-  res.end(JSON.stringify(body))
+function json(status: number, body: unknown): Response {
+  return new Response(JSON.stringify(body), { status, headers: { ...JSON_HEADERS } })
+}
+
+function describeError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error)
 }
 
 /**
- * Build the `GET /api/protocom-api/balance` handler. The loopback fence is
- * the only authorization: the answer discloses account state, so nothing
- * off-box may read it. `?group=<key>` selects one enabled group; omission
- * answers every enabled group with `showBalance` on. Per-group failures land
- * beside the healthy groups as `{error}` rows.
+ * Build the `GET /api/protocom-api/balance` Fetch handler for the Host's shared
+ * `/api` channel. Authorization belongs to the carrier, which applies its trust
+ * policy before dispatch (the `connection.fetch.register` contract), so this
+ * handler never inspects the peer address or the Host header. `?group=<key>`
+ * selects one enabled group and opts into the billing-rate enrichment; omission
+ * answers every enabled, balance-reporting group. Per-group failures land beside
+ * the healthy groups as a fixed `{error}` row: the message names neither the
+ * credential reference nor any caller-supplied input, and the detail goes to the
+ * local log instead.
  */
-export function balanceRouteHandler(
+export function balanceFetchHandler(
   service: BalanceService,
   hooks: BalanceHooks,
-): (req: IncomingMessage, res: ServerResponse) => Promise<void> {
-  return async (req, res) => {
-    if (req.method !== 'GET') {
-      send(res, 405, { error: 'method not allowed' })
-      return
+): (request: Request) => Promise<Response> {
+  return async (request) => {
+    if (request.method !== 'GET') {
+      return new Response(null, { status: 405, headers: { ...JSON_HEADERS, allow: 'GET' } })
     }
-    if (!LOOPBACK_ADDRESSES.has(req.socket.remoteAddress ?? '')) {
-      send(res, 403, { error: 'the balance endpoint answers loopback clients only' })
-      return
-    }
-    const url = new URL(req.url ?? '/', 'http://127.0.0.1')
+    const url = new URL(request.url)
     const groupParam = url.searchParams.get('group')
     const options = hooks.options()
     if (groupParam !== null) {
       const group = options.groups.get(groupParam as GroupKey)
       if (group === undefined || !group.enabled || !group.showBalance) {
-        send(res, 404, { error: `no enabled balance-reporting group "${groupParam}"` })
-        return
+        return json(404, { error: 'no enabled balance-reporting group' })
       }
       try {
-        send(res, 200, await service.balance(group.key))
+        return json(200, await service.balance(group.key, true))
       } catch (error: unknown) {
-        send(res, 502, { error: error instanceof Error ? error.message : String(error) })
+        hooks.log?.(`protocom-api: balance query for group "${group.key}" failed: ${describeError(error)}`)
+        return json(502, { error: 'the balance query failed' })
       }
-      return
     }
     const groups: Record<string, GroupBalance | { error: string }> = {}
+    // The enabled set is the fixed four-group roster, so this fan-out is bounded
+    // by construction; the failure backoff above bounds its repetition.
     await Promise.all([...options.groups.values()]
       .filter(group => group.enabled && group.showBalance)
       .map(async (group) => {
         try {
           groups[group.key] = await service.balance(group.key)
         } catch (error: unknown) {
-          groups[group.key] = { error: error instanceof Error ? error.message : String(error) }
+          hooks.log?.(`protocom-api: balance query for group "${group.key}" failed: ${describeError(error)}`)
+          groups[group.key] = { error: 'the balance query failed' }
         }
       }))
-    send(res, 200, { groups })
+    return json(200, { groups })
   }
 }

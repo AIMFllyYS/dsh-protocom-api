@@ -8,11 +8,22 @@
  */
 import z from '@deepseek-ai/schemastery';
 import type { CredentialRef } from '@deepseek-ai/dsh-credentials';
-export { GROUP_DEFAULTS, GROUP_KEYS, groupOf, providerOf } from './groups.ts';
+export { DEFAULT_BASE_URL, DEFAULT_BASE_URL_ORIGIN, GROUP_DEFAULTS, GROUP_KEYS, groupOf, providerOf } from './groups.ts';
 export type { GroupKey, GroupReasoning, Protocol } from './groups.ts';
 import type { GroupKey, Protocol } from './groups.ts';
-/** Protocom official API endpoint base. */
-export declare const DEFAULT_BASE_URL = "https://relay.protocom.org";
+/**
+ * Idle interval after which one provider stream is aborted. Mirrors the
+ * first-party adapters' watchdog default so a stalled endpoint cannot pin a
+ * request — and its socket and agent step — open forever.
+ */
+export declare const DEFAULT_STREAM_IDLE_TIMEOUT_MS = 300000;
+/**
+ * The only credential references this plugin resolves: its own namespaced
+ * environment-variable names. An open shape let a rewritten `baseURL` pair any
+ * `process.env` name with an arbitrary endpoint, turning the environment
+ * fallback into an exfiltration primitive.
+ */
+export declare const PROTOCOM_CREDENTIAL_REF: RegExp;
 /** Configuration for one group; every field is optional in yml. */
 export interface GroupConfig {
     /** Whether this group's provider route is active (default `false`). */
@@ -30,6 +41,15 @@ export interface GroupConfig {
 export interface Config {
     /** Endpoint base; `/v1` suffix and trailing slashes are normalized away. */
     baseURL?: string;
+    /**
+     * Explicit confirmation that this deployment really sends its stored API key
+     * to a non-default endpoint. Absent or false pins `baseURL` to the shipped
+     * Protocom origin, so a single settings write cannot redirect the key.
+     * Deliberately has no schema default: opting in must be a deliberate act.
+     */
+    allowCustomBaseURL?: boolean;
+    /** Idle interval, in milliseconds, after which one provider stream is aborted (default 300000). */
+    streamIdleTimeoutMs?: number;
     /** Group profiles keyed by group key; unknown keys are refused. */
     groups?: Record<string, GroupConfig>;
     /**
@@ -78,6 +98,8 @@ export interface ResolvedGroup {
 export interface ResolvedProtocomOptions {
     /** Endpoint root without trailing slashes or a `/v1` suffix. */
     baseURL: string;
+    /** Resolved idle watchdog interval for one provider stream, in milliseconds. */
+    streamIdleTimeoutMs: number;
     /** All four groups in fixed order; `enabled` gates route registration. */
     groups: ReadonlyMap<GroupKey, ResolvedGroup>;
     /** Upstream ids the model menu must not offer. Empty means the whole catalog. */
@@ -95,3 +117,12 @@ export interface ResolvedProtocomOptions {
  * @returns validated connection facts for all four groups.
  */
 export declare function resolveAdapterOptions(config: Config): ResolvedProtocomOptions;
+/**
+ * Validate one endpoint root. Plain http is allowed only for a loopback host,
+ * so the stored bearer token can never be sent in the clear to a remote
+ * endpoint; userinfo, query strings, and fragments are refused because they
+ * let a value that reads as one endpoint actually resolve to another.
+ * @param raw - endpoint root, already stripped of trailing slashes and `/v1`.
+ * @returns the same string once every bound passes.
+ */
+export declare function resolveBaseURL(raw: string): string;

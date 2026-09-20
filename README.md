@@ -44,6 +44,8 @@ pnpm dsh plugin --profile web add "/path/to/dsh-protocom-api-plugin"
 
 ```yaml
 protocom-api:
+  # 默认锚定官方 relay。改用自建/中转网关时需同时打开下面这行：
+  # allowCustomBaseURL: true
   groups:
     aggregate:
       enabled: true
@@ -76,11 +78,28 @@ pnpm dsh plugin --profile web remove dsh-protocom-api   # 卸载
 
 ## 余额端点
 
-Host 半挂载 `webServer` 时提供回环专享端点 `GET /api/protocom-api/balance`：
+Host 提供 `GET /api/protocom-api/balance`，它挂在 Host 的共享、带围栏的 `/api` 通道上（`connection.fetch.register`），由当前载体施加自己的信任策略：
 
-- 无参数返回所有已启用且 `showBalance` 的分组；`?group=<aggregate|codex|stepfun|grok>` 单查
-- 每分组 60s 缓存；计费倍率端点在部分部署上可能 404，自动容错
-- 仅回环地址可访问（否则 403），非 GET 方法 405
+- **Web 载体**：Host/Origin 围栏 + 浏览器 HMAC cookie。无 cookie 一律 401；Host 非回环且非 `trustedHosts` 一律 403；`sec-fetch-site: cross-site` 或 Origin 不同源一律 403
+- **桌面载体**：走 IPC 边界。`webserver` 被禁用的桌面 profile 同样可用（旧实现把路由注册在 `webServer` 上，桌面端根本不注册，余额面板必然 404）
+- 无参数返回所有已启用且 `showBalance` 的分组；`?group=<aggregate|codex|stepfun|grok>` 单查并附带计费倍率
+- 每分组 60s 成功缓存 + 5s 失败退避；失败响应为固定文案，细节只进本地日志
+- 所有响应带 `Cache-Control: no-store` 与 `X-Content-Type-Options: nosniff`
+
+没有 `connection` 服务的 profile（headless/sdk/acp）不注册该路由，前端把 401/403/404 统一渲染为「余额不可用」而不是红色报错。
+
+## 安全与部署纪律
+
+本插件与 Host 同进程、全权限，Host 的 `SAFETY.md` 明说不应把 DSH 当作唯一安全控制——**插件自身的边界代码就是最终防线**。以下约束不是可选项：
+
+- **baseURL 必须 https**，只有回环主机（`localhost`、`::1`、`127.0.0.0/8`）允许明文 http。明文 http 会让 Bearer key 裸奔过网，也让上游响应可被中间人改写；在 `danger-full-access` 下等于一次响应即可执行任意命令。userinfo、query、`#` 一律拒绝（它们能把一个「看起来可信」的地址解析到别的主机）。
+- **端点 origin 默认锚定在官方 relay**。`baseURL` 的 origin 必须等于 `https://relay.protocom.org`，否则插件拒绝加载；使用本地中转或自建网关时必须同时显式设置 `allowCustomBaseURL: true`（该字段**没有默认值**，必须主动写）。作用：审计里「一次 settings 写入即可把已保存的真实 key 改发到 `http://127.0.0.1:19999`」的 PoC 现在 fail-closed。高级面板提供同名勾选框，与应用 baseURL 同批原子写入。
+- **凭据引用必须匹配 `PROTOCOM_[A-Z0-9_]+`**。该引用名会被用于 `process.env` 回落读取，放宽命名等于允许把任意环境变量名发给任意端点。
+- **不要在处理不可信上游内容时使用 `danger-full-access` + 审批禁用**。第三方端点本来就控制流式内容与工具调用，这是选择第三方 relay 的固有代价，插件无法消除。
+- **模型发现只把已存密钥发给配置的 origin**。给别的端点探测必须显式传一次性 `apiKey`（设置页「新增 provider」流程本就如此）。
+- **Windows 上 `.credentials.yaml` 是明文**且不做 mode 检查；LAN 部署下 Host 的会话 cookie 也没有 `Secure`。跨主机部署请强制 TLS。
+
+## 常见问题
 
 ## 常见问题
 
@@ -93,7 +112,8 @@ Host 半挂载 `webServer` 时提供回环专享端点 `GET /api/protocom-api/ba
 ```bash
 pnpm install
 pnpm run build   # tsdown → lib/index.js（Host，ESM）+ lib/client.js（Web client，CJS 工厂）；tsc -b → lib/types
-pnpm run test    # vitest，38 用例
+pnpm run test    # vitest，130 用例（含安全回归）
+pnpm run check:consistency   # 构建后断言 lib/ 与 src/ 一致（CI 闸门：build && git diff --exit-code）
 ```
 
 本仓约定 `lib/` 构建产物随源码一起提交（保证 git 安装零构建），改完代码务必先 `pnpm run build` 再提交。

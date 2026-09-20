@@ -7,6 +7,9 @@ export declare const en: {
     readOnly: string;
     advanced: string;
     baseUrl: string;
+    allowCustom: string;
+    allowCustomHint: string;
+    allowCustomRequired: string;
     apply: string;
     applying: string;
     saved: string;
@@ -47,6 +50,7 @@ export declare const en: {
     refreshing: string;
     loading: string;
     loadFailed: string;
+    balanceUnavailable: string;
     retry: string;
     remaining: string;
     limit: string;

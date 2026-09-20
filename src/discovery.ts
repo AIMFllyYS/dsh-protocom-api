@@ -11,10 +11,18 @@
 
 import { attributionHeaders, LlmError } from '@deepseek-ai/dsh-llm'
 import type { LlmDiscoveredModel, LlmModelDiscoveryRequest } from '@deepseek-ai/dsh-llm'
+import { resolveBaseURL } from './config.ts'
 import type { UpstreamModel } from './model-registry.ts'
 
 /** Largest listing reply accepted; a truncated listing is not parseable. */
 const MAX_RESPONSE_BYTES = 4 * 1024 * 1024
+
+/**
+ * Longest accepted model id or label. A hostile listing can otherwise carry a
+ * multi-megabyte `display_name` (measured at 2.4M characters) straight into the
+ * model catalog and the settings UI.
+ */
+const MAX_TEXT_LENGTH = 256
 
 /** One entry of a `GET /v1/models` reply, as much of it as we read. */
 interface ListingEntry {
@@ -34,9 +42,14 @@ interface ListingEntry {
   reasoning_efforts?: unknown
 }
 
+/** One string bound to {@link MAX_TEXT_LENGTH}. */
+function bounded(value: string): string {
+  return value.length > MAX_TEXT_LENGTH ? value.slice(0, MAX_TEXT_LENGTH) : value
+}
+
 function label(...candidates: readonly unknown[]): string | undefined {
   for (const candidate of candidates) {
-    if (typeof candidate === 'string' && candidate.length > 0) return candidate
+    if (typeof candidate === 'string' && candidate.length > 0) return bounded(candidate)
   }
   return undefined
 }
@@ -50,7 +63,9 @@ function capacity(...candidates: readonly unknown[]): number | undefined {
 
 function strings(candidate: unknown): string[] | undefined {
   if (!Array.isArray(candidate)) return undefined
-  const values = candidate.filter((value): value is string => typeof value === 'string' && value.length > 0)
+  const values = candidate
+    .filter((value): value is string => typeof value === 'string' && value.length > 0)
+    .map(bounded)
   return values.length === 0 ? undefined : values
 }
 
@@ -133,15 +148,34 @@ export async function fetchUpstreamModels(
       'DISCOVERY_FAILED',
     )
   }
+  // A declared length is only a cheap early rejection; it is attacker-supplied
+  // and absent on a chunked reply, so the real bound is the streaming byte count
+  // below. Reading to completion first and checking afterwards (`text.length`,
+  // which also counts UTF-16 units rather than bytes) left memory bounded only
+  // by the upstream's willingness — a 4.8 MB chunked reply was accepted.
   const declared = Number(response.headers.get('content-length') ?? Number.NaN)
   if (Number.isFinite(declared) && declared > MAX_RESPONSE_BYTES) {
     await response.body?.cancel()
     throw new LlmError(`${url} answered with more than ${MAX_RESPONSE_BYTES} bytes`, 'DISCOVERY_FAILED')
   }
-  const text = await response.text()
-  if (text.length > MAX_RESPONSE_BYTES) {
-    throw new LlmError(`${url} answered with more than ${MAX_RESPONSE_BYTES} bytes`, 'DISCOVERY_FAILED')
+  const reader = response.body?.getReader()
+  if (reader === undefined) {
+    throw new LlmError(`${url} answered with no body`, 'DISCOVERY_FAILED')
   }
+  const chunks: Uint8Array[] = []
+  let total = 0
+  for (;;) {
+    const { done: finished, value } = await reader.read()
+    if (finished) break
+    if (value === undefined) continue
+    total += value.byteLength
+    if (total > MAX_RESPONSE_BYTES) {
+      await reader.cancel()
+      throw new LlmError(`${url} answered with more than ${MAX_RESPONSE_BYTES} bytes`, 'DISCOVERY_FAILED')
+    }
+    chunks.push(value)
+  }
+  const text = new TextDecoder().decode(Buffer.concat(chunks, total))
   let body: unknown
   try {
     body = JSON.parse(text)
@@ -149,6 +183,25 @@ export async function fetchUpstreamModels(
     throw new LlmError(`${url} did not answer with JSON`, 'DISCOVERY_FAILED', { cause: error })
   }
   return parseModelsListing(body)
+}
+
+/**
+ * Canonical origin of an endpoint root, or `undefined` when it is not a usable
+ * http(s) origin. WHATWG parsing is what makes two spellings of one endpoint
+ * compare equal (case, punycode, default ports, IPv6 brackets) and a decorated
+ * one (`user@host`, `host?x`, `relay.protocom.org.evil.test`) disagree, so the
+ * comparison never runs on raw strings.
+ */
+export function endpointOrigin(raw: string): string | undefined {
+  let url: URL
+  try {
+    url = new URL(raw)
+  } catch {
+    return undefined
+  }
+  if (url.username !== '' || url.password !== '') return undefined
+  if (url.protocol !== 'https:' && url.protocol !== 'http:') return undefined
+  return url.origin
 }
 
 /** Host-owned inputs a discovery draft deliberately omits. */
@@ -170,10 +223,58 @@ export async function discoverModels(
   signal: AbortSignal | undefined,
   hooks: DiscoveryHooks,
 ): Promise<readonly LlmDiscoveredModel[]> {
-  const baseURL = request.baseURL !== undefined && request.baseURL.length > 0
-    ? request.baseURL.replace(/\/+$/, '').replace(/\/v1$/, '')
-    : hooks.baseURL()
-  const apiKey = request.apiKey
+  const configured = hooks.baseURL()
+  // This function is exported, so the configured endpoint is re-validated here
+  // rather than assumed: a standalone caller must not be able to put a stored
+  // bearer on a plain-http wire through its own hooks.
+  try {
+    resolveBaseURL(configured)
+  } catch (error: unknown) {
+    throw new LlmError(
+      `protocom-api: the configured baseURL is not usable (${error instanceof Error ? error.message : String(error)})`,
+      'DISCOVERY_FAILED',
+      { cause: error },
+    )
+  }
+  const configuredOrigin = endpointOrigin(configured)
+  if (configuredOrigin === undefined) {
+    throw new LlmError('protocom-api: the configured baseURL is not a usable http(s) origin', 'DISCOVERY_FAILED')
+  }
+  // An empty string is "not supplied", not a bearer token: the old `??` chain
+  // turned `apiKey: ''` into a request carrying an empty Authorization header.
+  const askedRaw = request.baseURL !== undefined && request.baseURL.length > 0 ? request.baseURL : undefined
+  const asked = askedRaw === undefined
+    ? undefined
+    : askedRaw.replace(/\/+$/, '').replace(/\/v1$/, '')
+  // Scheme and shape are bounded for a draft too, even when the caller brings
+  // its own one-shot key: otherwise a draft naming a plain-http host would put
+  // that key on the wire in cleartext.
+  if (asked !== undefined) {
+    try {
+      resolveBaseURL(asked)
+    } catch (error: unknown) {
+      throw new LlmError(
+        `protocom-api: the probe endpoint is not usable (${error instanceof Error ? error.message : String(error)})`,
+        'DISCOVERY_FAILED',
+        { cause: error },
+      )
+    }
+  }
+  const baseURL = asked ?? configured
+  const explicit = request.apiKey !== undefined && request.apiKey.length > 0 ? request.apiKey : undefined
+  // A stored credential is scoped to the configured endpoint. Sending it to an
+  // endpoint the caller names would let a draft (or a prompt-injected write to
+  // one) pair this deployment's key with an attacker's host; a caller that
+  // really wants a foreign probe must supply a one-shot `apiKey` for it.
+  const usesStoredCredential = explicit === undefined && request.provider !== undefined
+  if (usesStoredCredential && asked !== undefined && endpointOrigin(baseURL) !== configuredOrigin) {
+    throw new LlmError(
+      'protocom-api: this endpoint differs from the configured baseURL, so the stored credential is not sent;'
+      + ' supply an apiKey for this probe, or interrogate the configured endpoint',
+      'DISCOVERY_FAILED',
+    )
+  }
+  const apiKey = explicit
     ?? (request.provider === undefined ? undefined : await hooks.resolveApiKey(request.provider))
   const upstream = await fetchUpstreamModels(baseURL, apiKey, signal)
   return upstream.map(model => ({

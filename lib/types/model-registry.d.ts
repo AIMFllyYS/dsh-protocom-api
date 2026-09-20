@@ -15,7 +15,8 @@
  *
  * @module dsh-protocom-api/model-registry
  */
-import type { GroupReasoning } from './groups.ts';
+import type { GroupKey, GroupReasoning } from './groups.ts';
+export { CONTEXT_LADDER } from './groups.ts';
 /** Reasoning vocabulary one registry model supports. */
 export interface RegistryReasoning {
     efforts: readonly string[];
@@ -42,21 +43,27 @@ export interface RegistryEntry {
      */
     vision?: boolean;
     /**
+     * Provider groups this entry is a *membership source* for. Absent means the
+     * entry is metadata only: it is offered wherever the endpoint's own listing
+     * names it, and nowhere else. Grouping membership this way is what keeps one
+     * group's menu from advertising every other group's models.
+     */
+    groups?: readonly GroupKey[];
+    /**
      * Menu priority: lower sorts earlier. Assigned to the models whose reasoning
      * content actually streams, so the picker leads with readable thinking.
      */
     rank?: number;
     pricing?: RegistryPricing;
 }
-/** Context capacity assumed for a model the registry does not size. */
-export declare const FALLBACK_CONTEXT_WINDOW = 131072;
 /**
- * The context ladder the picker offers, smallest first: 200K is the floor
- * every model clears, then the two common steps, then the 1M ceiling. A model
- * is only ever offered the steps at or below its own window, so the choice a
- * user makes is always one the model can actually honour.
+ * Context capacity assumed for a model neither the registry nor the endpoint
+ * sizes. It is the ladder floor, not a smaller "safe" number: assuming less
+ * than the floor produced a single 128K entry for every unknown model — a
+ * choice no model served by this endpoint can honour, and a residue of the
+ * registry's original global-catalog design.
  */
-export declare const CONTEXT_LADDER: readonly number[];
+export declare const FALLBACK_CONTEXT_WINDOW = 204800;
 /**
  * The ladder steps one model can offer. A window below the whole ladder still
  * offers itself, so no model is left without a choice.
@@ -71,6 +78,8 @@ export declare function contextChoicesFor(contextWindow: number): number[];
 export declare const REGISTRY: readonly RegistryEntry[];
 /** Find the registry entry for one upstream id. */
 export declare function matchRegistry(id: string): RegistryEntry | undefined;
+/** Whether one registry entry is a membership source for a group. */
+export declare function servesGroup(entry: RegistryEntry, key: GroupKey): boolean;
 /**
  * One selectable model identity: a display name and every upstream id that
  * serves it. The endpoint lists some models under both an organization- and a

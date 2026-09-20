@@ -16,7 +16,10 @@
  * @module dsh-protocom-api/model-registry
  */
 
-import type { GroupReasoning } from './groups.ts'
+import { CONTEXT_1M, CONTEXT_200K, CONTEXT_256K, CONTEXT_LADDER } from './groups.ts'
+import type { GroupKey, GroupReasoning } from './groups.ts'
+
+export { CONTEXT_LADDER } from './groups.ts'
 
 /** Reasoning vocabulary one registry model supports. */
 export interface RegistryReasoning {
@@ -46,6 +49,13 @@ export interface RegistryEntry {
    */
   vision?: boolean
   /**
+   * Provider groups this entry is a *membership source* for. Absent means the
+   * entry is metadata only: it is offered wherever the endpoint's own listing
+   * names it, and nowhere else. Grouping membership this way is what keeps one
+   * group's menu from advertising every other group's models.
+   */
+  groups?: readonly GroupKey[]
+  /**
    * Menu priority: lower sorts earlier. Assigned to the models whose reasoning
    * content actually streams, so the picker leads with readable thinking.
    */
@@ -53,14 +63,14 @@ export interface RegistryEntry {
   pricing?: RegistryPricing
 }
 
-/** Context capacity assumed for a model the registry does not size. */
-export const FALLBACK_CONTEXT_WINDOW = 131_072
-
-/** 1M-token context, the ceiling most current flagships publish. */
-const CONTEXT_1M = 1_048_576
-
-/** 256K-token context. */
-const CONTEXT_256K = 262_144
+/**
+ * Context capacity assumed for a model neither the registry nor the endpoint
+ * sizes. It is the ladder floor, not a smaller "safe" number: assuming less
+ * than the floor produced a single 128K entry for every unknown model — a
+ * choice no model served by this endpoint can honour, and a residue of the
+ * registry's original global-catalog design.
+ */
+export const FALLBACK_CONTEXT_WINDOW = CONTEXT_200K
 
 /**
  * The reasoning vocabulary shared by the GLM-5.2/5.3 generation. GLM refuses
@@ -77,14 +87,6 @@ const GPT_REASONING: RegistryReasoning = {
   efforts: ['low', 'medium', 'high', 'xhigh', 'max'],
   defaultEffort: 'medium',
 }
-
-/**
- * The context ladder the picker offers, smallest first: 200K is the floor
- * every model clears, then the two common steps, then the 1M ceiling. A model
- * is only ever offered the steps at or below its own window, so the choice a
- * user makes is always one the model can actually honour.
- */
-export const CONTEXT_LADDER: readonly number[] = [204_800, CONTEXT_256K, 409_600, CONTEXT_1M]
 
 /**
  * The ladder steps one model can offer. A window below the whole ladder still
@@ -220,6 +222,7 @@ export const REGISTRY: readonly RegistryEntry[] = [
     contextWindow: CONTEXT_1M,
     reasoning: GPT_REASONING,
     vision: true,
+    groups: ['codex'],
   },
   {
     id: 'gpt-5.6-luna',
@@ -228,6 +231,7 @@ export const REGISTRY: readonly RegistryEntry[] = [
     contextWindow: CONTEXT_1M,
     reasoning: GPT_REASONING,
     vision: true,
+    groups: ['codex'],
   },
   // These four answer "not available on this endpoint" on /v1/chat/completions
   // whenever the endpoint lists them, so their facts cannot be verified by
@@ -250,6 +254,11 @@ export const REGISTRY: readonly RegistryEntry[] = [
 /** Find the registry entry for one upstream id. */
 export function matchRegistry(id: string): RegistryEntry | undefined {
   return REGISTRY.find(entry => entry.id === id)
+}
+
+/** Whether one registry entry is a membership source for a group. */
+export function servesGroup(entry: RegistryEntry, key: GroupKey): boolean {
+  return entry.groups?.includes(key) === true
 }
 
 /**

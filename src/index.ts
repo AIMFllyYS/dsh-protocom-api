@@ -8,30 +8,43 @@
  * very next request without restarting anything. The route set itself is the
  * one registration-captured fact — it re-registers in place via
  * `handle.replace` when the enabled groups change. The balance endpoint rides
- * the optional `webServer` service and answers loopback clients only.
+ * the optional `connection` service so the active carrier's own trust fence
+ * (Host/Origin plus browser auth, or the desktop IPC boundary) guards it.
  *
  * @module dsh-protocom-api
  */
 
 import type { Context } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-settings'
-import type {} from '@deepseek-ai/dsh-host-webserver'
 import { assertUsableApiKey, LlmError } from '@deepseek-ai/dsh-llm'
 import type { AdapterRegistrationHandle } from '@deepseek-ai/dsh-llm'
 import { ProtocomAdapter } from './adapter.ts'
-import { BalanceService, balanceRouteHandler } from './balance.ts'
-import { Config, GROUP_KEYS, GROUP_DEFAULTS, providerOf, resolveAdapterOptions } from './config.ts'
+import { BalanceService, balanceFetchHandler } from './balance.ts'
+import { Config, GROUP_KEYS, GROUP_DEFAULTS, PROTOCOM_CREDENTIAL_REF, providerOf, resolveAdapterOptions } from './config.ts'
 import type { ResolvedGroup, ResolvedProtocomOptions } from './config.ts'
 import { discoverModels } from './discovery.ts'
 
 export { ProtocomAdapter } from './adapter.ts'
 export type { ProtocomAdapterOptions } from './adapter.ts'
-export { BalanceService, balanceRouteHandler, parseRateMultiplier, parseUsage } from './balance.ts'
+export { BalanceService, balanceFetchHandler, parseBalanceView, parseRateMultiplier, parseUsage } from './balance.ts'
 export type { BalanceHooks, GroupBalance } from './balance.ts'
-export { Config, DEFAULT_BASE_URL, GROUP_DEFAULTS, GROUP_KEYS, groupOf, providerOf, resolveAdapterOptions } from './config.ts'
+export { normalizeUsage } from './balance-view.ts'
+export {
+  Config,
+  DEFAULT_BASE_URL,
+  DEFAULT_BASE_URL_ORIGIN,
+  DEFAULT_STREAM_IDLE_TIMEOUT_MS,
+  GROUP_DEFAULTS,
+  GROUP_KEYS,
+  groupOf,
+  PROTOCOM_CREDENTIAL_REF,
+  providerOf,
+  resolveAdapterOptions,
+  resolveBaseURL,
+} from './config.ts'
 export type { GroupConfig, GroupKey, Protocol, ResolvedGroup, ResolvedProtocomOptions } from './config.ts'
 export { decodeVariantId, encodeVariantId, stripVariantId, variantLengths } from './context-variants.ts'
-export { discoverModels, fetchUpstreamModels, parseModelsListing } from './discovery.ts'
+export { discoverModels, endpointOrigin, fetchUpstreamModels, parseModelsListing } from './discovery.ts'
 export type { DiscoveryHooks } from './discovery.ts'
 export {
   catalogEntry,
@@ -59,6 +72,29 @@ export const name = 'protocom-api'
 export const inject = ['llm']
 
 const NS = 'protocom-api'
+
+/**
+ * The slice of the Host's `connection` service this plugin registers on. The
+ * package that owns the full type is browser-side and absent from headless
+ * profiles, so the plugin names the shape it uses locally — the same convention
+ * first-party plugins such as `open-in-app` follow — and deliberately keeps the
+ * service out of its top-level `inject`: a missing service there deactivates
+ * the whole plugin, whereas a scoped `ctx.inject` only omits the balance route.
+ */
+interface HostFetchRoute {
+  readonly path: string
+  readonly methods: readonly string[]
+  readonly requestBody: 'buffered' | 'streaming'
+  readonly fetch: (request: Request) => Promise<Response>
+}
+
+interface HostConnectionFetch {
+  register(route: HostFetchRoute): () => Promise<void>
+}
+
+interface HostConnection {
+  readonly fetch: HostConnectionFetch
+}
 
 export function apply(ctx: Context, config: Config): void {
   let current: () => Config = () => config
@@ -95,6 +131,12 @@ export function apply(ctx: Context, config: Config): void {
         + ` set groups.${group.key}.apiKey in the "${NS}" settings section to a credential reference`,
         'MISSING_CREDENTIAL',
       )
+    }
+    // Defence in depth: resolution already refuses a non-namespaced reference,
+    // but the environment fallback is the sharp edge (it reads any `process.env`
+    // key), so it re-checks rather than trusting its caller.
+    if (!PROTOCOM_CREDENTIAL_REF.test(ref)) {
+      throw new LlmError(`protocom-api: credential reference "${ref}" is not a PROTOCOM_ reference`, 'MISSING_CREDENTIAL')
     }
     const credentials = ctx.get('credentials')
     if (credentials !== undefined) {
@@ -182,11 +224,28 @@ export function apply(ctx: Context, config: Config): void {
     })
   })
 
-  ctx.inject(['webServer'], (webCtx) => {
-    webCtx.effect(() => webCtx.webServer.register({
-      kind: 'exact',
+  // The balance route rides the Host's shared, fenced API channel instead of a
+  // self-registered `webServer` exact route. An exact route is consulted before
+  // the carrier's `/api` prefix fence (the webserver matches its exact table
+  // first), so a self-registered one is reachable with no Host/Origin check and
+  // no browser cookie — which is how the balance endpoint lost its only
+  // authorization. `connection.fetch.register` runs only after the active
+  // carrier has applied its own trust policy: the Web carrier's Host/Origin
+  // fence plus HMAC cookie, or the desktop IPC boundary. It also restores the
+  // balance panel in the desktop profile, whose composition disables
+  // `webserver` entirely.
+  ctx.inject(['connection'], (connectionCtx) => {
+    const connection = Reflect.get(connectionCtx, 'connection') as HostConnection | undefined
+    if (connection === undefined) return
+    connectionCtx.effect(() => connection.fetch.register({
       path: '/api/protocom-api/balance',
-      handler: balanceRouteHandler(balance, { options, resolveApiKey }),
+      methods: ['GET'],
+      requestBody: 'buffered',
+      fetch: balanceFetchHandler(balance, {
+        options,
+        resolveApiKey,
+        log: message => { ctx.logger.warn(message) },
+      }),
     }))
   })
 }

@@ -38,7 +38,7 @@ export interface ProtocomOperations {
      * next discovery click on a refusal.
      * @returns the refusal message, or undefined once both writes landed.
      */
-    storeApiKey(group: string, ref: string, value: string): Promise<string | undefined>;
+    storeApiKey(group: string, ref: string, value: string, expectedRevision: number | undefined): Promise<string | undefined>;
     /** Apply path operations to this plugin's namespace. */
     writeSettings(ops: SettingsPathOpView[], expectedRevision: number | undefined): Promise<SettingsWriteOutcome>;
     /** Ask one group's endpoint what models it serves. */

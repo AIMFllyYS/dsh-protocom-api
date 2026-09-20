@@ -23,6 +23,14 @@ export declare function parseModelsListing(body: unknown): UpstreamModel[];
  * @param signal - caller cancellation.
  */
 export declare function fetchUpstreamModels(baseURL: string, apiKey?: string, signal?: AbortSignal): Promise<UpstreamModel[]>;
+/**
+ * Canonical origin of an endpoint root, or `undefined` when it is not a usable
+ * http(s) origin. WHATWG parsing is what makes two spellings of one endpoint
+ * compare equal (case, punycode, default ports, IPv6 brackets) and a decorated
+ * one (`user@host`, `host?x`, `relay.protocom.org.evil.test`) disagree, so the
+ * comparison never runs on raw strings.
+ */
+export declare function endpointOrigin(raw: string): string | undefined;
 /** Host-owned inputs a discovery draft deliberately omits. */
 export interface DiscoveryHooks {
     /** The endpoint root from the current configuration. */

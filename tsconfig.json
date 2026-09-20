@@ -20,7 +20,7 @@
     "noUnusedLocals": true,
     "noUnusedParameters": true,
     "jsx": "react-jsx",
-    "lib": ["es2024", "dom", "dom.iterable"],
+    "lib": ["es2024", "esnext.disposable", "dom", "dom.iterable"],
     "types": ["node"]
   },
   "include": ["src"]

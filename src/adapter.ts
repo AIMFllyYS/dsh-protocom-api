@@ -10,7 +10,15 @@
  * @module dsh-protocom-api/adapter
  */
 
-import { LlmAdapter, LlmError, ReasoningEffortId } from '@deepseek-ai/dsh-llm'
+import {
+  EMPTY_RESPONSE_CODE,
+  LlmAdapter,
+  LlmError,
+  offloadedImageText,
+  offloadRequestImagesWithPolicy,
+  ReasoningEffortId,
+} from '@deepseek-ai/dsh-llm'
+import { idleWatchdog, timeoutOf } from '@deepseek-ai/dsh-timeout'
 import type {
   ContentBlock,
   GenerateOptions,
@@ -18,8 +26,10 @@ import type {
   LlmModelReasoningInfo,
   LlmProviderInfo,
   LlmResolvedModelInfo,
+  Message,
   ModelModality,
   PreparedAdapterCall,
+  ResolvedRetryPolicy,
   StreamChunk,
 } from '@deepseek-ai/dsh-llm'
 import type { AttachmentStore, ImageAttachmentRef, ImageRequestPolicy } from '@deepseek-ai/dsh-attachment'
@@ -32,12 +42,15 @@ import {
   identityKey,
   matchRegistry,
   REGISTRY,
+  servesGroup,
 } from './model-registry.ts'
 import type { CatalogModel, RegistryReasoning, UpstreamModel } from './model-registry.ts'
 import { decodeVariantId, encodeVariantId, stripVariantId, variantLengths } from './context-variants.ts'
 import { fetchUpstreamModels } from './discovery.ts'
 import { streamChatCompletions } from './protocol/chat-completions.ts'
 import type { RequestImageUrls } from './protocol/chat-completions.ts'
+import { MAX_PROVIDER_RETRY_AFTER_MS } from './protocol/http.ts'
+import type { ProtocolConnection } from './protocol/http.ts'
 import { streamResponses } from './protocol/responses.ts'
 
 /** How long one fetched model listing is reused per group. */
@@ -53,6 +66,80 @@ export const REQUEST_IMAGE_POLICY: ImageRequestPolicy = {
   maxPixels: 640_000,
   maxBytes: 1024 * 1024,
 }
+
+/**
+ * Whole-request image budget: total represented bytes and image count. The
+ * single-image policy above bounds each image but not their sum, so a history
+ * that repeats images would materialize unbounded base64 on every turn. These
+ * mirror the first-party adapters' bounds (20 MiB, 600 images).
+ */
+export const REQUEST_IMAGE_TOTAL_BYTES = 20 * 1024 * 1024
+
+/** Most image occurrences one request may transmit; see {@link REQUEST_IMAGE_TOTAL_BYTES}. */
+export const REQUEST_IMAGE_MAX_COUNT = 600
+
+/** Stable code stamped onto the stream idle watchdog's abort reason. */
+const STREAM_IDLE_TIMEOUT_CODE = 'LLM_STREAM_IDLE_TIMEOUT'
+
+/** How long a non-exhausted stream's teardown may hold the caller after an abort. */
+const TEARDOWN_GRACE_MS = 1_000
+
+/** One-shot async iterator over one promise, for demanding a non-stream step through the watchdog. */
+function oneShot<T>(promise: Promise<T>, signal: AbortSignal): AsyncIterator<T> {
+  let consumed = false
+  return {
+    next: async (): Promise<IteratorResult<T>> => {
+      if (consumed) return { done: true, value: undefined }
+      consumed = true
+      return { done: false, value: await abortable(promise, signal) }
+    },
+  }
+}
+
+/**
+ * Await one promise, rejecting as soon as the signal aborts. The idle watchdog
+ * only *notifies* through its signal, so a pre-stream step that ignores that
+ * signal (a store or transport that does not observe cancellation) would
+ * otherwise hang the demand — and the request — forever.
+ */
+function abortable<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
+  if (signal.aborted) return Promise.reject(signal.reason)
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = (): void => { reject(signal.reason) }
+    signal.addEventListener('abort', onAbort, { once: true })
+    promise.then(
+      (value) => { signal.removeEventListener('abort', onAbort); resolve(value) },
+      (error: unknown) => { signal.removeEventListener('abort', onAbort); reject(error) },
+    )
+  })
+}
+
+/** Resolve after {@link TEARDOWN_GRACE_MS} without holding a Node process open. */
+function teardownGrace(): Promise<void> {
+  return new Promise(resolve => {
+    const timer = setTimeout(resolve, TEARDOWN_GRACE_MS)
+    ;(timer as { unref?: () => void }).unref?.()
+  })
+}
+
+/**
+ * The retry policy this adapter declares for its routes. It is pinned here so
+ * the clamp this adapter applies to a provider's `Retry-After`
+ * ({@link MAX_PROVIDER_RETRY_AFTER_MS}) can never exceed the `maxDelayMs` the
+ * retry layer compares it against: `llm-retry` treats
+ * `providerRetryAfterMs > policy.maxDelayMs` in normal mode as "cancel this
+ * retry", so a larger provider delay would silently remove the retry instead of
+ * waiting. Declaring the policy keeps the two values consistent regardless of
+ * any deployment-level default. `retryableCodes` mirrors the harness default.
+ */
+const RETRY_POLICY: ResolvedRetryPolicy = Object.freeze({
+  mode: 'normal',
+  maxRetries: 5,
+  retryableCodes: Object.freeze([EMPTY_RESPONSE_CODE, 'RATE_LIMIT', 'SERVER', 'TIMEOUT', 'TRANSPORT']),
+  initialDelayMs: 500,
+  maxDelayMs: MAX_PROVIDER_RETRY_AFTER_MS,
+  jitterRatio: 0.1,
+})
 
 /** Collect every image reference a message tree carries, including tool results. */
 function collectImageRefs(
@@ -110,6 +197,10 @@ export class ProtocomAdapter extends LlmAdapter {
   override providerInfo(provider: string): LlmProviderInfo {
     const key = groupOf(provider)
     return { id: provider, name: key === undefined ? provider : GROUP_DEFAULTS[key].displayName }
+  }
+
+  override providerRetryPolicy(_provider: string): ResolvedRetryPolicy {
+    return RETRY_POLICY
   }
 
   /** The enabled group behind one route; every dispatch path starts here. */
@@ -200,24 +291,33 @@ export class ProtocomAdapter extends LlmAdapter {
   }
 
   /**
-   * The catalog offered for one route. The registry is the catalog of record:
-   * every model it knows is offered even while the endpoint's listing omits
-   * it, so a listing that shrinks, degrades, or fails outright cannot empty
-   * the menu. Ids the registry does not know still ride along from the
-   * listing, so a newly served model appears without a plugin release.
+   * The catalog offered for one route. Membership is that route's own listing —
+   * the credential scopes what the route serves — plus the registry entries
+   * tagged for this group, so a group's menu holds its own models instead of
+   * every group's. Ids the registry does not know still ride along from the
+   * listing, so a newly served model appears without a plugin release. A
+   * missing or empty listing falls back to the whole registry, so a degraded
+   * endpoint cannot empty the menu.
    */
   override async listModels(provider: string): Promise<readonly LlmModelInfo[]> {
     const group = this.groupFor(provider)
     const { hiddenModels, recommendedModels } = this.config.options()
-    const rows: UpstreamModel[] = REGISTRY.map(entry => ({ id: entry.id }))
+    const rows: UpstreamModel[] = []
+    let listing: readonly UpstreamModel[] | undefined
     try {
-      const upstream = await this.upstreamModels(group)
-      const known = new Set(REGISTRY.map(entry => entry.id))
-      for (const model of upstream) {
-        if (!known.has(model.id)) rows.push(model)
-      }
+      listing = await this.upstreamModels(group)
     } catch {
-      // The listing only ever adds; the registry alone still answers.
+      listing = undefined
+    }
+    if (listing !== undefined) rows.push(...listing)
+    for (const entry of REGISTRY) {
+      if (!servesGroup(entry, group.key)) continue
+      if (!rows.some(row => row.id === entry.id)) rows.push({ id: entry.id })
+    }
+    if (rows.length === 0) {
+      // "No listing" and "empty listing" are both no information, not "no
+      // models"; the registry answers so the menu is never emptied.
+      for (const entry of REGISTRY) rows.push({ id: entry.id })
     }
     // The picker renders this order verbatim and the harness calls it
     // "adapter-preferred", so it is the one lever that leads the menu with the
@@ -311,36 +411,107 @@ export class ProtocomAdapter extends LlmAdapter {
     // One resolution per stream call: endpoint and credential freeze here and
     // hold for this whole request, so an in-flight stream never observes a
     // configuration change and the next call re-resolves.
-    const { baseURL } = this.config.options()
+    const { baseURL, streamIdleTimeoutMs } = this.config.options()
     const apiKey = await this.config.resolveApiKey(group)
     const connection = { baseURL, apiKey }
     const model = stripVariantId(options.model)
-    if (group.protocol === 'responses') {
-      yield* streamResponses(connection, options, model)
-      return
+    // A provider that simply stops sending must not hold the request, its
+    // socket, and the agent step open forever. The watchdog only *notifies*
+    // through its signal, so the transport has to observe that same signal —
+    // otherwise the timeout aborts nothing and the stalled read stays pending.
+    // This mirrors the first-party adapters (F6).
+    // The watchdog only notifies; the transport must observe its signal. The
+    // consumer controller exists so teardown can also abort an abandoned stream
+    // instead of leaving the underlying request to its own transport timeout.
+    const consumer = new AbortController()
+    const upstream = options.signal === undefined
+      ? consumer.signal
+      : AbortSignal.any([options.signal, consumer.signal])
+    const watchdog = idleWatchdog(upstream, streamIdleTimeoutMs, STREAM_IDLE_TIMEOUT_CODE)
+    const callOptions: GenerateOptions = { ...options, signal: watchdog.signal }
+    let iterator: AsyncIterator<StreamChunk> | undefined
+    let exhausted = false
+    try {
+      // The pre-stream work (image projection, request serialization) is
+      // demanded through the watchdog too, so a stall before the first chunk
+      // reaches the same idle bound instead of hanging the request silently.
+      const pending = group.protocol === 'responses'
+        ? Promise.resolve(streamResponses(connection, callOptions, model))
+        : this.chatCompletionsCall(connection, callOptions, group, model)
+      const started = await watchdog.next(oneShot(pending, watchdog.signal))
+      if (started.done === true) {
+        throw new LlmError('Protocom adapter produced no stream', 'TRANSPORT')
+      }
+      iterator = started.value[Symbol.asyncIterator]()
+      for (;;) {
+        const result = await watchdog.next(iterator)
+        if (result.done) {
+          exhausted = true
+          return
+        }
+        yield result.value
+      }
+    } catch (error: unknown) {
+      if (timeoutOf(watchdog.signal, STREAM_IDLE_TIMEOUT_CODE) !== undefined) {
+        throw new LlmError(`Protocom stream idle for ${streamIdleTimeoutMs}ms`, 'TIMEOUT', { cause: error })
+      }
+      if (options.signal?.aborted) {
+        throw new LlmError('Protocom request aborted by caller', 'ABORTED', { cause: error })
+      }
+      throw error
+    } finally {
+      consumer.abort('Protocom stream consumer stopped')
+      watchdog[Symbol.dispose]()
+      if (!exhausted && iterator !== undefined && iterator.return !== undefined) {
+        const pendingReturn = iterator.return()
+        try {
+          // The transport observes the watchdog's abort, so return() normally
+          // settles at once; bound it anyway so a transport that swallows the
+          // abort cannot hold this finally — and the caller's outcome — open.
+          await Promise.race([pendingReturn, teardownGrace()])
+        } catch {
+          // Teardown is best-effort: the consumer already owns termination.
+        }
+      }
     }
-    const images = await this.resolveRequestImages(options, group, model)
-    yield* streamChatCompletions(connection, options, model, images)
+  }
+
+  /** The chat-completions call, with this request's image budget applied first. */
+  private async chatCompletionsCall(
+    connection: ProtocolConnection,
+    options: GenerateOptions,
+    group: ResolvedGroup,
+    model: string,
+  ): Promise<AsyncIterable<StreamChunk>> {
+    const { images, messages } = await this.resolveRequestImages(options, group, model)
+    return streamChatCompletions(
+      connection,
+      messages === options.messages ? options : { ...options, messages: [...messages] },
+      model,
+      images,
+    )
   }
 
   /**
    * Resolve every image this request carries into the inline data URL the
-   * endpoint accepts. The harness already projects images away from a
-   * text-only route before dispatch, so a retained image here means the route
-   * declared the `image` modality; the guard still covers direct adapter use.
+   * endpoint accepts, applying the whole-request budget first. The harness
+   * already projects images away from a text-only route before dispatch, so a
+   * retained image here means the route declared the `image` modality; the
+   * guard still covers direct adapter use.
    * @param options - the assembled request.
    * @param group - the frozen group snapshot this request belongs to.
    * @param model - the upstream model id, variant suffix already stripped.
-   * @returns provider-ready data URLs, or undefined when the request has none.
+   * @returns provider-ready data URLs (absent when the request has none) and the
+   * message projection the caller must serialize.
    */
   private async resolveRequestImages(
     options: GenerateOptions,
     group: ResolvedGroup,
     model: string,
-  ): Promise<RequestImageUrls | undefined> {
+  ): Promise<{ images: RequestImageUrls | undefined; messages: readonly Message[] }> {
     const refs = new Map<string, ImageAttachmentRef>()
     for (const message of options.messages) collectImageRefs(message.content, refs)
-    if (refs.size === 0) return undefined
+    if (refs.size === 0) return { images: undefined, messages: options.messages }
     if (!this.acceptsImages(group, model)) {
       throw new LlmError(`Protocom model "${model}" does not accept image input.`, 'UNSUPPORTED_CONTENT')
     }
@@ -352,12 +523,32 @@ export class ProtocomAdapter extends LlmAdapter {
       )
     }
     const ordered = [...refs.values()]
-    const projected = await Promise.all(ordered.map(
+    const resolved = await Promise.all(ordered.map(
       ref => attachments.readImageRequest(ref, REQUEST_IMAGE_POLICY, options.signal),
     ))
-    return new Map(ordered.map((ref, index) => [
-      String(ref.attachmentId),
-      toDataUrl(projected[index] as { mediaType: string; data: Uint8Array }),
-    ]))
+    const rawBytes = new Map<string, number>()
+    ordered.forEach((ref, index) => {
+      rawBytes.set(String(ref.attachmentId), (resolved[index] as { data: Uint8Array }).data.byteLength)
+    })
+    // Bound the whole request, oldest image first. The first-party adapters
+    // apply this exact projection and replace each dropped occurrence with a
+    // stable text placeholder, which is what keeps the replayed context
+    // faithful instead of silently losing an attachment.
+    const messages = offloadRequestImagesWithPolicy(options.messages, {
+      representation: 'base64',
+      byteLength: ref => rawBytes.get(String(ref.attachmentId)) ?? 0,
+      maxBytes: REQUEST_IMAGE_TOTAL_BYTES,
+      maxImages: REQUEST_IMAGE_MAX_COUNT,
+      placeholder: ref => offloadedImageText(ref),
+    })
+    const retained = new Map<string, ImageAttachmentRef>()
+    for (const message of messages) collectImageRefs(message.content, retained)
+    const images = new Map<string, string>()
+    ordered.forEach((ref, index) => {
+      const id = String(ref.attachmentId)
+      if (!retained.has(id)) return
+      images.set(id, toDataUrl(resolved[index] as { mediaType: string; data: Uint8Array }))
+    })
+    return { images: images.size === 0 ? undefined : images, messages }
   }
 }

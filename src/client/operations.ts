@@ -38,7 +38,7 @@ export interface ProtocomOperations {
    * next discovery click on a refusal.
    * @returns the refusal message, or undefined once both writes landed.
    */
-  storeApiKey(group: string, ref: string, value: string): Promise<string | undefined>
+  storeApiKey(group: string, ref: string, value: string, expectedRevision: number | undefined): Promise<string | undefined>
   /** Apply path operations to this plugin's namespace. */
   writeSettings(ops: SettingsPathOpView[], expectedRevision: number | undefined): Promise<SettingsWriteOutcome>
   /** Ask one group's endpoint what models it serves. */
@@ -64,13 +64,16 @@ export function createProtocomOperations(ctx: ClientContext): ProtocomOperations
       const response = await ctx.remote.credentials.describe([...refs])
       return response.ok ? response.value : {}
     },
-    storeApiKey: async (group, ref, value) => {
+    storeApiKey: async (group, ref, value, expectedRevision) => {
       const stored = await ctx.remote.credentials.set(ref, value)
       if (!stored.ok) return stored.error.message
+      // The settings write is revision-guarded like every other write: without
+      // it, a concurrent settings change could be silently overwritten while a
+      // security-relevant field (the credential reference) is being set.
       const pointed = await ctx.remote.settings.mutate(SETTINGS_NS, [
         { op: 'set', path: ['groups', group, 'apiKey'], value: ref },
         { op: 'set', path: ['groups', group, 'enabled'], value: true },
-      ], undefined)
+      ], expectedRevision)
       return pointed.ok ? undefined : pointed.error.message
     },
     writeSettings: async (ops, expectedRevision) => {

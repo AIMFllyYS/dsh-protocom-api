@@ -1,75 +1,74 @@
 /**
  * Balance queries against the Protocom official API's usage endpoint, with a
- * 60-second per-group cache and the loopback-only HTTP surface the web
- * settings page polls. Quota-limited and subscription/wallet deployments
- * answer with different shapes; both normalize into {@link GroupBalance}.
- * The billing-rate endpoint is absent on simple deployments, so its failure
- * is never fatal.
+ * 60-second per-group cache and a fenced Fetch surface the settings page polls.
+ * Quota-limited and subscription/wallet deployments answer with different
+ * shapes; both normalize into {@link GroupBalance}. The billing-rate endpoint
+ * is absent on simple deployments, so its failure is never fatal.
+ *
+ * The HTTP surface is a Host `connection.fetch` route, not a self-registered
+ * `webServer` exact route. Reachability is entirely the active carrier's
+ * policy: the Web carrier applies the Host/Origin fence plus browser
+ * authentication before dispatching here, while the desktop and webworker
+ * carriers serve `/api/*` directly over their IPC channel, which is their own
+ * trust boundary. This handler therefore implements no authorization of its own
+ * and never inspects the peer address.
  *
  * @module dsh-protocom-api/balance
  */
-import type { IncomingMessage, ServerResponse } from 'node:http';
+import type { GroupBalance } from './balance-view.ts';
 import type { GroupKey, ResolvedGroup, ResolvedProtocomOptions } from './config.ts';
-/** One group's normalized account state. */
-export interface GroupBalance {
-    mode?: string;
-    status?: string;
-    unit?: string;
-    /** Quota-limited deployments: the cap, the spend, and what remains. */
-    limit?: number;
-    used?: number;
-    remaining?: number;
-    /** Subscription/wallet deployments: the remaining balance and plan name. */
-    balance?: number;
-    planName?: string;
-    /** Subscription daily allowance fields, when disclosed. */
-    dailyUsageUsd?: number;
-    dailyLimitUsd?: number;
-    expiresAt?: string;
-    /** Today's counters, when disclosed. */
-    todayRequests?: number;
-    todayCost?: number;
-    /** Current rate-window consumption, when disclosed. */
-    rpm?: number;
-    tpm?: number;
-    /** Billing rate multipliers, when the deployment reports them. */
-    rateMultiplier?: number;
-    groupRateMultiplier?: number;
-}
+export { parseBalanceView, parseRateMultiplier } from './balance-view.ts';
+export type { GroupBalance } from './balance-view.ts';
 /**
- * Normalize one `/v1/usage` reply. Quota deployments carry `quota{limit,used,
- * remaining}`; subscription deployments carry `balance`, `planName`, and a
- * `subscription` block. Unrecognized fields are ignored, and both shapes may
- * coexist.
+ * How long one group's failure keeps the next caller from hitting the upstream
+ * again. Successes are cached for {@link BalanceService.TTL_MS}; failures are
+ * not, so without this a deployment whose upstream is down would issue a fresh
+ * request per poll (and the fan-out multiplied that). The window is short
+ * enough that a repaired key recovers promptly, and
+ * {@link BalanceService.invalidate} clears it outright.
+ */
+export declare const BALANCE_FAILURE_BACKOFF_MS = 5000;
+/**
+ * Normalize one `/v1/usage` reply, refusing a body that is not an object.
+ * @throws LlmError code `BALANCE_FAILED` for a non-object reply.
  */
 export declare function parseUsage(body: unknown): GroupBalance;
-/** Normalize one billing-rate reply; absent fields stay absent. */
-export declare function parseRateMultiplier(body: unknown): Pick<GroupBalance, 'rateMultiplier' | 'groupRateMultiplier'>;
 /** Inputs the balance service reads from the owning plugin. */
 export interface BalanceHooks {
     /** Current validated connection facts, re-read per query. */
     options: () => ResolvedProtocomOptions;
     /** Resolve one group's bearer token. */
     resolveApiKey: (group: ResolvedGroup) => Promise<string>;
+    /** Local sink for failure detail deliberately kept out of HTTP responses. */
+    log?: (message: string) => void;
 }
-/** Per-group balance queries with a 60-second cache. */
+/** Per-group balance queries with a 60-second cache and a bounded failure backoff. */
 export declare class BalanceService {
     private readonly hooks;
     /** Cache lifetime for one group's balance. */
     static readonly TTL_MS = 60000;
     private readonly cache;
+    private readonly failedAt;
     constructor(hooks: BalanceHooks);
     /** Forget every cached balance (a configuration change may alter any group). */
     invalidate(): void;
-    /** One group's balance, served from cache while fresh. */
-    balance(key: GroupKey): Promise<GroupBalance>;
+    /**
+     * One group's balance, served from cache while fresh.
+     * @param key - the group to query.
+     * @param includeRates - whether to also read the optional billing-rate endpoint.
+     */
+    balance(key: GroupKey, includeRates?: boolean): Promise<GroupBalance>;
     private fetchBalance;
 }
 /**
- * Build the `GET /api/protocom-api/balance` handler. The loopback fence is
- * the only authorization: the answer discloses account state, so nothing
- * off-box may read it. `?group=<key>` selects one enabled group; omission
- * answers every enabled group with `showBalance` on. Per-group failures land
- * beside the healthy groups as `{error}` rows.
+ * Build the `GET /api/protocom-api/balance` Fetch handler for the Host's shared
+ * `/api` channel. Authorization belongs to the carrier, which applies its trust
+ * policy before dispatch (the `connection.fetch.register` contract), so this
+ * handler never inspects the peer address or the Host header. `?group=<key>`
+ * selects one enabled group and opts into the billing-rate enrichment; omission
+ * answers every enabled, balance-reporting group. Per-group failures land beside
+ * the healthy groups as a fixed `{error}` row: the message names neither the
+ * credential reference nor any caller-supplied input, and the detail goes to the
+ * local log instead.
  */
-export declare function balanceRouteHandler(service: BalanceService, hooks: BalanceHooks): (req: IncomingMessage, res: ServerResponse) => Promise<void>;
+export declare function balanceFetchHandler(service: BalanceService, hooks: BalanceHooks): (request: Request) => Promise<Response>;

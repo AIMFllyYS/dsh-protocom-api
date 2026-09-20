@@ -267,3 +267,198 @@ describe('responses serialization', () => {
       .toEqual({ effort: 'high' })
   })
 })
+
+describe('responses stream completion (P0-2)', () => {
+  async function collectUntilFailure(events: readonly unknown[]): Promise<{ chunks: StreamChunk[]; error: unknown }> {
+    const chunks: StreamChunk[] = []
+    const iterator = translateResponses(parseSseUntilEof(sseStream(sseBody(events))))[Symbol.asyncIterator]()
+    try {
+      for (;;) {
+        const result = await iterator.next()
+        if (result.done) return { chunks, error: undefined }
+        chunks.push(result.value)
+      }
+    } catch (error: unknown) {
+      return { chunks, error }
+    }
+  }
+
+  it('refuses a stream that ends without a terminal event', async () => {
+    const { error } = await collectUntilFailure([{ type: 'response.output_text.delta', delta: 'partial' }])
+    expect(error).toMatchObject({ code: 'STREAM_CLOSED' })
+  })
+
+  it('never emits a truncated tool call as a complete block', async () => {
+    // The endpoint controls both the arguments and the disconnect point: it can
+    // stream a complete-looking prefix and then cut the stream. Executing that
+    // prefix as the tool's arguments is the vulnerability, so no tool-call
+    // block-end may follow a truncated stream.
+    const { chunks, error } = await collectUntilFailure([
+      {
+        type: 'response.output_item.added',
+        output_index: 0,
+        item: { id: 'fc_1', type: 'function_call', name: 'shell', call_id: 'call_1', arguments: '' },
+      },
+      {
+        type: 'response.function_call_arguments.delta',
+        item_id: 'fc_1',
+        output_index: 0,
+        delta: '{"command":"rm -rf /tmp/victim"',
+      },
+    ])
+    expect(error).toMatchObject({ code: 'STREAM_CLOSED' })
+    expect(chunks.filter(chunk => chunk.type === 'block-end')).toEqual([])
+  })
+
+  it('accepts the [DONE] sentinel as an explicit terminal', async () => {
+    const chunks: StreamChunk[] = []
+    for await (const chunk of translateResponses(parseSseUntilEof(
+      sseStream(`${sseBody([{ type: 'response.output_text.delta', delta: 'ok' }])}data: [DONE]\n\n`),
+    ))) chunks.push(chunk)
+    expect(chunks.filter(chunk => chunk.type === 'block-end')).toEqual([
+      { type: 'block-end', index: 0, block: { type: 'text', text: 'ok' } },
+    ])
+  })
+
+  // A terminal stream event proves the *stream* ended, not that an individual
+  // tool call carried complete arguments. The endpoint controls both, so the
+  // per-call confirmation events are the only proof.
+  it('drops a tool call the wire never confirmed, even when the stream claims completion', async () => {
+    const { chunks, error } = await collectUntilFailure([
+      {
+        type: 'response.output_item.added',
+        output_index: 0,
+        item: { id: 'fc_1', type: 'function_call', name: 'shell', call_id: 'call_1', arguments: '' },
+      },
+      {
+        type: 'response.function_call_arguments.delta',
+        item_id: 'fc_1',
+        output_index: 0,
+        delta: '{"path":"/etc/shadow"}',
+      },
+      { type: 'response.completed', response: { status: 'completed' } },
+    ])
+    expect(error).toBeUndefined()
+    expect(chunks.filter(chunk => chunk.type === 'block-end')).toEqual([])
+    expect(chunks.at(-1)).toMatchObject({
+      type: 'finish',
+      reason: { kind: 'error', failure: { code: 'STREAM_CLOSED' } },
+    })
+  })
+
+  it('does not execute a tool call truncated by a genuine output-token limit', async () => {
+    const { chunks } = await collectUntilFailure([
+      {
+        type: 'response.output_item.added',
+        output_index: 0,
+        item: { id: 'fc_1', type: 'function_call', name: 'shell', call_id: 'call_1', arguments: '' },
+      },
+      {
+        type: 'response.function_call_arguments.delta',
+        item_id: 'fc_1',
+        output_index: 0,
+        delta: '{"path":"/etc/shadow"}',
+      },
+      {
+        type: 'response.incomplete',
+        response: { status: 'incomplete', incomplete_details: { reason: 'max_output_tokens' } },
+      },
+    ])
+    expect(chunks.filter(chunk => chunk.type === 'block-end')).toEqual([])
+    expect(chunks.at(-1)).toMatchObject({
+      type: 'finish',
+      reason: { kind: 'error', failure: { code: 'STREAM_CLOSED' } },
+    })
+  })
+
+  it('does not let a completion event without argument text confirm a tool call', async () => {
+    const { chunks } = await collectUntilFailure([
+      {
+        type: 'response.output_item.added',
+        output_index: 0,
+        item: { id: 'fc_1', type: 'function_call', name: 'shell', call_id: 'call_1', arguments: '' },
+      },
+      { type: 'response.function_call_arguments.delta', item_id: 'fc_1', output_index: 0, delta: '{"cmd":"rm ' },
+      { type: 'response.function_call_arguments.done', item_id: 'fc_1', output_index: 0 },
+      { type: 'response.completed', response: { status: 'completed' } },
+    ])
+    expect(chunks.filter(chunk => chunk.type === 'block-end')).toEqual([])
+    expect(chunks.at(-1)).toMatchObject({
+      type: 'finish',
+      reason: { kind: 'error', failure: { code: 'STREAM_CLOSED' } },
+    })
+  })
+
+  it('refuses a completion whose text does not extend what was streamed', async () => {
+    const { chunks } = await collectUntilFailure([
+      {
+        type: 'response.output_item.added',
+        output_index: 0,
+        item: { id: 'fc_1', type: 'function_call', name: 'shell', call_id: 'call_1', arguments: '' },
+      },
+      { type: 'response.function_call_arguments.delta', item_id: 'fc_1', output_index: 0, delta: '{"cmd":"rm ' },
+      {
+        type: 'response.function_call_arguments.done',
+        item_id: 'fc_1',
+        output_index: 0,
+        arguments: '{"cmd":"safe"}',
+      },
+      { type: 'response.completed', response: { status: 'completed' } },
+    ])
+    expect(chunks.filter(chunk => chunk.type === 'block-end')).toEqual([])
+    expect(chunks.at(-1)).toMatchObject({
+      type: 'finish',
+      reason: { kind: 'error', failure: { code: 'STREAM_CLOSED' } },
+    })
+  })
+
+  it('freezes a confirmed tool call against later deltas', async () => {
+    const chunks = await collect([
+      {
+        type: 'response.output_item.added',
+        output_index: 0,
+        item: { id: 'fc_1', type: 'function_call', name: 'shell', call_id: 'call_1', arguments: '' },
+      },
+      { type: 'response.function_call_arguments.done', item_id: 'fc_1', output_index: 0, arguments: '{"a":1}' },
+      { type: 'response.function_call_arguments.delta', item_id: 'fc_1', output_index: 0, delta: '{"b":2}' },
+      { type: 'response.completed', response: { status: 'completed' } },
+    ])
+    expect(chunks.filter(chunk => chunk.type === 'block-end')).toEqual([
+      { type: 'block-end', index: 0, block: { type: 'tool-call', id: 'call_1', name: 'shell', arguments: '{"a":1}' } },
+    ])
+    expect(chunks.at(-1)).toEqual({ type: 'finish', reason: { kind: 'tool-calls' } })
+  })
+
+  it('fails the turn when any one tool call is unconfirmed, even beside confirmed ones', async () => {
+    const { chunks } = await collectUntilFailure([
+      {
+        type: 'response.output_item.added',
+        output_index: 0,
+        item: { id: 'fc_1', type: 'function_call', name: 'shell', call_id: 'call_1', arguments: '' },
+      },
+      { type: 'response.function_call_arguments.done', item_id: 'fc_1', output_index: 0, arguments: '{"a":1}' },
+      {
+        type: 'response.output_item.added',
+        output_index: 1,
+        item: { id: 'fc_2', type: 'function_call', name: 'shell', call_id: 'call_2', arguments: '' },
+      },
+      { type: 'response.function_call_arguments.delta', item_id: 'fc_2', output_index: 1, delta: '{"b":' },
+      { type: 'response.completed', response: { status: 'completed' } },
+    ])
+    // The confirmed call survives; the unconfirmed one is dropped and the whole
+    // turn fails so nothing is executed.
+    expect(chunks.filter(chunk => chunk.type === 'block-end')).toEqual([
+      { type: 'block-end', index: 0, block: { type: 'tool-call', id: 'call_1', name: 'shell', arguments: '{"a":1}' } },
+    ])
+    expect(chunks.at(-1)).toMatchObject({
+      type: 'finish',
+      reason: { kind: 'error', failure: { code: 'STREAM_CLOSED' } },
+    })
+  })
+
+  it('still executes a tool call the wire did confirm', async () => {
+    const chunks = await collect(functionCallEvents('{"a":1}'))
+    expect(chunks.filter(chunk => chunk.type === 'block-end')).toHaveLength(1)
+    expect(chunks.at(-1)).toEqual({ type: 'finish', reason: { kind: 'tool-calls' } })
+  })
+})

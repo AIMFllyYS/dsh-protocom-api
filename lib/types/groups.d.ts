@@ -7,6 +7,30 @@
  */
 /** Wire protocol a group's models speak. */
 export type Protocol = 'chat-completions' | 'responses';
+/** Protocom official API endpoint base. */
+export declare const DEFAULT_BASE_URL = "https://relay.protocom.org";
+/** 1M-token context, the ceiling most current flagships publish. */
+export declare const CONTEXT_1M = 1048576;
+/** 400K-token context. */
+export declare const CONTEXT_400K = 409600;
+/** 256K-token context. */
+export declare const CONTEXT_256K = 262144;
+/** 200K-token context: the floor every model this plugin serves clears. */
+export declare const CONTEXT_200K = 204800;
+/**
+ * The context ladder the picker offers, smallest first: 200K is the floor every
+ * model clears, then the two common steps, then the 1M ceiling. A model is only
+ * ever offered the steps at or below its own window, so the choice a user makes
+ * is always one the model can actually honour.
+ */
+export declare const CONTEXT_LADDER: readonly number[];
+/**
+ * Origin of {@link DEFAULT_BASE_URL}: the only origin a stored API key is sent
+ * to unless the deployment explicitly confirms a custom endpoint. Lives here,
+ * beside the group metadata, so the browser half can read it without pulling in
+ * the Host config's dependencies.
+ */
+export declare const DEFAULT_BASE_URL_ORIGIN: string;
 /** The four groups this plugin serves; the config dict key IS the group. */
 export declare const GROUP_KEYS: readonly ["aggregate", "codex", "stepfun", "grok"];
 /** One of {@link GROUP_KEYS}. */
@@ -21,6 +45,12 @@ export declare const GROUP_DEFAULTS: Readonly<Record<GroupKey, {
     displayName: string;
     protocol: Protocol;
     reasoning?: GroupReasoning;
+    /**
+     * Context lengths this group ships with, used when the deployment does not
+     * choose its own. Only set where the vendor publishes a fixed ladder: leaving
+     * it unset keeps the historical behaviour (one entry at the model's window).
+     */
+    contextLengths?: readonly number[];
 }>>;
 /** The provider route one group registers under. */
 export declare function providerOf(key: GroupKey): string;

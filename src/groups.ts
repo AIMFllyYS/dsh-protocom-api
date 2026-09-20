@@ -9,6 +9,37 @@
 /** Wire protocol a group's models speak. */
 export type Protocol = 'chat-completions' | 'responses'
 
+/** Protocom official API endpoint base. */
+export const DEFAULT_BASE_URL = 'https://relay.protocom.org'
+
+/** 1M-token context, the ceiling most current flagships publish. */
+export const CONTEXT_1M = 1_048_576
+
+/** 400K-token context. */
+export const CONTEXT_400K = 409_600
+
+/** 256K-token context. */
+export const CONTEXT_256K = 262_144
+
+/** 200K-token context: the floor every model this plugin serves clears. */
+export const CONTEXT_200K = 204_800
+
+/**
+ * The context ladder the picker offers, smallest first: 200K is the floor every
+ * model clears, then the two common steps, then the 1M ceiling. A model is only
+ * ever offered the steps at or below its own window, so the choice a user makes
+ * is always one the model can actually honour.
+ */
+export const CONTEXT_LADDER: readonly number[] = [CONTEXT_200K, CONTEXT_256K, CONTEXT_400K, CONTEXT_1M]
+
+/**
+ * Origin of {@link DEFAULT_BASE_URL}: the only origin a stored API key is sent
+ * to unless the deployment explicitly confirms a custom endpoint. Lives here,
+ * beside the group metadata, so the browser half can read it without pulling in
+ * the Host config's dependencies.
+ */
+export const DEFAULT_BASE_URL_ORIGIN = new URL(DEFAULT_BASE_URL).origin
+
 /** The four groups this plugin serves; the config dict key IS the group. */
 export const GROUP_KEYS = ['aggregate', 'codex', 'stepfun', 'grok'] as const
 
@@ -26,6 +57,12 @@ export const GROUP_DEFAULTS: Readonly<Record<GroupKey, {
   displayName: string
   protocol: Protocol
   reasoning?: GroupReasoning
+  /**
+   * Context lengths this group ships with, used when the deployment does not
+   * choose its own. Only set where the vendor publishes a fixed ladder: leaving
+   * it unset keeps the historical behaviour (one entry at the model's window).
+   */
+  contextLengths?: readonly number[]
 }>> = {
   aggregate: { displayName: 'Protocom Aggregate', protocol: 'chat-completions' },
   codex: {
@@ -33,7 +70,13 @@ export const GROUP_DEFAULTS: Readonly<Record<GroupKey, {
     protocol: 'responses',
     reasoning: { efforts: ['minimal', 'low', 'medium', 'high', 'xhigh'], defaultEffort: 'medium' },
   },
-  stepfun: { displayName: 'Protocom StepFun', protocol: 'chat-completions' },
+  // StepFun publishes every model at the same four lengths (200K/256K/400K/1M),
+  // so the group ships that ladder instead of one entry at a fallback window.
+  stepfun: {
+    displayName: 'Protocom StepFun',
+    protocol: 'chat-completions',
+    contextLengths: CONTEXT_LADDER,
+  },
   grok: {
     displayName: 'Protocom Grok',
     protocol: 'chat-completions',

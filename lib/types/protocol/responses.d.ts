@@ -42,9 +42,10 @@ export declare function mapResponseUsage(usage: WireResponseUsage): TokenUsage;
 export declare function serializeResponsesRequest(options: GenerateOptions, model: string): Record<string, unknown>;
 /**
  * Consume responses-protocol SSE payloads and yield StreamChunks. The
- * terminal state arrives as a `response.completed` / `response.failed` event
- * (or stream EOF); `block-end`s, `usage`, and `finish` are emitted only then,
- * so no chunk follows `finish`.
+ * terminal state must arrive as a `response.completed` / `response.incomplete`
+ * / `response.failed` / `error` event, or the `[DONE]` sentinel; `block-end`s,
+ * `usage`, and `finish` are emitted only then, so no chunk follows `finish`.
+ * A bare EOF is a truncated stream, not a completed turn.
  */
 export declare function translateResponses(payloads: AsyncIterable<string>): AsyncGenerator<StreamChunk>;
 /** Stream one responses-protocol call as harness chunks. */

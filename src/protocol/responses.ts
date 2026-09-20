@@ -172,6 +172,13 @@ interface OpenBlock {
   name?: string | undefined
   /** Whether this block's `block-start` has been emitted (a tool call may open before its identity arrives). */
   announced?: boolean
+  /**
+   * Tool calls only: whether the wire confirmed the arguments are complete
+   * (`function_call_arguments.done` or `output_item.done`). A terminal *stream*
+   * event says nothing about an individual call, because the endpoint controls
+   * both — so completeness is tracked per call.
+   */
+  complete?: boolean
 }
 
 function closeBlock(block: OpenBlock): ContentBlock {
@@ -205,10 +212,24 @@ function streamedRemainder(streamed: string, complete: string | undefined): stri
 }
 
 /**
+ * Adopt one completing event's authoritative argument text, or leave the block
+ * unconfirmed. The event's *existence* proves nothing — the endpoint controls
+ * its payload too — so the text must be present and must be exactly what the
+ * block now holds (the streamed prefix extended by the event's remainder).
+ * Anything else fails closed: the flush drops the block and forces an error.
+ */
+function acceptComplete(block: OpenBlock, complete: string | undefined): void {
+  if (complete === undefined || complete.length === 0) return
+  if (block.text !== complete) return
+  block.complete = true
+}
+
+/**
  * Consume responses-protocol SSE payloads and yield StreamChunks. The
- * terminal state arrives as a `response.completed` / `response.failed` event
- * (or stream EOF); `block-end`s, `usage`, and `finish` are emitted only then,
- * so no chunk follows `finish`.
+ * terminal state must arrive as a `response.completed` / `response.incomplete`
+ * / `response.failed` / `error` event, or the `[DONE]` sentinel; `block-end`s,
+ * `usage`, and `finish` are emitted only then, so no chunk follows `finish`.
+ * A bare EOF is a truncated stream, not a completed turn.
  */
 export async function* translateResponses(payloads: AsyncIterable<string>): AsyncGenerator<StreamChunk> {
   let nextIndex = 0
@@ -218,6 +239,8 @@ export async function* translateResponses(payloads: AsyncIterable<string>): Asyn
   let pendingFinish: FinishReason | undefined
   let pendingUsage: TokenUsage | undefined
   let sawToolCall = false
+  /** Whether the peer explicitly ended the stream, as opposed to closing it. */
+  let sawTerminal = false
   /** One streamed call per wire identity, so its deltas and its terminal item share one block. */
   const toolBlocks = new Map<string, OpenBlock>()
 
@@ -260,9 +283,9 @@ export async function* translateResponses(payloads: AsyncIterable<string>): Asyn
     }
   }
 
-  /** Append argument text and yield the delta carrying it. */
+  /** Append argument text and yield the delta carrying it. A confirmed block is frozen. */
   function* emitArguments(block: OpenBlock, fragment: string): Generator<StreamChunk> {
-    if (fragment.length === 0) return
+    if (block.complete === true || fragment.length === 0) return
     block.text += fragment
     yield {
       type: 'tool-call-delta',
@@ -292,7 +315,10 @@ export async function* translateResponses(payloads: AsyncIterable<string>): Asyn
   }
 
   for await (const payload of payloads) {
-    if (payload === DONE) break
+    if (payload === DONE) {
+      sawTerminal = true
+      break
+    }
     let event: WireEvent
     try {
       event = JSON.parse(payload) as WireEvent
@@ -361,6 +387,7 @@ export async function* translateResponses(payloads: AsyncIterable<string>): Asyn
         const block = toolBlockFor(identity)
         yield* announce(block, undefined, undefined)
         yield* emitArguments(block, streamedRemainder(block.text, event.arguments) ?? '')
+        acceptComplete(block, event.arguments)
         break
       }
       case 'response.output_item.done': {
@@ -372,10 +399,12 @@ export async function* translateResponses(payloads: AsyncIterable<string>): Asyn
           : toolBlockFor(identity)
         yield* announce(block, item.call_id, item.name)
         yield* emitArguments(block, streamedRemainder(block.text, item.arguments) ?? '')
+        acceptComplete(block, item.arguments)
         break
       }
       case 'response.completed':
       case 'response.incomplete': {
+        sawTerminal = true
         if (event.response?.usage) pendingUsage = mapResponseUsage(event.response.usage)
         const reason = event.response?.incomplete_details?.reason
         pendingFinish = sawToolCall
@@ -386,6 +415,7 @@ export async function* translateResponses(payloads: AsyncIterable<string>): Asyn
         break
       }
       case 'response.failed': {
+        sawTerminal = true
         const message = event.response?.error?.message ?? 'the model call failed'
         pendingFinish = {
           kind: 'error',
@@ -394,6 +424,7 @@ export async function* translateResponses(payloads: AsyncIterable<string>): Asyn
         break
       }
       case 'error': {
+        sawTerminal = true
         pendingFinish = {
           kind: 'error',
           failure: { message: event.message ?? 'the model call failed', code: event.code ?? 'PROVIDER_ERROR' },
@@ -405,11 +436,39 @@ export async function* translateResponses(payloads: AsyncIterable<string>): Asyn
     }
   }
 
+  if (!sawTerminal) {
+    // A stream that ends without a terminal event was cut off: its open blocks
+    // hold whatever happened to arrive. Flushing a tool call there would let the
+    // endpoint choose the command's arguments by choosing when to disconnect,
+    // and a `tool-calls` finish would skip the retry layer an error reaches.
+    // The chat-completions path already throws here; aligning the two closes the
+    // responses-only integrity gap.
+    throw new LlmError('Protocom responses stream ended before a terminal event', 'STREAM_CLOSED')
+  }
+  // A terminal event proves the *stream* ended, not that each open tool call
+  // carried complete arguments — the endpoint controls both. A call the wire
+  // never confirmed (no `function_call_arguments.done` / `output_item.done`) is
+  // dropped, and anything dropped turns the finish into an error so the retry
+  // layer sees it instead of `tool-calls` reaching `executeToolCalls`.
+  let truncated = false
   for (const block of order) {
+    if (block.kind === 'tool-call' && block.complete !== true) {
+      truncated = true
+      continue
+    }
     yield { type: 'block-end', index: block.index, block: closeBlock(block) }
   }
   if (pendingUsage) yield { type: 'usage', usage: pendingUsage }
-  const reason = pendingFinish ?? (sawToolCall ? { kind: 'tool-calls' as const } : { kind: 'stop' as const })
+  const settled = pendingFinish ?? (sawToolCall ? { kind: 'tool-calls' as const } : { kind: 'stop' as const })
+  const reason = truncated && settled.kind !== 'error'
+    ? {
+      kind: 'error' as const,
+      failure: {
+        message: 'Protocom responses stream carried a tool call whose arguments never completed',
+        code: 'STREAM_CLOSED',
+      },
+    }
+    : settled
   yield {
     type: 'finish',
     reason: reason.kind === 'stop' && order.length === 0
