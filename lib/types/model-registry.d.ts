@@ -97,19 +97,31 @@ export declare function matchRegistry(id: string, registry?: readonly RegistryEn
 /** Whether one registry entry is a membership source for a group. */
 export declare function servesGroup(entry: RegistryEntry, key: string): boolean;
 /**
- * Ids the endpoint's listing advertises but its chat route refuses, verified by
- * request against `GET /v1/models` and `POST /v1/chat/completions` with the
- * same StepFun credential: the audio and image-editing models answer 404 "the
- * model ... does not exist or you do not have access to it", and the two
- * Step-3.5 snapshots answer 400 "this model is not enabled for the Responses
- * API".
+ * Ids a listing advertises but the endpoint cannot serve a chat turn for,
+ * verified by request. Two kinds live here, because both produce the same
+ * defect -- a menu entry whose every use ends in an error:
+ *
+ * - **Refused on this route only.** StepFun's audio and image-editing models
+ *   answer 404 "the model ... does not exist or you do not have access to it",
+ *   and the two Step-3.5 snapshots answer 400 "this model is not enabled for
+ *   the Responses API". Verified with the StepFun credential against both
+ *   /v1/chat/completions and /v1/responses.
+ * - **Refused on every route.** Four aggregate ids answer 400 "Model X is not
+ *   available on this endpoint. Call it on /provider/v1/chat/completions
+ *   instead." on both routes. That named path is not a usable API on this
+ *   relay -- it answers a Cloudflare 525 SSL-handshake-failed HTML page, or
+ *   HTML with HTTP 200 -- so there is nothing the adapter could route to.
  *
  * A listing is an advertisement, not a promise: eight of the eleven ids one
- * StepFun key lists cannot serve a chat turn at all, and a menu entry whose
- * every use ends in an error is the defect this catalog exists to remove. They
- * are listed here rather than dropped silently — the settings panel names them
- * — and a model the endpoint starts serving again is one line away from the
+ * StepFun key lists and four of the twenty-six an aggregate key lists cannot
+ * serve a turn at all, and a menu entry whose every use ends in an error is
+ * the defect this catalog exists to remove. They are listed here rather than
+ * dropped silently -- the settings panel names them "endpoint does not serve"
+ * -- and a model the endpoint starts serving again is one line away from the
  * menu.
+ *
+ * Every id below was re-verified by live request on the release that added it;
+ * no entry is inferred from documentation.
  */
 export declare const REFUSED_CHAT_MODEL_IDS: readonly string[];
 /** Whether the endpoint's chat route answers for one upstream id. */

@@ -263,7 +263,20 @@ describe('StepFun reasoning vocabulary (issue 2a)', () => {
       { type: 'reasoning-delta', index: 0, text: 'think' },
       { type: 'reasoning-delta', index: 0, text: 'ing' },
       { type: 'block-end', index: 0, block: { type: 'reasoning', text: 'thinking' } },
-      { type: 'finish', reason: { kind: 'stop' } },
+      // A reasoning-only stream is not a turn: the corrected terminal reason is
+      // the retryable EMPTY_RESPONSE, so the agent loop re-requests instead of
+      // closing the turn with nothing to show (see 'degenerate completion
+      // detection' below).
+      {
+        type: 'finish',
+        reason: {
+          kind: 'error',
+          failure: {
+            message: 'model ended the turn after reasoning without a reply or a tool call',
+            code: 'EMPTY_RESPONSE',
+          },
+        },
+      },
     ])
   })
 
@@ -281,7 +294,20 @@ describe('StepFun reasoning vocabulary (issue 2a)', () => {
       { type: 'block-start', index: 0, blockType: 'reasoning' },
       { type: 'reasoning-delta', index: 0, text: 'whole thought' },
       { type: 'block-end', index: 0, block: { type: 'reasoning', text: 'whole thought' } },
-      { type: 'finish', reason: { kind: 'stop' } },
+      // A reasoning-only stream is not a turn: the corrected terminal reason is
+      // the retryable EMPTY_RESPONSE, so the agent loop re-requests instead of
+      // closing the turn with nothing to show (see 'degenerate completion
+      // detection' below).
+      {
+        type: 'finish',
+        reason: {
+          kind: 'error',
+          failure: {
+            message: 'model ended the turn after reasoning without a reply or a tool call',
+            code: 'EMPTY_RESPONSE',
+          },
+        },
+      },
     ])
   })
 
@@ -614,5 +640,55 @@ describe('responses stream completion (P0-2)', () => {
     const chunks = await collect(functionCallEvents('{"a":1}'))
     expect(chunks.filter(chunk => chunk.type === 'block-end')).toHaveLength(1)
     expect(chunks.at(-1)).toEqual({ type: 'finish', reason: { kind: 'tool-calls' } })
+  })
+})
+
+
+describe('degenerate completion detection', () => {
+  // The same reasoning-only shape the chat path guards against: a stream that
+  // carries a reasoning item and then reports completion with no reply and no
+  // tool call is a degenerate turn, not a successful one.
+  it('reports a reasoning-only completion as the retryable EMPTY_RESPONSE error', async () => {
+    const chunks = await collect([
+      { type: 'response.created', response: { status: 'in_progress', output: [] } },
+      { type: 'response.reasoning_text.delta', delta: '思考' },
+      { type: 'response.reasoning_text.delta', delta: '完毕' },
+      { type: 'response.completed', response: { status: 'completed' } },
+    ])
+    expect(chunks.filter(chunk => chunk.type === 'reasoning-delta').map(chunk => chunk.text)).toEqual(['思考', '完毕'])
+    expect(chunks.at(-1)).toEqual({
+      type: 'finish',
+      reason: {
+        kind: 'error',
+        failure: {
+          message: 'model ended the turn after reasoning without a reply or a tool call',
+          code: 'EMPTY_RESPONSE',
+        },
+      },
+    })
+  })
+
+  it('keeps a genuinely empty completion on its historical message and code', async () => {
+    const chunks = await collect([
+      { type: 'response.created', response: { status: 'in_progress', output: [] } },
+      { type: 'response.completed', response: { status: 'completed' } },
+    ])
+    expect(chunks.at(-1)).toEqual({
+      type: 'finish',
+      reason: {
+        kind: 'error',
+        failure: { message: 'model returned a completed response with no content', code: 'EMPTY_RESPONSE' },
+      },
+    })
+  })
+
+  it('still reports a reasoning turn that also produced text as a normal stop', async () => {
+    const chunks = await collect([
+      { type: 'response.created', response: { status: 'in_progress', output: [] } },
+      { type: 'response.reasoning_text.delta', delta: '想' },
+      { type: 'response.output_text.delta', delta: '答案' },
+      { type: 'response.completed', response: { status: 'completed' } },
+    ])
+    expect(chunks.at(-1)).toEqual({ type: 'finish', reason: { kind: 'stop' } })
   })
 })

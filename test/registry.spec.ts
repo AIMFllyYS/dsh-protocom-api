@@ -102,7 +102,7 @@ describe('model-registry', () => {
     expect(entry?.groups).toEqual(['stepfun'])
   })
 
-  it('keeps the StepFun ids the endpoint refuses out of every group', () => {
+  it('keeps the ids the endpoint refuses out of every group', () => {
     // Verified by request with the key that lists them: the audio and
     // image-editing ids answer 404 and the two Step-3.5 snapshots answer 400,
     // so none of them can serve a chat turn.
@@ -115,11 +115,19 @@ describe('model-registry', () => {
       'stepaudio-2.5-chat',
       'stepaudio-2.5-realtime',
       'stepaudio-2.5-tts',
+      // Aggregate ids: listed, but 'not available on this endpoint' on both routes.
+      'Qwen/Qwen3.8-Flash',
+      'google/gemini-3.7-flash',
+      'tencent/hy4-preview',
+      'inclusionai/ling-3.0-flash-sante:free',
     ])
     expect(servesChat('step-5-preview')).toBe(true)
     expect(servesChat('stepaudio-2.5-tts')).toBe(false)
-    // A refused id is never also a registry entry: membership would re-offer it.
-    for (const id of REFUSED_CHAT_MODEL_IDS) expect(matchRegistry(id), id).toBeUndefined()
+    // A refused id must never be a group membership source: the registry
+    // fallback would re-offer it even when the live listing omits it. It may
+    // still carry metadata (the four aggregate ids keep a context window),
+    // as long as no group claims it.
+    for (const id of REFUSED_CHAT_MODEL_IDS) expect(matchRegistry(id)?.groups, id).toBeUndefined()
   })
 
   it('resolves image input permissively, with the deployment able to say no', () => {

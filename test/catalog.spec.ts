@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { ProtocomAdapter } from '../src/adapter.ts'
 import { resolveAdapterOptions } from '../src/config.ts'
-import { groupCatalog, modelIdentities, REGISTRY } from '../src/model-registry.ts'
+import { groupCatalog, modelIdentities, REFUSED_CHAT_MODEL_IDS, REGISTRY, servesChat } from '../src/model-registry.ts'
 
 afterEach(() => {
   vi.unstubAllGlobals()
@@ -18,13 +18,21 @@ function offlineAdapter(config: Parameters<typeof resolveAdapterOptions>[0]): Pr
 
 const ENABLED = { groups: { aggregate: { enabled: true, apiKey: 'PROTOCOM_AGGREGATE_API_KEY' } } }
 
+/**
+ * Registry identities the endpoint does not refuse -- i.e. the rows a menu can
+ * actually offer. `modelIdentities()` is the registry's own shape and still
+ * counts ids the relay lists but cannot serve.
+ */
+const servedIdentities = (): ReturnType<typeof modelIdentities> =>
+  modelIdentities().filter(identity => servesChat(identity.ids[0] ?? ''))
+
 describe('catalog composition', () => {
   it('offers the whole registry when the endpoint listing is unreachable', async () => {
     // The listing only ever adds. A shrunk, degraded, or failed listing must
     // not be able to empty the model menu.
     const listed = await offlineAdapter(ENABLED).listModels('protocom-aggregate')
-    expect(listed).toHaveLength(modelIdentities().length)
-    for (const identity of modelIdentities()) {
+    expect(listed).toHaveLength(servedIdentities().length)
+    for (const identity of servedIdentities()) {
       expect(listed.some(model => model.id === identity.ids[0]), identity.displayName).toBe(true)
     }
   })
@@ -42,7 +50,7 @@ describe('catalog composition', () => {
     }).listModels('protocom-aggregate')
     const ids = new Set(listed.map(model => model.id))
     for (const id of hidden) expect(ids.has(id), id).toBe(false)
-    expect(listed).toHaveLength(modelIdentities().length - hidden.length)
+    expect(listed).toHaveLength(servedIdentities().length - hidden.length)
   })
 
   it('hides a model whose alias alone was hidden', async () => {
@@ -144,7 +152,7 @@ describe('catalog composition', () => {
     }).listModels('protocom-aggregate')
     expect(listed.slice(0, 2).map(model => model.id)).toEqual(['glm-5.3', 'kimi-k3'])
     // Recommendation orders; it never hides.
-    expect(listed).toHaveLength(modelIdentities().length)
+    expect(listed).toHaveLength(servedIdentities().length)
   })
 
   it('collapses an alias used as the recommendation', async () => {
@@ -257,7 +265,7 @@ describe('per-group catalog membership (issues 1a/1b)', () => {
   it('offers the whole registry only when the listing carries no information', async () => {
     // The safety net survives: a missing listing must not empty the menu.
     const listed = await listingAdapter(AGGREGATE, []).listModels('protocom-aggregate')
-    expect(listed).toHaveLength(modelIdentities().length)
+    expect(listed).toHaveLength(servedIdentities().length)
   })
 })
 
@@ -305,7 +313,7 @@ describe('group catalog projection (settings panel parity)', () => {
   })
 
   it('falls back to the whole registry when the listing is missing', () => {
-    expect(groupCatalog('aggregate', undefined)).toHaveLength(modelIdentities().length)
+    expect(groupCatalog('aggregate', undefined)).toHaveLength(servedIdentities().length)
   })
 
   it('offers only the group\'s own registry entries when the fallback is off', () => {
@@ -317,5 +325,35 @@ describe('group catalog projection (settings panel parity)', () => {
     // The adapter keeps the fallback on, so a degraded endpoint cannot empty
     // the picker.
     expect(groupCatalog('grok', undefined, { registryFallback: true }).length).toBeGreaterThan(0)
+  })
+})
+
+describe('refused ids never reach a menu', () => {
+  // Verified by live request: these four aggregate ids answer 400 "Model X is
+  // not available on this endpoint. Call it on /provider/v1/chat/completions
+  // instead." on BOTH /v1/chat/completions and /v1/responses, and the path the
+  // error names is a Cloudflare HTML page (or a 525), not an API. A menu entry
+  // whose every use fails is exactly what this catalog exists to prevent.
+  const AGGREGATE_UNAVAILABLE = [
+    'Qwen/Qwen3.8-Flash',
+    'google/gemini-3.7-flash',
+    'tencent/hy4-preview',
+    'inclusionai/ling-3.0-flash-sante:free',
+  ]
+
+  it('lists every unavailable aggregate id as refused', () => {
+    for (const id of AGGREGATE_UNAVAILABLE) expect(REFUSED_CHAT_MODEL_IDS).toContain(id)
+  })
+
+  it('keeps the refused aggregate ids out of the aggregate menu', () => {
+    const catalog = groupCatalog('aggregate', AGGREGATE_UNAVAILABLE.map(id => ({ id })), { recommended: [] })
+    for (const id of AGGREGATE_UNAVAILABLE) {
+      expect(catalog.some(model => model.upstreamId === id)).toBe(false)
+    }
+  })
+
+  it('still lists an aggregate id the endpoint does serve', () => {
+    const catalog = groupCatalog('aggregate', [{ id: 'deepseek/deepseek-v4.1-flash' }], { recommended: [] })
+    expect(catalog.some(model => model.upstreamId === 'deepseek/deepseek-v4.1-flash')).toBe(true)
   })
 })

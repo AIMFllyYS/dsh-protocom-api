@@ -128,15 +128,18 @@ Host 提供 `GET /api/protocom-api/balance`，它挂在 Host 的共享、带围�
 - **某个分组在设置页里看不到模型行**：该分组未启用或未配置密钥。启用并保存密钥后面板会自动拉取该分组自己的 listing（也可点「刷新模型」）。
 - **上下文变体不生效**：在**该分组卡片内**对应模型行上勾选档位（写回 `modelContexts`）。分组自带的梯子（StepFun 为 200K/256K/400K/1M）未手动改过时不落盘。
 - **上传图片没有入口 / 报 `UNSUPPORTED_CONTENT`**：说明该模型的图片能力被显式关闭了（`visionModels` 为 `false`，或名录标注 `vision: false`，如 GLM 系）。在对应模型行点「仅文本 / 视觉」切换即可。
-- **某个模型明明列在端点里却不在菜单**：它的 id 在 `REFUSED_CHAT_MODEL_IDS` 里——实测该端点拒绝为它服务（404/400）。展开卡片的「模型和上游 ID」可看到它被标注为「端点提供：否」。
+- **某个模型明明列在端点里却不在菜单**：它的 id 在 `REFUSED_CHAT_MODEL_IDS` 里——实测该端点拒绝为它服务。两种情形都收在这里：只被本通道拒绝（StepFun 的音频/图像模型 404、两个 3.5 快照 400），以及**两条协议都拒绝**（4 个 aggregate id 报 `not available on this endpoint`，它指的那条 `/provider/v1/...` 实测是 Cloudflare HTML 页而非 API）。展开卡片的「模型和上游 ID」可看到它被标注为「端点提供：否」。
 - **发图后上游报错点名该模型**：未收录模型默认放行图片，遇到真正纯文本的模型时由上游拒绝。把该模型切成「仅文本」即可恢复本地拦截。
+- **GLM 5.3 Flash（或其它模型）用一两次工具之后彻底停住，没有下一轮**：这是 0.6.1 修掉的问题。上游会间歇性地「只想不说」地收尾 —— 思考满格、正文为空、`finish_reason: "stop"`（同一提示词实测 16 次里 5 次），而翻译层把思考也算作「有输出」，于是 agent 被判定为正常完成：不报错、不重试、界面停在原地。0.6.1 起这种退化完成映射到可重试的 `EMPTY_RESPONSE`，自动重发该步（默认最多 5 次）。升级即可，无需改配置。
+- **阶跃星辰每次工具调用前都要思考很久**：`reasoning.effort` 在该中转站上真实生效（实测 `minimal`/`low` 的 reasoning token 为 0，`medium`/`high` 为 14/24），但 0.6.1 之前 `stepfun` 分组没有声明词表，模型菜单里**不出现 Effort 子菜单**，思考预算不可控。0.6.1 起可在对应模型的二级菜单里选 `minimal`/`low`/`medium`/`high`；想快就选 `minimal` 或 `low`。
+- **OpenCode Go 里某个模型一调用就 503 `Endpoint is unavailable`**：该族里有一部分模型只认 `/v1/responses`（grok / muse-spark / gpt-5.6-luna）。0.6.1 之前 `grok-4.7` 缺少名录条目，协议回落到分组的 chat 通道，于是每次必然 503（实测 0.6 秒返回、重试 3 次全失败）；现已登记为 responses 通道，升级即可用。
 
 ## 开发
 
 ```bash
 pnpm install
 pnpm run build   # tsdown → lib/index.js（Host，ESM）+ lib/client.js（Web client，CJS 工厂）；tsc -b → lib/types
-pnpm run test    # vitest，182 用例（含安全回归）
+pnpm run test    # vitest，235 用例（含安全回归）
 pnpm run check:consistency   # 构建后断言 lib/ 与 src/ 一致（CI 闸门：build && git diff --exit-code）
 ```
 

@@ -431,14 +431,33 @@ export async function* translateChatCompletions(
     yield { type: 'finish', reason: closeOutReason() }
   }
 
+  /**
+   * The terminal reason for a stream that ended. A `stop` (or absent) finish
+   * is degenerate when the turn produced nothing model-visible: an empty
+   * stream, or one whose only blocks are reasoning.
+   *
+   * Reasoning is the model's own scratch work, never the turn's answer, and
+   * GLM-5.3 Flash on OpenCode Go intermittently ends a turn exactly there —
+   * `finish_reason: "stop"` with a full `reasoning_content` and an empty
+   * content delta (measured on the same prompt: 5 of 16 requests). Counting
+   * the reasoning block as output reported that as a successful turn, so the
+   * agent loop closed the turn with no reply and no tool call to run: from the
+   * outside it is indistinguishable from a hang, and nothing retries it.
+   * EMPTY_RESPONSE is on the retryable-code list the harness re-requests, so a
+   * stochastic stall costs one backoff instead of the turn.
+   */
   function closeOutReason(): FinishReason {
     const reason = pendingFinish ?? { kind: 'stop' as const }
-    return reason.kind === 'stop' && order.length === 0
-      ? {
-        kind: 'error',
-        failure: { message: 'model returned a completed response with no content', code: EMPTY_RESPONSE_CODE },
-      }
-      : reason
+    if (reason.kind !== 'stop' || order.some(block => block.kind !== 'reasoning')) return reason
+    return {
+      kind: 'error',
+      failure: {
+        message: order.length === 0
+          ? 'model returned a completed response with no content'
+          : 'model ended the turn after reasoning without a reply or a tool call',
+        code: EMPTY_RESPONSE_CODE,
+      },
+    }
   }
 
   for await (const payload of payloads) {
