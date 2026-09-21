@@ -82,6 +82,7 @@ export declare const en: {
     rateMultiplier: string;
     groupRateMultiplier: string;
     usageQuota: string;
+    quotaUnavailable: string;
     quotaRolling: string;
     quotaWeekly: string;
     quotaMonthly: string;
