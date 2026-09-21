@@ -3,8 +3,11 @@
 /** English strings (the key-set source of truth for this pair). */
 export const en = {
   nav: 'Protocom API',
+  navGo: 'OpenCode Go',
   title: 'Protocom API',
+  titleGo: 'OpenCode Go',
   intro: 'Connect to the Protocom official API. Each group below is an independent provider route with its own API key.',
+  introGo: 'Connect to an OpenCode Go subscription. The single Go route carries every model the endpoint serves; thinking-effort, context length, and menu ordering are set per model below.',
   readOnly: 'The settings document is read-only in this deployment.',
   advanced: 'Advanced',
   baseUrl: 'Base URL',
@@ -18,6 +21,7 @@ export const en = {
   groupCodex: 'Codex',
   groupStepfun: 'StepFun',
   groupGrok: 'Grok',
+  groupGo: 'Go',
   enabled: 'Enabled',
   protocol: 'Protocol',
   apiKey: 'API key',
@@ -78,6 +82,12 @@ export const en = {
   expiresAt: 'Expires',
   rateMultiplier: 'Billing rate',
   groupRateMultiplier: 'Group rate',
+  usageQuota: 'Usage quota',
+  quotaRolling: '5-hour window',
+  quotaWeekly: 'Weekly',
+  quotaMonthly: 'Monthly',
+  quotaResets: 'resets',
+  quotaRateLimited: 'rate-limited',
   none: '—',
 }
 
@@ -87,8 +97,11 @@ export type ProtocomKey = keyof typeof en
 /** Chinese strings. */
 export const zh: Record<ProtocomKey, string> = {
   nav: 'Protocom API',
+  navGo: 'OpenCode Go',
   title: 'Protocom API',
+  titleGo: 'OpenCode Go',
   intro: '接入 Protocom 官方 API。下方每个分组都是一条独立的 provider route，各自配置 API key。',
+  introGo: '接入 OpenCode Go 订阅。Go 这一条 route 承载端点提供的全部模型；思考强度、上下文版本和菜单排序均可在下方按模型设置。',
   readOnly: '当前部署的设置文档为只读。',
   advanced: '高级',
   baseUrl: 'Base URL',
@@ -102,6 +115,7 @@ export const zh: Record<ProtocomKey, string> = {
   groupCodex: 'Codex',
   groupStepfun: 'StepFun',
   groupGrok: 'Grok',
+  groupGo: 'Go',
   enabled: '启用',
   protocol: '协议',
   apiKey: 'API 密钥',
@@ -162,5 +176,11 @@ export const zh: Record<ProtocomKey, string> = {
   expiresAt: '到期时间',
   rateMultiplier: '计费倍率',
   groupRateMultiplier: '分组倍率',
+  usageQuota: '用量配额',
+  quotaRolling: '5 小时窗口',
+  quotaWeekly: '每周',
+  quotaMonthly: '每月',
+  quotaResets: '重置于',
+  quotaRateLimited: '已限流',
   none: '—',
 }

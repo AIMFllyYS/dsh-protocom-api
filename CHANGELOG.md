@@ -2,6 +2,29 @@
 
 All notable changes to `dsh-protocom-api` are documented here.
 
+## [0.6.0] — OpenCode Go 订阅接入（第二 provider 族）
+
+插件升级为双 provider 族：原有 Protocom 面板之外，设置页新增并列的「OpenCode Go」整页（`opencode-go` 命名空间，route 名 `opencode-go-sub`），订阅源为 `https://opencode.ai/zen/go`，承载端点约 28 个模型。
+
+### 实测结论（已按模型逐个打线验证）
+
+- **会话头**：Go 网关要求 `x-opencode-session`；部分路径也认 `x-deepseek-harness-session-id`。插件同时下发两个头（同一 harness session 值），缺少时端点返回 400 MissingSessionID。
+- **route 命名避让**：DSH 1.5 自带的 `dsh-llm-pi-ai` 会无条件声明 pi-ai 名录中的全部 provider，`opencode-go` 已被占用；同名注册会让整个 profile 启动失败（DUPLICATE_DIRECTORY）。本插件的 Go route 因此命名为 `opencode-go-sub`。
+- **minimax-m3 无 [DONE] 哨兵**：该 route 在 `finish_reason` + usage 后直接断连。带 inline-think 的路线按 EOF 收尾（以已声明的 finish_reason 为完成信号）；其余路线仍保留严格截断保护。
+- **协议按模型分流**：grok-4.6、muse-spark-1.2/1.3、gpt-5.6-luna 在 chat-completions 上 503，只有 /responses 可用——名录对这 4 个模型固定 `protocol: responses`；`hy3-preview`、`minimax-m2.7` 被端点拒收，永不进菜单。
+- **思考强度词表逐模型实测**：通用词表 `none/minimal/low/medium/high/xhigh/max`；glm-5.1/5.2/5.3 无关闭词（`low` 起步）；kimi-k2.7-code 用 `off` 关闭且拒绝 `none`；qwen3.6-plus 用 `minimum` 拼写且无 `max`；omen-alpha 无 `xhigh`；mimo-v2.5-pro 仅四档；grok/muse（responses）为 `minimal..xhigh`；gpt-5.6-luna 拒绝 `minimal`。
+- **effort-only 写法**：Go 接受裸 `reasoning_effort`，拒绝 `thinking:{type:'disabled'}`——该族全部以 effort 值下发（含关闭词），永不发 `thinking` 块。
+- **思考回传三形态**：`reasoning_content`（多数模型）、`reasoning` + `reasoning_details`（minimax-m2.5，OpenRouter 风格，去重后只发一份）、内联 `<think>…</think>`（minimax-m3，新增防断块剥出器）。统一流入 reasoning-delta。
+- **永不思考的模型**（接受 effort 但不产出 thinking）不声明词表，菜单不出 Effort 子菜单：hy3、hy4-preview、kimi-k2.6、mimo-v2.5、gpt-5.6-luna。
+- **用量**：`GET /v1/usage` 返回三窗口订阅配额（5 小时 20%、每周 50%、每月 100% cap，各带 percent/status/resetsAt），设置页显示为三条配额进度条；与 Protocom 余额并存于各自面板。
+
+### 工程结构
+
+- 新增 `family.ts`：`ProviderFamily` 描述符承载一族的全部差异（命名空间、端点、凭证命名空间、组键、名录、推荐序、会话头、思考写法、遥测路径）。
+- 配置：`SectionConfig` 为两族共享的形状；yml 顶层仍是 Protocom 字段，`opencode:` 子节承载 Go 配置；凭证命名空间分别为 `PROTOCOM_*` / `OPENCODE_*`。
+- 客户端：单个 `ProtocomSection` 组件参数化驱动两个面板（family + copy 注入），operations 按命名空间隔离；新增配额条组件复用既有 CSS 语言。
+- 遥测：`GET /api/protocom-api/balance` 与 `GET /api/opencode-go/usage` 各自挂在 fenced connection 通道。
+
 ## [0.5.0] — 让有缺陷的 chat-completions 路由也能真实跑通（可选兼容模式）
 
 0.4.0 让阶跃星辰分组改走 responses 通道，问题是解决了，但那算"绕开"。这一版回答"能不能从插件侧把 chat-completions 也修好"：**能，但有代价，默认不开**。

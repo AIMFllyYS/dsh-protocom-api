@@ -49,11 +49,21 @@ export interface ProtocomAdapterOptions {
      */
     resolveAttachments?: () => AttachmentStore | undefined;
 }
-/** One adapter serving every enabled `protocom-*` provider route. */
+/** One adapter serving every enabled route of one provider family. */
 export declare class ProtocomAdapter extends LlmAdapter {
     private readonly config;
     private readonly listings;
+    /**
+     * Stable per-adapter session id for calls that arrive without
+     * `GenerateOptions.sessionId`. The OpenCode Go endpoint answers 400
+     * `MissingSessionID` without one, so non-conversational traffic (title
+     * generation, probes) rides this value: stable per adapter, never invented
+     * per request, which keeps the gateway's session accounting honest.
+     */
+    private readonly fallbackSession;
     constructor(config: ProtocomAdapterOptions);
+    /** The family this adapter instance serves (Protocom for hand-built options). */
+    private family;
     providerInfo(provider: string): LlmProviderInfo;
     providerRetryPolicy(_provider: string): ResolvedRetryPolicy;
     /** The enabled group behind one route; every dispatch path starts here. */

@@ -15,7 +15,8 @@
  *
  * @module dsh-protocom-api/model-registry
  */
-import type { GroupKey, GroupReasoning } from './groups.ts';
+import type { GroupReasoning, Protocol } from './groups.ts';
+import type { ProviderFamily } from './family.ts';
 export { CONTEXT_LADDER } from './groups.ts';
 /** Reasoning vocabulary one registry model supports. */
 export interface RegistryReasoning {
@@ -46,9 +47,24 @@ export interface RegistryEntry {
      * Provider groups this entry is a *membership source* for. Absent means the
      * entry is metadata only: it is offered wherever the endpoint's own listing
      * names it, and nowhere else. Grouping membership this way is what keeps one
-     * group's menu from advertising every other group's models.
+     * group's menu from advertising every other group's models. Group keys are
+     * family-scoped (e.g. `codex` for Protocom, `go` for OpenCode Go).
      */
-    groups?: readonly GroupKey[];
+    groups?: readonly string[];
+    /**
+     * Wire protocol this model must use on its family's endpoint, overriding the
+     * group's default. OpenCode Go routes a per-model set to the Responses
+     * surface only (grok-4.6, muse-spark-*, gpt-5.6-luna answer 503/ModelError
+     * on chat-completions), while the rest only answer on chat-completions.
+     */
+    protocol?: Protocol;
+    /**
+     * Whether this model emits its thinking inline in the `content` stream as a
+     * `<think>...</think>` segment rather than in a reasoning channel. The
+     * chat-completions translator lifts that segment into a reasoning block so
+     * the harness still sees a thinking stream (MiniMax M3 on OpenCode Go).
+     */
+    inlineReasoning?: boolean;
     /**
      * Menu priority: lower sorts earlier. Assigned to the models whose reasoning
      * content actually streams, so the picker leads with readable thinking.
@@ -77,9 +93,9 @@ export declare function contextChoicesFor(contextWindow: number): number[];
  */
 export declare const REGISTRY: readonly RegistryEntry[];
 /** Find the registry entry for one upstream id. */
-export declare function matchRegistry(id: string): RegistryEntry | undefined;
+export declare function matchRegistry(id: string, registry?: readonly RegistryEntry[]): RegistryEntry | undefined;
 /** Whether one registry entry is a membership source for a group. */
-export declare function servesGroup(entry: RegistryEntry, key: GroupKey): boolean;
+export declare function servesGroup(entry: RegistryEntry, key: string): boolean;
 /**
  * Ids the endpoint's listing advertises but its chat route refuses, verified by
  * request against `GET /v1/models` and `POST /v1/chat/completions` with the
@@ -97,7 +113,7 @@ export declare function servesGroup(entry: RegistryEntry, key: GroupKey): boolea
  */
 export declare const REFUSED_CHAT_MODEL_IDS: readonly string[];
 /** Whether the endpoint's chat route answers for one upstream id. */
-export declare function servesChat(id: string): boolean;
+export declare function servesChat(id: string, refused?: readonly string[]): boolean;
 /**
  * Whether one model accepts image input, after the deployment's own choice.
  *
@@ -110,7 +126,7 @@ export declare function servesChat(id: string): boolean;
  * @param id - upstream model id, alias resolved through {@link identityKey}.
  * @param declared - the deployment's per-model choices.
  */
-export declare function acceptsImages(id: string, declared?: ReadonlyMap<string, boolean>): boolean;
+export declare function acceptsImages(id: string, declared?: ReadonlyMap<string, boolean>, registry?: readonly RegistryEntry[]): boolean;
 /**
  * One selectable model identity: a display name and every upstream id that
  * serves it. The endpoint lists some models under both an organization- and a
@@ -136,9 +152,9 @@ export declare const DEFAULT_RECOMMENDED: readonly string[];
  * belongs to. Aliases of one model share a key, so a recommendation or a
  * visibility choice made against either id applies to both.
  */
-export declare function identityKey(id: string): string;
+export declare function identityKey(id: string, registry?: readonly RegistryEntry[]): string;
 /** Collapse the registry into one identity per display name, in registry order. */
-export declare function modelIdentities(): ModelIdentity[];
+export declare function modelIdentities(registry?: readonly RegistryEntry[]): ModelIdentity[];
 /** Short capacity label: 128K, 256K, 512K, 1M. */
 export declare function contextLabel(tokens: number): string;
 /** Selector name for one entry at one context length: `{displayName} [{label}]`. */
@@ -177,7 +193,7 @@ export interface CatalogModel {
  * @param declaredVision - the deployment's per-model image capability.
  * @returns the model as the menu presents it.
  */
-export declare function catalogEntry(upstream: UpstreamModel, groupReasoning?: GroupReasoning, declaredVision?: ReadonlyMap<string, boolean>): CatalogModel;
+export declare function catalogEntry(upstream: UpstreamModel, groupReasoning?: GroupReasoning, declaredVision?: ReadonlyMap<string, boolean>, registry?: readonly RegistryEntry[]): CatalogModel;
 /** One model as a group's own model menu presents it. */
 export interface GroupCatalogModel {
     /** The upstream id this row's menu entries dispatch. */
@@ -213,6 +229,13 @@ export interface GroupCatalogOptions {
      * not advertise every other group's models.
      */
     registryFallback?: boolean;
+    /**
+     * The provider family this catalog is for. Absent means Protocom — the
+     * historical caller — so the shipped registry, refusal list, and group
+     * reasoning defaults apply. A family scopes every lookup (registry, refused
+     * ids, and the group's own reasoning vocabulary) to its own endpoint.
+     */
+    family?: ProviderFamily;
 }
 /**
  * One group's own model menu: the models that group's menu offers, in the
@@ -232,4 +255,21 @@ export interface GroupCatalogOptions {
  * `param options - the deployment's visibility, ordering, and modality choices.
  * `returns one row per model identity, in menu order.
  */
-export declare function groupCatalog(key: GroupKey, listing: readonly UpstreamModel[] | undefined, options?: GroupCatalogOptions): GroupCatalogModel[];
+export declare function groupCatalog(key: string, listing: readonly UpstreamModel[] | undefined, options?: GroupCatalogOptions): GroupCatalogModel[];
+/**
+ * The OpenCode Go registry. Every entry is a membership source for the single
+ * `go` group, so the menu holds the whole catalog even while the live listing
+ * is unreachable. `contextWindow` follows the model's published window
+ * (models.dev); reasoning vocabularies are the live-verified accept sets.
+ */
+export declare const GO_REGISTRY: readonly RegistryEntry[];
+/**
+ * Ids the Go endpoint lists but cannot serve a chat turn for on any wire
+ * protocol, verified by request: `minimax-m2.7` answers 503 on both
+ * chat-completions and responses, and `hy3-preview` answers 400
+ * "Model is unavailable". They stay listed (the probe table names them) but
+ * never reach the menu.
+ */
+export declare const GO_REFUSED_MODEL_IDS: readonly string[];
+/** Go menu leads: the models whose thinking actually streams, in preference order. */
+export declare const GO_DEFAULT_RECOMMENDED: readonly string[];

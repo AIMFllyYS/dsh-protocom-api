@@ -2,8 +2,11 @@
 /** English strings (the key-set source of truth for this pair). */
 export declare const en: {
     nav: string;
+    navGo: string;
     title: string;
+    titleGo: string;
     intro: string;
+    introGo: string;
     readOnly: string;
     advanced: string;
     baseUrl: string;
@@ -17,6 +20,7 @@ export declare const en: {
     groupCodex: string;
     groupStepfun: string;
     groupGrok: string;
+    groupGo: string;
     enabled: string;
     protocol: string;
     apiKey: string;
@@ -77,6 +81,12 @@ export declare const en: {
     expiresAt: string;
     rateMultiplier: string;
     groupRateMultiplier: string;
+    usageQuota: string;
+    quotaRolling: string;
+    quotaWeekly: string;
+    quotaMonthly: string;
+    quotaResets: string;
+    quotaRateLimited: string;
     none: string;
 };
 /** Dictionary key union owned by this plugin. */

@@ -17,7 +17,8 @@
  */
 
 import { CONTEXT_1M, CONTEXT_200K, CONTEXT_256K, CONTEXT_LADDER, GROUP_DEFAULTS } from './groups.ts'
-import type { GroupKey, GroupReasoning } from './groups.ts'
+import type { GroupKey, GroupReasoning, Protocol } from './groups.ts'
+import type { ProviderFamily } from './family.ts'
 
 export { CONTEXT_LADDER } from './groups.ts'
 
@@ -52,9 +53,24 @@ export interface RegistryEntry {
    * Provider groups this entry is a *membership source* for. Absent means the
    * entry is metadata only: it is offered wherever the endpoint's own listing
    * names it, and nowhere else. Grouping membership this way is what keeps one
-   * group's menu from advertising every other group's models.
+   * group's menu from advertising every other group's models. Group keys are
+   * family-scoped (e.g. `codex` for Protocom, `go` for OpenCode Go).
    */
-  groups?: readonly GroupKey[]
+  groups?: readonly string[]
+  /**
+   * Wire protocol this model must use on its family's endpoint, overriding the
+   * group's default. OpenCode Go routes a per-model set to the Responses
+   * surface only (grok-4.6, muse-spark-*, gpt-5.6-luna answer 503/ModelError
+   * on chat-completions), while the rest only answer on chat-completions.
+   */
+  protocol?: Protocol
+  /**
+   * Whether this model emits its thinking inline in the `content` stream as a
+   * `<think>...</think>` segment rather than in a reasoning channel. The
+   * chat-completions translator lifts that segment into a reasoning block so
+   * the harness still sees a thinking stream (MiniMax M3 on OpenCode Go).
+   */
+  inlineReasoning?: boolean
   /**
    * Menu priority: lower sorts earlier. Assigned to the models whose reasoning
    * content actually streams, so the picker leads with readable thinking.
@@ -273,12 +289,12 @@ export const REGISTRY: readonly RegistryEntry[] = [
 ]
 
 /** Find the registry entry for one upstream id. */
-export function matchRegistry(id: string): RegistryEntry | undefined {
-  return REGISTRY.find(entry => entry.id === id)
+export function matchRegistry(id: string, registry: readonly RegistryEntry[] = REGISTRY): RegistryEntry | undefined {
+  return registry.find(entry => entry.id === id)
 }
 
 /** Whether one registry entry is a membership source for a group. */
-export function servesGroup(entry: RegistryEntry, key: GroupKey): boolean {
+export function servesGroup(entry: RegistryEntry, key: string): boolean {
   return entry.groups?.includes(key) === true
 }
 
@@ -309,8 +325,8 @@ export const REFUSED_CHAT_MODEL_IDS: readonly string[] = [
 ]
 
 /** Whether the endpoint's chat route answers for one upstream id. */
-export function servesChat(id: string): boolean {
-  return !REFUSED_CHAT_MODEL_IDS.includes(id)
+export function servesChat(id: string, refused: readonly string[] = REFUSED_CHAT_MODEL_IDS): boolean {
+  return !refused.includes(id)
 }
 
 /**
@@ -325,10 +341,10 @@ export function servesChat(id: string): boolean {
  * @param id - upstream model id, alias resolved through {@link identityKey}.
  * @param declared - the deployment's per-model choices.
  */
-export function acceptsImages(id: string, declared?: ReadonlyMap<string, boolean>): boolean {
-  const chosen = declared?.get(identityKey(id))
+export function acceptsImages(id: string, declared?: ReadonlyMap<string, boolean>, registry: readonly RegistryEntry[] = REGISTRY): boolean {
+  const chosen = declared?.get(identityKey(id, registry))
   if (chosen !== undefined) return chosen
-  return matchRegistry(id)?.vision !== false
+  return matchRegistry(id, registry)?.vision !== false
 }
 
 /**
@@ -362,16 +378,16 @@ export const DEFAULT_RECOMMENDED: readonly string[] = REGISTRY
  * belongs to. Aliases of one model share a key, so a recommendation or a
  * visibility choice made against either id applies to both.
  */
-export function identityKey(id: string): string {
-  const entry = matchRegistry(id)
+export function identityKey(id: string, registry: readonly RegistryEntry[] = REGISTRY): string {
+  const entry = matchRegistry(id, registry)
   if (entry === undefined) return id
-  return REGISTRY.find(candidate => candidate.displayName === entry.displayName)?.id ?? id
+  return registry.find(candidate => candidate.displayName === entry.displayName)?.id ?? id
 }
 
 /** Collapse the registry into one identity per display name, in registry order. */
-export function modelIdentities(): ModelIdentity[] {
+export function modelIdentities(registry: readonly RegistryEntry[] = REGISTRY): ModelIdentity[] {
   const byName = new Map<string, { entry: RegistryEntry; ids: string[] }>()
-  for (const entry of REGISTRY) {
+  for (const entry of registry) {
     const hit = byName.get(entry.displayName)
     if (hit === undefined) byName.set(entry.displayName, { entry, ids: [entry.id] })
     else hit.ids.push(entry.id)
@@ -431,8 +447,9 @@ export function catalogEntry(
   upstream: UpstreamModel,
   groupReasoning?: GroupReasoning,
   declaredVision?: ReadonlyMap<string, boolean>,
+  registry: readonly RegistryEntry[] = REGISTRY,
 ): CatalogModel {
-  const entry = matchRegistry(upstream.id)
+  const entry = matchRegistry(upstream.id, registry)
   const disclosed: RegistryReasoning | undefined = upstream.reasoningEfforts !== undefined
     && upstream.reasoningEfforts.length > 0
     ? {
@@ -451,7 +468,7 @@ export function catalogEntry(
         : upstream.id,
       contextWindow: upstream.contextWindow ?? FALLBACK_CONTEXT_WINDOW,
       ...reasoning === undefined ? {} : { reasoning },
-      vision: acceptsImages(upstream.id, declaredVision),
+      vision: acceptsImages(upstream.id, declaredVision, registry),
       rank: Number.MAX_SAFE_INTEGER,
     }
   }
@@ -461,7 +478,7 @@ export function catalogEntry(
     contextWindow: entry.contextWindow,
     contextOptions: contextChoicesFor(entry.contextWindow),
     ...reasoning === undefined ? {} : { reasoning },
-    vision: acceptsImages(upstream.id, declaredVision),
+    vision: acceptsImages(upstream.id, declaredVision, registry),
     rank: entry.rank ?? Number.MAX_SAFE_INTEGER,
   }
 }
@@ -505,6 +522,13 @@ export interface GroupCatalogOptions {
    * not advertise every other group's models.
    */
   registryFallback?: boolean
+  /**
+   * The provider family this catalog is for. Absent means Protocom — the
+   * historical caller — so the shipped registry, refusal list, and group
+   * reasoning defaults apply. A family scopes every lookup (registry, refused
+   * ids, and the group's own reasoning vocabulary) to its own endpoint.
+   */
+  family?: ProviderFamily
 }
 
 /**
@@ -526,30 +550,35 @@ export interface GroupCatalogOptions {
  * `returns one row per model identity, in menu order.
  */
 export function groupCatalog(
-  key: GroupKey,
+  key: string,
   listing: readonly UpstreamModel[] | undefined,
   options: GroupCatalogOptions = {},
 ): GroupCatalogModel[] {
+  const registry = options.family?.registry ?? REGISTRY
+  const refused = options.family?.refused ?? REFUSED_CHAT_MODEL_IDS
+  const groupReasoning = options.family === undefined
+    ? GROUP_DEFAULTS[key as GroupKey].reasoning
+    : options.family.defaults[key]?.reasoning
   const rows: UpstreamModel[] = listing === undefined ? [] : [...listing]
-  for (const entry of REGISTRY) {
+  for (const entry of registry) {
     if (!servesGroup(entry, key)) continue
     if (!rows.some(row => row.id === entry.id)) rows.push({ id: entry.id })
   }
   // "No listing" and "empty listing" are both no information, not "no models".
   if (rows.length === 0 && options.registryFallback !== false) {
-    for (const entry of REGISTRY) rows.push({ id: entry.id })
+    for (const entry of registry) rows.push({ id: entry.id })
   }
   const rankOf = (id: string): number => {
-    const at = options.recommended?.indexOf(identityKey(id)) ?? -1
+    const at = options.recommended?.indexOf(identityKey(id, registry)) ?? -1
     return at === -1 ? Number.MAX_SAFE_INTEGER : at
   }
   const ranked = rows
-    .filter(row => servesChat(row.id) && options.hidden?.has(row.id) !== true)
+    .filter(row => servesChat(row.id, refused) && options.hidden?.has(row.id) !== true)
     .map((row, index) => ({ index, row, rank: rankOf(row.id) }))
     .sort((left, right) => left.rank - right.rank || left.index - right.index)
   const byName = new Map<string, MutableCatalogRow>()
   for (const { row } of ranked) {
-    const model = catalogEntry(row, GROUP_DEFAULTS[key].reasoning, options.vision)
+    const model = catalogEntry(row, groupReasoning, options.vision, registry)
     const hit = byName.get(model.displayName)
     if (hit === undefined) {
       byName.set(model.displayName, {
@@ -568,3 +597,254 @@ export function groupCatalog(
   }
   return [...byName.values()]
 }
+/* ------------------------------------------------------------------------
+ * OpenCode Go (`https://opencode.ai/zen/go`): the subscription surface. Its
+ * `/v1/models` listing discloses only `id`/`object`/`created`/`owned_by`, so
+ * every fact below is hand-maintained from models.dev's `opencode-go` entry
+ * and verified by request against the live endpoint.
+ *
+ * Verified wire facts (2026-09, live probing):
+ * - Protocol is per-model: grok-4.6, muse-spark-1.2/1.3-contributor and
+ *   gpt-5.6-luna answer 503/`ModelError` on /v1/chat/completions and only
+ *   serve /v1/responses; every other listed model answers only on
+ *   chat-completions (the same /responses call 503s); minimax-m2.7 and
+ *   hy3-preview fail on both.
+ * - Thinking on chat-completions rides `reasoning_effort` alone — the gateway
+ *   parses `reasoningEffort ?? reasoning_effort ?? reasoning.effort`; a
+ *   `thinking: {type:"disabled"}` block is refused on GLM routes — and the
+ *   disabling word is per model: `none` (deepseek/qwen/kimi-k3/mimo/…), `off`
+ *   (kimi-k2.7-code), or impossible (glm-5.1/5.2/5.3, minimax-m2.5: reasoning
+ *   is mandatory there). `minimum` — not `minimal` — is qwen3.6-plus's word.
+ * - Reasoning streams as `delta.reasoning_content` on chat (deepseek, glm,
+ *   kimi-k2.7-code/k3, longcat, mimo-v2.5-pro, omen-alpha, qwen3.x), as
+ *   `delta.reasoning`/`reasoning_details` on minimax-m2.5, inline as
+ *   `<think>…</think>` inside `delta.content` on minimax-m3, and as reasoning
+ *   items (`reasoning_summary_text.delta` etc.) on the responses models.
+ * - Replaying assistant `reasoning_content` is accepted, and kimi-family
+ *   models expect it for interleaved thinking.
+ * ---------------------------------------------------------------------- */
+
+/** Go vocabulary shared by the deepseek/glm-5.3-flash/kimi-k3/longcat/mimo-v2.5/minimax-m3/qwen3.8 generation. */
+const GO_FULL_REASONING: RegistryReasoning = {
+  efforts: ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'],
+  defaultEffort: 'high',
+}
+
+/** GLM-5.1/5.2/5.3 on Go: thinking cannot be disabled; `minimal`, `none` and `off` all answer 400. */
+const GO_GLM_REASONING: RegistryReasoning = {
+  efforts: ['low', 'medium', 'high', 'xhigh', 'max'],
+  defaultEffort: 'high',
+}
+
+/** muses/grok on the Go responses surface: `none` and `max` answer 400. */
+const GO_RESPONSES_REASONING: RegistryReasoning = {
+  efforts: ['minimal', 'low', 'medium', 'high', 'xhigh'],
+  defaultEffort: 'medium',
+}
+
+/** Qwen3.7 generation on Go: `max`, `minimum` and `off` answer 400. */
+const GO_QWEN37_REASONING: RegistryReasoning = {
+  efforts: ['none', 'minimal', 'low', 'medium', 'high', 'xhigh'],
+  defaultEffort: 'medium',
+}
+
+/**
+ * The OpenCode Go registry. Every entry is a membership source for the single
+ * `go` group, so the menu holds the whole catalog even while the live listing
+ * is unreachable. `contextWindow` follows the model's published window
+ * (models.dev); reasoning vocabularies are the live-verified accept sets.
+ */
+export const GO_REGISTRY: readonly RegistryEntry[] = [
+  {
+    id: 'deepseek-v4.1-flash',
+    displayName: 'DeepSeek V4.1 Flash',
+    family: 'deepseek',
+    contextWindow: 1_000_000,
+    reasoning: GO_FULL_REASONING,
+    vision: true,
+    groups: ['go'],
+    rank: 1,
+  },
+  {
+    id: 'glm-5.3',
+    displayName: 'GLM-5.3',
+    family: 'glm',
+    contextWindow: 1_000_000,
+    reasoning: GO_GLM_REASONING,
+    vision: false,
+    groups: ['go'],
+    rank: 2,
+  },
+  {
+    id: 'kimi-k3',
+    displayName: 'Kimi K3',
+    family: 'kimi',
+    contextWindow: CONTEXT_1M,
+    reasoning: GO_FULL_REASONING,
+    vision: true,
+    groups: ['go'],
+    rank: 3,
+  },
+  {
+    id: 'deepseek-v4-pro',
+    displayName: 'DeepSeek V4 Pro',
+    family: 'deepseek',
+    contextWindow: 1_000_000,
+    reasoning: GO_FULL_REASONING,
+    vision: false,
+    groups: ['go'],
+    rank: 4,
+  },
+  {
+    id: 'qwen3.8-max',
+    displayName: 'Qwen3.8 Max',
+    family: 'qwen',
+    contextWindow: 1_000_000,
+    reasoning: GO_FULL_REASONING,
+    vision: true,
+    groups: ['go'],
+    rank: 5,
+  },
+  {
+    id: 'grok-4.6',
+    displayName: 'Grok 4.6',
+    family: 'grok',
+    contextWindow: 500_000,
+    reasoning: GO_RESPONSES_REASONING,
+    vision: true,
+    protocol: 'responses',
+    groups: ['go'],
+    rank: 6,
+  },
+  { id: 'deepseek-v4-flash', displayName: 'DeepSeek V4 Flash', family: 'deepseek', contextWindow: 1_000_000, reasoning: GO_FULL_REASONING, vision: false, groups: ['go'] },
+  { id: 'deepseek-v4-flash-vision-exp', displayName: 'DeepSeek V4 Flash Vision', family: 'deepseek', contextWindow: 1_000_000, reasoning: GO_FULL_REASONING, vision: true, groups: ['go'] },
+  // Live-listed but absent from models.dev: the window is unverified, so the
+  // entry keeps the family floor rather than claiming the generation's 1M.
+  { id: 'deepseek-flash', displayName: 'DeepSeek Flash', family: 'deepseek', contextWindow: FALLBACK_CONTEXT_WINDOW, reasoning: GO_FULL_REASONING, groups: ['go'] },
+  { id: 'glm-5.1', displayName: 'GLM-5.1', family: 'glm', contextWindow: 202_752, reasoning: GO_GLM_REASONING, vision: false, groups: ['go'] },
+  { id: 'glm-5.2', displayName: 'GLM-5.2', family: 'glm', contextWindow: 1_000_000, reasoning: GO_GLM_REASONING, vision: false, groups: ['go'] },
+  { id: 'glm-5.3-flash', displayName: 'GLM-5.3 Flash', family: 'glm', contextWindow: 1_000_000, reasoning: GO_FULL_REASONING, vision: true, groups: ['go'] },
+  {
+    id: 'gpt-5.6-luna',
+    displayName: 'GPT-5.6 Luna',
+    family: 'gpt',
+    contextWindow: 1_050_000,
+    // `minimal` answers 400; `none` disables.
+    reasoning: { efforts: ['none', 'low', 'medium', 'high', 'xhigh', 'max'], defaultEffort: 'medium' },
+    vision: true,
+    protocol: 'responses',
+    groups: ['go'],
+  },
+  // hy3 and hy4-preview accept the effort field but never emit thinking on any
+  // effort, so they carry no vocabulary — an effort picker would promise a
+  // knob the model does not have.
+  { id: 'hy3', displayName: 'HY-3', family: 'hunyuan', contextWindow: 256_000, vision: false, groups: ['go'] },
+  { id: 'hy4-preview', displayName: 'HY-4 Preview', family: 'hunyuan', contextWindow: 1_024_000, vision: false, groups: ['go'] },
+  // kimi-k2.6 and mimo-v2.5 accept the field but never stream thinking.
+  { id: 'kimi-k2.6', displayName: 'Kimi K2.6', family: 'kimi', contextWindow: CONTEXT_256K, vision: true, groups: ['go'] },
+  {
+    id: 'kimi-k2.7-code',
+    displayName: 'Kimi K2.7 Code',
+    family: 'kimi',
+    contextWindow: CONTEXT_256K,
+    // `none` answers 400 on this route; `off` is the disabling word.
+    reasoning: { efforts: ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'], defaultEffort: 'medium' },
+    vision: true,
+    groups: ['go'],
+  },
+  { id: 'longcat-2.0', displayName: 'LongCat 2.0', family: 'longcat', contextWindow: 1_000_000, reasoning: GO_FULL_REASONING, vision: false, groups: ['go'] },
+  { id: 'mimo-v2.5', displayName: 'MiMo V2.5', family: 'mimo', contextWindow: 1_000_000, vision: true, groups: ['go'] },
+  {
+    id: 'mimo-v2.5-pro',
+    displayName: 'MiMo V2.5 Pro',
+    family: 'mimo',
+    contextWindow: CONTEXT_1M,
+    // `minimal`, `xhigh`, `max` and `off` all answer 400.
+    reasoning: { efforts: ['none', 'low', 'medium', 'high'], defaultEffort: 'medium' },
+    vision: false,
+    groups: ['go'],
+  },
+  {
+    id: 'minimax-m2.5',
+    displayName: 'MiniMax M2.5',
+    family: 'minimax',
+    contextWindow: CONTEXT_200K,
+    // Reasoning is mandatory: `none`, `off` and `minimum` answer 400. The
+    // stream arrives on `delta.reasoning` (plus `reasoning_details`), not
+    // `reasoning_content`.
+    reasoning: { efforts: ['minimal', 'low', 'medium', 'high', 'xhigh', 'max'], defaultEffort: 'medium' },
+    vision: false,
+    groups: ['go'],
+  },
+  {
+    id: 'minimax-m3',
+    displayName: 'MiniMax M3',
+    family: 'minimax',
+    contextWindow: 1_000_000,
+    reasoning: GO_FULL_REASONING,
+    vision: true,
+    // Thinking streams inline inside `delta.content` as `<think>…</think>`.
+    inlineReasoning: true,
+    groups: ['go'],
+  },
+  {
+    id: 'muse-spark-1.2-contributor',
+    displayName: 'Muse Spark 1.2 Contributor',
+    family: 'meta',
+    contextWindow: CONTEXT_1M,
+    reasoning: GO_RESPONSES_REASONING,
+    vision: true,
+    protocol: 'responses',
+    groups: ['go'],
+  },
+  {
+    id: 'muse-spark-1.3-contributor',
+    displayName: 'Muse Spark 1.3 Contributor',
+    family: 'meta',
+    contextWindow: CONTEXT_1M,
+    reasoning: GO_RESPONSES_REASONING,
+    vision: true,
+    protocol: 'responses',
+    groups: ['go'],
+  },
+  {
+    id: 'omen-alpha',
+    displayName: 'Omen Alpha',
+    family: 'omen',
+    contextWindow: 500_000,
+    // `xhigh` answers 400; `off` and `minimum` are refused spellings.
+    reasoning: { efforts: ['none', 'minimal', 'low', 'medium', 'high', 'max'], defaultEffort: 'medium' },
+    vision: true,
+    groups: ['go'],
+  },
+  {
+    id: 'qwen3.6-plus',
+    displayName: 'Qwen3.6 Plus',
+    family: 'qwen',
+    contextWindow: 1_000_000,
+    // This route's minimal step is spelled `minimum`; `minimal`, `max` and
+    // `off` all answer 400.
+    reasoning: { efforts: ['none', 'minimum', 'low', 'medium', 'high', 'xhigh'], defaultEffort: 'medium' },
+    vision: true,
+    groups: ['go'],
+  },
+  { id: 'qwen3.7-max', displayName: 'Qwen3.7 Max', family: 'qwen', contextWindow: 1_000_000, reasoning: GO_QWEN37_REASONING, vision: false, groups: ['go'] },
+  { id: 'qwen3.7-plus', displayName: 'Qwen3.7 Plus', family: 'qwen', contextWindow: 1_000_000, reasoning: GO_QWEN37_REASONING, vision: true, groups: ['go'] },
+  { id: 'qwen3.8-flash', displayName: 'Qwen3.8 Flash', family: 'qwen', contextWindow: 1_000_000, reasoning: GO_FULL_REASONING, vision: true, groups: ['go'] },
+]
+
+/**
+ * Ids the Go endpoint lists but cannot serve a chat turn for on any wire
+ * protocol, verified by request: `minimax-m2.7` answers 503 on both
+ * chat-completions and responses, and `hy3-preview` answers 400
+ * "Model is unavailable". They stay listed (the probe table names them) but
+ * never reach the menu.
+ */
+export const GO_REFUSED_MODEL_IDS: readonly string[] = ['hy3-preview', 'minimax-m2.7']
+
+/** Go menu leads: the models whose thinking actually streams, in preference order. */
+export const GO_DEFAULT_RECOMMENDED: readonly string[] = GO_REGISTRY
+  .filter(entry => entry.rank !== undefined)
+  .slice()
+  .sort((left, right) => (left.rank as number) - (right.rank as number))
+  .map(entry => entry.id)

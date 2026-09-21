@@ -25,7 +25,7 @@ export type ModelDiscoveryOutcome = {
     readonly kind: 'refused';
     readonly message: string;
 };
-/** The Host operations the Protocom section invokes. */
+/** The Host operations one provider section invokes (Protocom or OpenCode Go). */
 export interface ProtocomOperations {
     /** Read this plugin's redacted settings namespace view. */
     describeSettings(): Promise<SettingsNamespaceView | undefined>;
@@ -44,11 +44,14 @@ export interface ProtocomOperations {
     /** Ask one group's endpoint what models it serves. */
     discoverModels(request: LlmModelDiscoveryRequest): Promise<ModelDiscoveryOutcome>;
 }
-/** The settings namespace the Host half owns. */
+/** The settings namespace the Protocom family owns (`'opencode-go'` is the Go family's). */
 export declare const SETTINGS_NS = "protocom-api";
 /**
- * Bind the section's Host operations to the plugin's own Remote namespaces.
+ * Bind one section's Host operations to the plugin's own Remote namespaces.
  * @param ctx - the plugin's context, which declares `remote.credentials`,
  * `remote.llm`, and `remote.settings` in its own `inject`.
+ * @param settingsNs - the family's settings namespace: every read, write, and
+ * discovery request is scoped to it, so the two families' sections never
+ * share state.
  */
-export declare function createProtocomOperations(ctx: ClientContext): ProtocomOperations;
+export declare function createProtocomOperations(ctx: ClientContext, settingsNs?: string): ProtocomOperations;

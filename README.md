@@ -1,6 +1,11 @@
 # dsh-protocom-api
 
-DeepSeek Harness (DSH) v1.5 插件：接入 **Protocom 官方 API**（OpenAI 兼容，默认端点 `https://relay.protocom.org`）。四个分组对应四条独立 provider route，各自配置 API key：
+DeepSeek Harness (DSH) v1.5 插件：接入两个订阅源——
+
+- **Protocom 官方 API**（OpenAI 兼容，默认端点 `https://relay.protocom.org`）
+- **OpenCode Go 订阅**（`https://opencode.ai/zen/go`），设置页与 Protocom 并列、菜单交互完全一致
+
+Protocom 四个分组对应四条独立 provider route，各自配置 API key：
 
 | 分组 | provider route | 默认协议 | 说明 |
 | --- | --- | --- | --- |
@@ -8,6 +13,20 @@ DeepSeek Harness (DSH) v1.5 插件：接入 **Protocom 官方 API**（OpenAI 兼
 | `codex` | `protocom-codex` | responses | Codex 系列 |
 | `stepfun` | `protocom-stepfun` | responses | 阶跃星辰系列（走官方 Responses 通道；该分组的 chat-completions 门面存在转译缺陷，见 0.4.0） |
 | `grok` | `protocom-grok` | chat-completions | Grok 系列 |
+
+OpenCode Go 一个分组一条 route（`opencode-go-sub`），承载端点目前提供的约 28 个模型：
+
+| 分组 | provider route | 默认协议 | 说明 |
+| --- | --- | --- | --- |
+| `go` | `opencode-go-sub` | chat-completions | OpenCode Go 订阅全量模型；grok-4.6、muse-spark-1.2/1.3、gpt-5.6-luna 实测只在 /responses 上可服务，这几个模型单独走 responses 通道 |
+
+### OpenCode Go 接入要点
+
+- **会话头**：每个请求同时携带 `x-opencode-session` 与 `x-deepseek-harness-session-id`（同一个 harness session 值）——Go 网关只有部分路径认原生头，缺了返回 400 MissingSessionID。
+- **思考强度**：Go 接受裸 `reasoning_effort` 字段、拒绝 `thinking:{type:'disabled'}`，因此该族全部走 effort-only 写法，关闭词按模型实测词表下发（`none`/`off`）。
+- **思考回传**：`reasoning_content`（多数模型）、`reasoning` + `reasoning_details`（minimax-m2.5，OpenRouter 风格）、内联 `<think>…</think>`（minimax-m3，自动从正文剥出）三种形态都已接入，统一流入 DSH 的 reasoning-delta 折叠显示。
+- **拒绝的模型**：`hy3-preview` 与 `minimax-m2.7` 实测被端点拒收（503/不可用），永不进菜单。
+- **配额显示**：设置页内嵌 Go 的三窗口配额条（5 小时 / 每周 / 每月的用量百分比 + 重置时间），读取 `GET /v1/usage`。
 
 ## 功能特性
 
@@ -17,7 +36,7 @@ DeepSeek Harness (DSH) v1.5 插件：接入 **Protocom 官方 API**（OpenAI 兼
 - **缓存感知的用量统计**：`cached_tokens` → `cacheReadTokens` 不相交换算，DSH 自带的缓存命中率、每轮 TPS、token 明细全部正确生效。
 - **余额与用量显示**：设置页每个分组卡片内嵌余额区——限额模式显示剩余额度大数字 + 用量进度条（>80% 警示），订阅/钱包模式显示余额与套餐；附今日用量、速率窗口、计费倍率、到期时间与手动刷新。
 - **图片输入（多模态）**：模型是否可接收图片按「显式设置 → 名录已验证结论 → 默认放行」判定；`visionModels` 可逐个模型声明纯文本。chat-completions 与 responses 两条协议都支持内联 base64 图片（含工具结果里的图）。实测：阶跃星辰 `step-5-preview`、`step-3.7-flash` 均可直接发图。
-- **引导式设置页**：设置 → 「Protocom API」整页，中英双语。每张分组卡片可折叠，卡片内就是**该分组自己的菜单模型**（一行一个）：可见性勾选、上下文档位、视觉开关、星标置顶，列表固定高度滚动；「刷新模型」拉取该分组自己的 listing；原始「模型和上游 ID」表格收在折叠项里。分组卡片带启用开关（switch）、密钥状态圆点、保存密钥即自动启用分组。
+- **引导式设置页**：设置 → 「Protocom API」与「OpenCode Go」两个并列整页，中英双语。每张分组卡片可折叠，卡片内就是**该分组自己的菜单模型**（一行一个）：可见性勾选、上下文档位、视觉开关、星标置顶，列表固定高度滚动；「刷新模型」拉取该分组自己的 listing；原始「模型和上游 ID」表格收在折叠项里。分组卡片带启用开关（switch）、密钥状态圆点、保存密钥即自动启用分组。
 
 ## 首次安装
 

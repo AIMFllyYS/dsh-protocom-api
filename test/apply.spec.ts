@@ -67,10 +67,13 @@ describe('plugin assembly (P0-1)', () => {
     apply(ctx, config)
     // The old exact webServer route is what bypassed the /api fence.
     expect(webRoutes).toEqual([])
-    expect(fetchRoutes).toHaveLength(1)
+    expect(fetchRoutes).toHaveLength(2)
     expect(fetchRoutes[0]?.path).toBe('/api/protocom-api/balance')
-    expect(fetchRoutes[0]?.methods).toEqual(['GET'])
-    expect(fetchRoutes[0]?.requestBody).toBe('buffered')
+    expect(fetchRoutes[1]?.path).toBe('/api/opencode-go/usage')
+    for (const route of fetchRoutes) {
+      expect(route.methods).toEqual(['GET'])
+      expect(route.requestBody).toBe('buffered')
+    }
     expect(adapterRoutes).toEqual([['protocom-codex']])
   })
 

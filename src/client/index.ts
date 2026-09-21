@@ -12,6 +12,7 @@ import type {} from '@deepseek-ai/dsh-client-ui-settings/client'
 import type {} from '@deepseek-ai/dsh-client-locale/client'
 import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
 import type {} from '@deepseek-ai/dsh-api-remotes/client'
+import { OPENCODE_GO, PROTOCOM } from '../family.ts'
 import { ProtocomSection } from './ProtocomSection.tsx'
 import type { ProtocomInjected } from './ProtocomSection.tsx'
 import { createProtocomOperations } from './operations.ts'
@@ -37,13 +38,18 @@ export const inject = [
   'remote.settings',
 ]
 
-/** Wire the section into the settings page. */
+/** Wire both provider sections into the settings page. */
 export function apply(ctx: ClientContext): void {
   ctx.effect(() => ctx.locale.register(NS, { zh, en }))
 
-  const operations = createProtocomOperations(ctx)
   const t = ctx.locale.bind(NS)
-  const injected = (): ProtocomInjected => ({ operations, t })
+  const injectedFor = (family: ProtocomInjected['family'], titleKey: 'title' | 'titleGo', introKey: 'intro' | 'introGo') =>
+    (): ProtocomInjected => ({
+      operations: createProtocomOperations(ctx, family.ns),
+      t,
+      family,
+      copy: { title: t(titleKey), intro: t(introKey) },
+    })
 
   ctx.effect(() => {
     const tag = document.createElement('style')
@@ -53,11 +59,21 @@ export function apply(ctx: ClientContext): void {
     return () => { tag.remove() }
   })
 
-  ctx.slots.inject('settings.section', () => ctx.slots.register({
-    name: 'settings.section',
-    id: 'protocom-api',
-    order: 20,
-    label: () => t('nav'),
-    inject: injected,
-  }, ProtocomSection))
+  ctx.slots.inject('settings.section', () => {
+    const protocom = ctx.slots.register({
+      name: 'settings.section',
+      id: PROTOCOM.ns,
+      order: 20,
+      label: () => t('nav'),
+      inject: injectedFor(PROTOCOM, 'title', 'intro'),
+    }, ProtocomSection)
+    const go = ctx.slots.register({
+      name: 'settings.section',
+      id: OPENCODE_GO.ns,
+      order: 21,
+      label: () => t('navGo'),
+      inject: injectedFor(OPENCODE_GO, 'titleGo', 'introGo'),
+    }, ProtocomSection)
+    return () => { protocom(); go() }
+  })
 }

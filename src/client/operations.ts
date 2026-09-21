@@ -25,7 +25,7 @@ export type ModelDiscoveryOutcome =
   | { readonly kind: 'found'; readonly models: readonly LlmDiscoveredModel[] }
   | { readonly kind: 'refused'; readonly message: string }
 
-/** The Host operations the Protocom section invokes. */
+/** The Host operations one provider section invokes (Protocom or OpenCode Go). */
 export interface ProtocomOperations {
   /** Read this plugin's redacted settings namespace view. */
   describeSettings(): Promise<SettingsNamespaceView | undefined>
@@ -45,20 +45,23 @@ export interface ProtocomOperations {
   discoverModels(request: LlmModelDiscoveryRequest): Promise<ModelDiscoveryOutcome>
 }
 
-/** The settings namespace the Host half owns. */
+/** The settings namespace the Protocom family owns (`'opencode-go'` is the Go family's). */
 export const SETTINGS_NS = 'protocom-api'
 
 /**
- * Bind the section's Host operations to the plugin's own Remote namespaces.
+ * Bind one section's Host operations to the plugin's own Remote namespaces.
  * @param ctx - the plugin's context, which declares `remote.credentials`,
  * `remote.llm`, and `remote.settings` in its own `inject`.
+ * @param settingsNs - the family's settings namespace: every read, write, and
+ * discovery request is scoped to it, so the two families' sections never
+ * share state.
  */
-export function createProtocomOperations(ctx: ClientContext): ProtocomOperations {
+export function createProtocomOperations(ctx: ClientContext, settingsNs: string = SETTINGS_NS): ProtocomOperations {
   return {
     describeSettings: async () => {
       const response = await ctx.remote.settings.describe()
       if (!response.ok) return undefined
-      return response.value.namespaces.find((ns: SettingsNamespaceView) => ns.ns === SETTINGS_NS)
+      return response.value.namespaces.find((ns: SettingsNamespaceView) => ns.ns === settingsNs)
     },
     describeCredentials: async (refs) => {
       const response = await ctx.remote.credentials.describe([...refs])
@@ -70,20 +73,20 @@ export function createProtocomOperations(ctx: ClientContext): ProtocomOperations
       // The settings write is revision-guarded like every other write: without
       // it, a concurrent settings change could be silently overwritten while a
       // security-relevant field (the credential reference) is being set.
-      const pointed = await ctx.remote.settings.mutate(SETTINGS_NS, [
+      const pointed = await ctx.remote.settings.mutate(settingsNs, [
         { op: 'set', path: ['groups', group, 'apiKey'], value: ref },
         { op: 'set', path: ['groups', group, 'enabled'], value: true },
       ], expectedRevision)
       return pointed.ok ? undefined : pointed.error.message
     },
     writeSettings: async (ops, expectedRevision) => {
-      const response = await ctx.remote.settings.mutate(SETTINGS_NS, ops, expectedRevision)
+      const response = await ctx.remote.settings.mutate(settingsNs, ops, expectedRevision)
       if (response.ok) return { kind: 'written', view: response.value }
       const { code, message } = response.error
       return code === 'settings/conflict' ? { kind: 'conflict', message } : { kind: 'refused', message }
     },
     discoverModels: async (request) => {
-      const response = await ctx.remote.llm.discoverModels(SETTINGS_NS, request)
+      const response = await ctx.remote.llm.discoverModels(settingsNs, request)
       return response.ok
         ? { kind: 'found', models: response.value }
         : { kind: 'refused', message: response.error.message }

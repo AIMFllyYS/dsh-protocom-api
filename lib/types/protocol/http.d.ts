@@ -19,6 +19,14 @@ export interface ProtocolConnection {
     baseURL: string;
     /** Bearer token from the same configuration generation as {@link baseURL}. */
     apiKey: string;
+    /** Provider name for error messages (default `'Protocom'`). */
+    label?: string;
+    /**
+     * Extra request headers this family's endpoint requires, merged over the
+     * shared ones. OpenCode Go uses this for its mandatory `x-opencode-session`
+     * session scoping.
+     */
+    headers?: Record<string, string>;
 }
 /** Map an HTTP status to a stable LlmError code. */
 export declare function httpErrorCode(status: number): string;

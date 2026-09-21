@@ -13,7 +13,7 @@
 
 import { contentHasImage, EMPTY_RESPONSE_CODE, LlmError, ToolCallId } from '@deepseek-ai/dsh-llm'
 import type { ContentBlock, FinishReason, GenerateOptions, Message, StreamChunk, TokenUsage } from '@deepseek-ai/dsh-llm'
-import { DONE, parseSse } from '../sse.ts'
+import { DONE, parseSse, parseSseUntilEof } from '../sse.ts'
 import { postSse } from './http.ts'
 import type { ProtocolConnection, RequestImageUrls } from './http.ts'
 
@@ -54,6 +54,13 @@ interface WireChunk {
     delta?: {
       content?: string
       reasoning_content?: string
+      /**
+       * Alternate thinking fields an OpenRouter-style route streams instead
+       * of `reasoning_content`: `reasoning` carries the text (MiniMax M2.5 on
+       * OpenCode Go) and `reasoning_details` repeats it as typed detail rows.
+       */
+      reasoning?: string
+      reasoning_details?: { type?: string; text?: string }[]
       tool_calls?: {
         index: number
         id?: string | null
@@ -66,15 +73,26 @@ interface WireChunk {
   usage?: WireUsage
 }
 
+/** How a request spells thinking control on this family's chat surface. */
+export type ThinkingMode = 'toggle' | 'effort-only'
+
 /**
- * Resolve the wire thinking fields for one request. `off` disables thinking
- * explicitly; any other effort enables it and rides as `reasoning_effort`;
- * an absent effort leaves the provider's own default alone.
+ * Resolve the wire thinking fields for one request. The default `toggle`
+ * spelling sends `thinking: {type}` plus `reasoning_effort`: `off` disables
+ * thinking explicitly; any other effort enables it and rides as
+ * `reasoning_effort`; an absent effort leaves the provider's own default
+ * alone. `effort-only` (OpenCode Go) sends `reasoning_effort` verbatim — the
+ * gateway parses it without a `thinking` block, which GLM routes refuse
+ * outright — and the disabling word (`none`, `off`) is part of the model's
+ * advertised effort vocabulary rather than a special case here.
  */
-export function resolveThinking(effort: string | undefined): {
+export function resolveThinking(effort: string | undefined, mode: ThinkingMode = 'toggle'): {
   thinking?: { type: 'enabled' | 'disabled' }
   reasoning_effort?: string
 } {
+  if (mode === 'effort-only') {
+    return effort === undefined ? {} : { reasoning_effort: effort }
+  }
   if (effort === 'off') return { thinking: { type: 'disabled' } }
   if (effort !== undefined) return { thinking: { type: 'enabled' }, reasoning_effort: effort }
   return {}
@@ -128,7 +146,7 @@ function flattenText(blocks: readonly ContentBlock[]): string {
 
 function assertTextOnly(blocks: readonly ContentBlock[]): void {
   if (contentHasImage(blocks)) {
-    throw new LlmError('The protocom-api chat-completions adapter does not support image content here.', 'UNSUPPORTED_CONTENT')
+    throw new LlmError('The chat-completions adapter does not support image content here.', 'UNSUPPORTED_CONTENT')
   }
 }
 
@@ -241,6 +259,7 @@ export function serializeChatRequest(
   images?: RequestImageUrls,
   replayReasoning = false,
   assistantTextReplay: AssistantTextReplay = 'keep',
+  thinking: ThinkingMode = 'toggle',
 ): Record<string, unknown> {
   const messages: WireMessage[] = []
   if (options.system !== undefined) messages.push({ role: 'system', content: options.system })
@@ -262,7 +281,7 @@ export function serializeChatRequest(
           function: { name: tool.name, description: tool.description, parameters: tool.parameters },
         })),
       },
-    ...resolveThinking(options.reasoningEffort),
+    ...resolveThinking(options.reasoningEffort, thinking),
   }
 }
 
@@ -293,6 +312,63 @@ function acceptIdentity(current: string | undefined, incoming: unknown): string 
   return typeof incoming === 'string' && incoming.length > 0 ? incoming : current
 }
 
+/** One extracted stream segment: text, or thinking lifted out of it. */
+interface TextSegment {
+  kind: 'text' | 'reasoning'
+  text: string
+}
+
+const OPEN_TAG = '<think>'
+const CLOSE_TAG = '</think>'
+
+/**
+ * Lift an inline `<think>…</think>` segment out of a streamed `content`
+ * string. Some routes (MiniMax M3 on OpenCode Go) emit thinking inside the
+ * content stream rather than on a reasoning field; keeping the tag split-safe
+ * across chunk boundaries is the whole job — a suffix that is a proper prefix
+ * of the boundary tag is buffered until the next chunk resolves it, and a
+ * buffered suffix that turns out not to be a tag flows through as text.
+ */
+export class ThinkTagExtractor {
+  private pending = ''
+  private state: 'text' | 'reasoning' = 'text'
+
+  /** Consume one content delta; emit the segments it completes. */
+  feed(input: string): TextSegment[] {
+    this.pending += input
+    const out: TextSegment[] = []
+    for (;;) {
+      const tag = this.state === 'text' ? OPEN_TAG : CLOSE_TAG
+      const at = this.pending.indexOf(tag)
+      if (at === -1) {
+        // The only bytes worth holding back are a suffix that could still
+        // grow into the boundary tag; everything else is decided text.
+        let keep = 0
+        for (let length = Math.min(tag.length - 1, this.pending.length); length > 0; length--) {
+          if (tag.startsWith(this.pending.slice(this.pending.length - length))) {
+            keep = length
+            break
+          }
+        }
+        const emit = this.pending.slice(0, this.pending.length - keep)
+        if (emit.length > 0) out.push({ kind: this.state, text: emit })
+        this.pending = this.pending.slice(this.pending.length - keep)
+        return out
+      }
+      if (at > 0) out.push({ kind: this.state, text: this.pending.slice(0, at) })
+      this.state = this.state === 'text' ? 'reasoning' : 'text'
+      this.pending = this.pending.slice(at + tag.length)
+    }
+  }
+
+  /** Emit whatever remains when the stream ends; an unclosed think stays reasoning. */
+  flush(): TextSegment[] {
+    const out = this.pending.length > 0 ? [{ kind: this.state, text: this.pending } as TextSegment] : []
+    this.pending = ''
+    return out
+  }
+}
+
 /**
  * Consume SSE data payloads (ending with `[DONE]`) and yield StreamChunks.
  * `block-end`s, `usage`, and `finish` are deferred to the `[DONE]` sentinel
@@ -300,7 +376,10 @@ function acceptIdentity(current: string | undefined, incoming: unknown): string 
  * blocks maps to an `EMPTY_RESPONSE` error finish instead of a successful
  * empty message.
  */
-export async function* translateChatCompletions(payloads: AsyncIterable<string>): AsyncGenerator<StreamChunk> {
+export async function* translateChatCompletions(
+  payloads: AsyncIterable<string>,
+  behavior: { inlineReasoning?: boolean } = {},
+): AsyncGenerator<StreamChunk> {
   let nextIndex = 0
   let textBlock: OpenBlock | undefined
   let reasoningBlock: OpenBlock | undefined
@@ -308,6 +387,31 @@ export async function* translateChatCompletions(payloads: AsyncIterable<string>)
   const order: OpenBlock[] = []
   let pendingFinish: FinishReason | undefined
   let pendingUsage: TokenUsage | undefined
+  const think = behavior.inlineReasoning === true ? new ThinkTagExtractor() : undefined
+
+  function* emitReasoning(text: string): Generator<StreamChunk> {
+    if (text.length === 0) return
+    if (!reasoningBlock) {
+      reasoningBlock = open('reasoning')
+      yield { type: 'block-start', index: reasoningBlock.index, blockType: 'reasoning' }
+    }
+    reasoningBlock.text += text
+    yield { type: 'reasoning-delta', index: reasoningBlock.index, text }
+  }
+
+  function* emitText(text: string): Generator<StreamChunk> {
+    if (text.length === 0) return
+    if (!textBlock) {
+      textBlock = open('text')
+      yield { type: 'block-start', index: textBlock.index, blockType: 'text' }
+    }
+    textBlock.text += text
+    yield { type: 'text-delta', index: textBlock.index, text }
+  }
+
+  function* emitSegment(segment: TextSegment): Generator<StreamChunk> {
+    yield* segment.kind === 'reasoning' ? emitReasoning(segment.text) : emitText(segment.text)
+  }
 
   function open(kind: OpenBlock['kind']): OpenBlock {
     const block: OpenBlock = { index: nextIndex++, kind, text: '' }
@@ -315,22 +419,31 @@ export async function* translateChatCompletions(payloads: AsyncIterable<string>)
     return block
   }
 
+  function* closeOut(): Generator<StreamChunk> {
+    // An unclosed <think> at stream end still lands where it was written.
+    if (think !== undefined) {
+      for (const segment of think.flush()) yield* emitSegment(segment)
+    }
+    for (const block of order) {
+      yield { type: 'block-end', index: block.index, block: closeBlock(block) }
+    }
+    if (pendingUsage) yield { type: 'usage', usage: pendingUsage }
+    yield { type: 'finish', reason: closeOutReason() }
+  }
+
+  function closeOutReason(): FinishReason {
+    const reason = pendingFinish ?? { kind: 'stop' as const }
+    return reason.kind === 'stop' && order.length === 0
+      ? {
+        kind: 'error',
+        failure: { message: 'model returned a completed response with no content', code: EMPTY_RESPONSE_CODE },
+      }
+      : reason
+  }
+
   for await (const payload of payloads) {
     if (payload === DONE) {
-      for (const block of order) {
-        yield { type: 'block-end', index: block.index, block: closeBlock(block) }
-      }
-      if (pendingUsage) yield { type: 'usage', usage: pendingUsage }
-      const reason = pendingFinish ?? { kind: 'stop' as const }
-      yield {
-        type: 'finish',
-        reason: reason.kind === 'stop' && order.length === 0
-          ? {
-            kind: 'error',
-            failure: { message: 'model returned a completed response with no content', code: EMPTY_RESPONSE_CODE },
-          }
-          : reason,
-      }
+      yield* closeOut()
       return
     }
 
@@ -344,24 +457,23 @@ export async function* translateChatCompletions(payloads: AsyncIterable<string>)
     for (const choice of chunk.choices ?? []) {
       const delta = choice.delta
 
+      // Reasoning channels differ by route: `reasoning_content` is the common
+      // field; `reasoning` and `reasoning_details` are the OpenRouter-style
+      // spelling MiniMax M2.5 streams on OpenCode Go.
       const reasoning = delta?.reasoning_content
+        ?? (typeof delta?.reasoning === 'string' ? delta.reasoning : undefined)
+        ?? delta?.reasoning_details?.map(detail => detail.text ?? '').join('')
       if (typeof reasoning === 'string' && reasoning.length > 0) {
-        if (!reasoningBlock) {
-          reasoningBlock = open('reasoning')
-          yield { type: 'block-start', index: reasoningBlock.index, blockType: 'reasoning' }
-        }
-        reasoningBlock.text += reasoning
-        yield { type: 'reasoning-delta', index: reasoningBlock.index, text: reasoning }
+        yield* emitReasoning(reasoning)
       }
 
       const content = delta?.content
       if (typeof content === 'string' && content.length > 0) {
-        if (!textBlock) {
-          textBlock = open('text')
-          yield { type: 'block-start', index: textBlock.index, blockType: 'text' }
+        if (think === undefined) {
+          yield* emitText(content)
+        } else {
+          for (const segment of think.feed(content)) yield* emitSegment(segment)
         }
-        textBlock.text += content
-        yield { type: 'text-delta', index: textBlock.index, text: content }
       }
 
       for (const call of delta?.tool_calls ?? []) {
@@ -395,9 +507,30 @@ export async function* translateChatCompletions(payloads: AsyncIterable<string>)
     if (chunk.usage) pendingUsage = mapUsage(chunk.usage)
   }
 
-  // parseSse guarantees the [DONE] sentinel (or throws); reaching here means
-  // the payload source violated that contract.
+  // parseSse guarantees the [DONE] sentinel (or throws), but a Go route can
+  // close cleanly after a finish_reason without sending it (verified live on
+  // minimax-m3). A declared finish_reason is the upstream's own completion
+  // signal, so honour it; a bare EOF still means the stream was cut.
+  if (pendingFinish !== undefined) {
+    yield* closeOut()
+    return
+  }
   throw new LlmError('SSE payload stream ended without [DONE]', 'STREAM_CLOSED')
+}
+
+/** Per-route request/response behaviour the group cannot express alone. */
+export interface ChatStreamBehavior {
+  /** Whether a replayed assistant turn carries its `reasoning_content` back. */
+  replayReasoning?: boolean
+  /** How a replayed assistant turn's own text is carried. */
+  assistantTextReplay?: AssistantTextReplay
+  /** Thinking-control spelling this family's surface expects. */
+  thinking?: ThinkingMode | undefined
+  /**
+   * Whether this model emits thinking inline as `<think>…</think>` inside
+   * `content`; the extractor lifts it into a reasoning block (MiniMax M3).
+   */
+  inlineReasoning?: boolean | undefined
 }
 
 /** Stream one chat-completions call as harness chunks. */
@@ -406,14 +539,29 @@ export async function* streamChatCompletions(
   options: GenerateOptions,
   model: string,
   images?: RequestImageUrls,
-  replayReasoning = false,
-  assistantTextReplay: AssistantTextReplay = 'keep',
+  behavior: ChatStreamBehavior = {},
 ): AsyncGenerator<StreamChunk> {
   const response = await postSse(
     connection,
     'chat/completions',
-    serializeChatRequest(options, model, images, replayReasoning, assistantTextReplay),
+    serializeChatRequest(
+      options,
+      model,
+      images,
+      behavior.replayReasoning ?? false,
+      behavior.assistantTextReplay ?? 'keep',
+      behavior.thinking ?? 'toggle',
+    ),
     options.signal,
   )
-  yield* translateChatCompletions(parseSse(response.body as ReadableStream<BufferSource>))
+  // A Go route that streams inline <think> can close after its finish_reason
+  // without a [DONE] sentinel (verified live on minimax-m3), so that route
+  // reads until EOF and lets the translator judge completion; every other
+  // route keeps the strict truncation guard.
+  yield* translateChatCompletions(
+    behavior.inlineReasoning === true
+      ? parseSseUntilEof(response.body as ReadableStream<BufferSource>)
+      : parseSse(response.body as ReadableStream<BufferSource>),
+    behavior.inlineReasoning === true ? { inlineReasoning: true } : {},
+  )
 }
