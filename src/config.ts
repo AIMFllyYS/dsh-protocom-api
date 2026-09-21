@@ -11,12 +11,16 @@ import z from '@deepseek-ai/schemastery'
 import { MAX_TIMER_DELAY_MS } from '@deepseek-ai/dsh-timeout'
 import { credentialRef } from '@deepseek-ai/dsh-credentials'
 import type { CredentialRef } from '@deepseek-ai/dsh-credentials'
-import { DEFAULT_BASE_URL, DEFAULT_BASE_URL_ORIGIN, GROUP_DEFAULTS, GROUP_KEYS, providerOf } from './groups.ts'
-import { DEFAULT_RECOMMENDED, identityKey } from './model-registry.ts'
+import { DEFAULT_BASE_URL } from './groups.ts'
+import { DEFAULT_RECOMMENDED, GO_DEFAULT_RECOMMENDED, identityKey } from './model-registry.ts'
+import { GO_DEFAULT_BASE_URL, PROTOCOM } from './family.ts'
+import type { FamilyGroupDefaults, ProviderFamily } from './family.ts'
 
 export { DEFAULT_BASE_URL, DEFAULT_BASE_URL_ORIGIN, GROUP_DEFAULTS, GROUP_KEYS, groupOf, providerOf } from './groups.ts'
 export type { GroupKey, GroupReasoning, Protocol } from './groups.ts'
-import type { GroupKey, Protocol } from './groups.ts'
+export { FAMILIES, GO_CREDENTIAL_REF, GO_DEFAULT_BASE_URL, GO_DEFAULT_BASE_URL_ORIGIN, GO_PROVIDER, OPENCODE_GO, PROTOCOM } from './family.ts'
+export type { FamilyGroupDefaults, ProviderFamily } from './family.ts'
+import type { Protocol } from './groups.ts'
 
 /**
  * Idle interval after which one provider stream is aborted. Mirrors the
@@ -26,10 +30,11 @@ import type { GroupKey, Protocol } from './groups.ts'
 export const DEFAULT_STREAM_IDLE_TIMEOUT_MS = 300_000
 
 /**
- * The only credential references this plugin resolves: its own namespaced
- * environment-variable names. An open shape let a rewritten `baseURL` pair any
- * `process.env` name with an arbitrary endpoint, turning the environment
- * fallback into an exfiltration primitive.
+ * The only credential references the Protocom family resolves: its own
+ * namespaced environment-variable names. An open shape let a rewritten
+ * `baseURL` pair any `process.env` name with an arbitrary endpoint, turning
+ * the environment fallback into an exfiltration primitive. The Go family's
+ * own namespace is `OPENCODE_` (see `family.ts`).
  */
 export const PROTOCOM_CREDENTIAL_REF = /^PROTOCOM_[A-Z0-9_]+$/
 
@@ -70,14 +75,20 @@ export interface GroupConfig {
   assistantTextReplay?: 'keep' | 'drop' | 'user'
 }
 
-/** Plugin configuration: the endpoint base plus the four group profiles. */
-export interface Config {
+/**
+ * One family's settings-section shape: the endpoint base plus its group
+ * profiles. The Protocom section lives under the `protocom-api` namespace and
+ * the OpenCode Go section under `opencode-go`; both share this shape, with
+ * only the shipped defaults (endpoint, group keys, recommended list) differing
+ * per family.
+ */
+export interface SectionConfig {
   /** Endpoint base; `/v1` suffix and trailing slashes are normalized away. */
   baseURL?: string
   /**
    * Explicit confirmation that this deployment really sends its stored API key
    * to a non-default endpoint. Absent or false pins `baseURL` to the shipped
-   * Protocom origin, so a single settings write cannot redirect the key.
+   * family origin, so a single settings write cannot redirect the key.
    * Deliberately has no schema default: opting in must be a deliberate act.
    */
   allowCustomBaseURL?: boolean
@@ -93,7 +104,7 @@ export interface Config {
   hiddenModels?: string[]
   /**
    * Upstream model ids that lead the model menu, most preferred first. Absent
-   * uses the plugin's shipped recommendation. This orders the menu and nothing
+   * uses the family's shipped recommendation. This orders the menu and nothing
    * else: a model left off the list stays fully selectable below the picks.
    */
   recommendedModels?: string[]
@@ -106,7 +117,7 @@ export interface Config {
   modelContexts?: Record<string, number[]>
   /**
    * Per-model image-input capability, keyed by upstream model id (aliases
-   * collapse to one key). The endpoint discloses no modality for any model, so
+   * collapse to one key). The endpoints disclose no modality for any model, so
    * the plugin's own default is permissive: an id nobody has judged accepts
    * images, because a wrong "no" makes a documented capability unreachable
    * while a wrong "yes" costs one upstream error that names the model. `false`
@@ -114,6 +125,17 @@ export interface Config {
    * from that model's menu entries.
    */
   visionModels?: Record<string, boolean>
+}
+
+/**
+ * Plugin configuration: the Protocom section inline plus the OpenCode Go
+ * section under `opencode`. The `opencode` field keeps the second family's
+ * yml profile out of the `protocom-api` settings namespace it does not belong
+ * to; its shape is the same section shape.
+ */
+export interface Config extends SectionConfig {
+  /** OpenCode Go family profile; same section shape under its own namespace. */
+  opencode?: SectionConfig
 }
 
 const group: z<GroupConfig> = z.object({
@@ -126,7 +148,31 @@ const group: z<GroupConfig> = z.object({
   assistantTextReplay: z.union(['keep', 'drop', 'user']).default('keep'),
 })
 
-/** Runtime schema for {@link Config}. */
+/**
+ * The settings-section schema for one family: every field shares its shape
+ * across families, while `baseURL` and `recommendedModels` default to the
+ * family's own shipped values.
+ */
+function sectionSchema(baseURL: string, recommended: readonly string[]): z<SectionConfig> {
+  return z.object({
+    baseURL: z.string().default(baseURL),
+    allowCustomBaseURL: z.boolean(),
+    streamIdleTimeoutMs: z.number().min(Number.MIN_VALUE).max(MAX_TIMER_DELAY_MS).default(DEFAULT_STREAM_IDLE_TIMEOUT_MS),
+    groups: z.dict(group).default({}),
+    hiddenModels: z.array(z.string()).default([]),
+    recommendedModels: z.array(z.string()).default([...recommended]),
+    modelContexts: z.dict(z.array(z.number().step(1).min(1))).default({}),
+    visionModels: z.dict(z.boolean()).default({}),
+  })
+}
+
+/** Settings-section schema for the `protocom-api` namespace. */
+export const ProtocomSection: z<SectionConfig> = sectionSchema(DEFAULT_BASE_URL, DEFAULT_RECOMMENDED)
+
+/** Settings-section schema for the `opencode-go` namespace. */
+export const GoSection: z<SectionConfig> = sectionSchema(GO_DEFAULT_BASE_URL, GO_DEFAULT_RECOMMENDED)
+
+/** Runtime schema for the plugin's yml configuration. */
 export const Config: z<Config> = z.object({
   baseURL: z.string().default(DEFAULT_BASE_URL),
   allowCustomBaseURL: z.boolean(),
@@ -136,12 +182,13 @@ export const Config: z<Config> = z.object({
   recommendedModels: z.array(z.string()).default([...DEFAULT_RECOMMENDED]),
   modelContexts: z.dict(z.array(z.number().step(1).min(1))).default({}),
   visionModels: z.dict(z.boolean()).default({}),
+  opencode: GoSection,
 })
 
 /** Validated per-group facts with every adapter-owned default resolved. */
 export interface ResolvedGroup {
-  /** Group key and the `groups` dict key. */
-  key: GroupKey
+  /** Group key and the `groups` dict key (family-scoped). */
+  key: string
   /** Provider route this group registers under when enabled. */
   provider: string
   /** Resolved display name for selectors and configuration surfaces. */
@@ -165,12 +212,14 @@ export interface ResolvedGroup {
  * older generation's group state.
  */
 export interface ResolvedProtocomOptions {
+  /** The family these facts were resolved for. */
+  family: ProviderFamily
   /** Endpoint root without trailing slashes or a `/v1` suffix. */
   baseURL: string
   /** Resolved idle watchdog interval for one provider stream, in milliseconds. */
   streamIdleTimeoutMs: number
-  /** All four groups in fixed order; `enabled` gates route registration. */
-  groups: ReadonlyMap<GroupKey, ResolvedGroup>
+  /** The family's groups in fixed order; `enabled` gates route registration. */
+  groups: ReadonlyMap<string, ResolvedGroup>
   /** Upstream ids the model menu must not offer. Empty means the whole catalog. */
   hiddenModels: ReadonlySet<string>
   /** Upstream ids that lead the model menu, most preferred first. */
@@ -188,38 +237,38 @@ export interface ResolvedProtocomOptions {
  * @param config - raw plugin config or resolved settings snapshot.
  * @returns validated connection facts for all four groups.
  */
-export function resolveAdapterOptions(config: Config): ResolvedProtocomOptions {
-  const baseURL = resolveBaseURL((config.baseURL ?? DEFAULT_BASE_URL).replace(/\/+$/, '').replace(/\/v1$/, ''))
+export function resolveAdapterOptions(config: SectionConfig, family: ProviderFamily = PROTOCOM): ResolvedProtocomOptions {
+  const baseURL = resolveBaseURL((config.baseURL ?? family.baseURL).replace(/\/+$/, '').replace(/\/v1$/, ''))
   // Origin pin: with no explicit confirmation, the stored credential may only
   // travel to the endpoint this adapter ships for. This is the difference
   // between "the key is encrypted in transit" and "the key cannot be
   // redirected by a single settings write at all".
-  if (config.allowCustomBaseURL !== true && new URL(baseURL).origin !== DEFAULT_BASE_URL_ORIGIN) {
+  if (config.allowCustomBaseURL !== true && new URL(baseURL).origin !== family.origin) {
     throw new Error(
-      `protocom-api: baseURL "${baseURL}" points away from the shipped endpoint (${DEFAULT_BASE_URL_ORIGIN});`
+      `${family.ns}: baseURL "${baseURL}" points away from the shipped endpoint (${family.origin});`
       + ' set allowCustomBaseURL: true to confirm this deployment really sends its API key there',
     )
   }
   const streamIdleTimeoutMs = config.streamIdleTimeoutMs ?? DEFAULT_STREAM_IDLE_TIMEOUT_MS
   if (!Number.isFinite(streamIdleTimeoutMs) || streamIdleTimeoutMs <= 0 || streamIdleTimeoutMs > MAX_TIMER_DELAY_MS) {
-    throw new Error(`protocom-api: streamIdleTimeoutMs must be a positive finite number no greater than ${MAX_TIMER_DELAY_MS}`)
+    throw new Error(`${family.ns}: streamIdleTimeoutMs must be a positive finite number no greater than ${MAX_TIMER_DELAY_MS}`)
   }
   const supplied = config.groups ?? {}
   for (const key of Object.keys(supplied)) {
-    if (!(GROUP_KEYS as readonly string[]).includes(key)) {
-      throw new Error(`protocom-api: unknown group "${key}"; expected one of ${GROUP_KEYS.join(', ')}`)
+    if (!family.keys.includes(key)) {
+      throw new Error(`${family.ns}: unknown group "${key}"; expected one of ${family.keys.join(', ')}`)
     }
   }
-  const groups = new Map<GroupKey, ResolvedGroup>()
-  for (const key of GROUP_KEYS) {
+  const groups = new Map<string, ResolvedGroup>()
+  for (const key of family.keys) {
     const source: GroupConfig = supplied[key] ?? {}
-    const defaults = GROUP_DEFAULTS[key]
+    const defaults: FamilyGroupDefaults = family.defaults[key] ?? { displayName: key, protocol: 'chat-completions' }
     if (source.contextLengths !== undefined) {
       if (source.contextLengths.some(length => !Number.isSafeInteger(length) || length <= 0)) {
-        throw new Error(`protocom-api: group "${key}" contextLengths must be positive integers`)
+        throw new Error(`${family.ns}: group "${key}" contextLengths must be positive integers`)
       }
       if (new Set(source.contextLengths).size !== source.contextLengths.length) {
-        throw new Error(`protocom-api: group "${key}" contextLengths must not contain duplicates`)
+        throw new Error(`${family.ns}: group "${key}" contextLengths must not contain duplicates`)
       }
     }
     // A group's shipped ladder (StepFun's published 200K/256K/400K/1M) applies
@@ -230,18 +279,18 @@ export function resolveAdapterOptions(config: Config): ResolvedProtocomOptions {
       // Namespacing is a security bound, not a style rule: the reference is
       // what the `process.env` fallback reads, so an open shape reaches any
       // environment variable the launching process holds.
-      if (!PROTOCOM_CREDENTIAL_REF.test(source.apiKey)) {
-        throw new Error(`protocom-api: group "${key}" apiKey must match ${String(PROTOCOM_CREDENTIAL_REF)}`)
+      if (!family.credentialRef.test(source.apiKey)) {
+        throw new Error(`${family.ns}: group "${key}" apiKey must match ${String(family.credentialRef)}`)
       }
       try {
         apiKeyRef = credentialRef(source.apiKey)
       } catch (error) {
-        throw new Error(`protocom-api: group "${key}" apiKey is not a valid credential reference`, { cause: error })
+        throw new Error(`${family.ns}: group "${key}" apiKey is not a valid credential reference`, { cause: error })
       }
     }
     groups.set(key, {
       key,
-      provider: providerOf(key),
+      provider: family.providerOf(key),
       displayName: defaults.displayName,
       enabled: source.enabled ?? false,
       protocol: source.protocol ?? defaults.protocol,
@@ -255,45 +304,46 @@ export function resolveAdapterOptions(config: Config): ResolvedProtocomOptions {
   const hidden = config.hiddenModels ?? []
   for (const id of hidden) {
     if (typeof id !== 'string' || id.length === 0) {
-      throw new Error('protocom-api: hiddenModels entries must be non-empty model ids')
+      throw new Error(`${family.ns}: hiddenModels entries must be non-empty model ids`)
     }
   }
-  const recommended = config.recommendedModels ?? DEFAULT_RECOMMENDED
+  const recommended = config.recommendedModels ?? family.recommended
   for (const id of recommended) {
     if (typeof id !== 'string' || id.length === 0) {
-      throw new Error('protocom-api: recommendedModels entries must be non-empty model ids')
+      throw new Error(`${family.ns}: recommendedModels entries must be non-empty model ids`)
     }
   }
   const contexts = new Map<string, readonly number[]>()
   for (const [id, lengths] of Object.entries(config.modelContexts ?? {})) {
     if (id.length === 0) {
-      throw new Error('protocom-api: modelContexts keys must be non-empty model ids')
+      throw new Error(`${family.ns}: modelContexts keys must be non-empty model ids`)
     }
     if (lengths.length === 0) {
-      throw new Error(`protocom-api: modelContexts["${id}"] must list at least one length`)
+      throw new Error(`${family.ns}: modelContexts["${id}"] must list at least one length`)
     }
     if (lengths.some(length => !Number.isSafeInteger(length) || length <= 0)) {
-      throw new Error(`protocom-api: modelContexts["${id}"] lengths must be positive integers`)
+      throw new Error(`${family.ns}: modelContexts["${id}"] lengths must be positive integers`)
     }
     if (new Set(lengths).size !== lengths.length) {
-      throw new Error(`protocom-api: modelContexts["${id}"] lengths must not repeat`)
+      throw new Error(`${family.ns}: modelContexts["${id}"] lengths must not repeat`)
     }
     // Keyed by identity so an alias spelling configures the same model once.
-    contexts.set(identityKey(id), [...lengths].sort((left, right) => left - right))
+    contexts.set(identityKey(id, family.registry), [...lengths].sort((left, right) => left - right))
   }
   const vision = new Map<string, boolean>()
   for (const [id, accepts] of Object.entries(config.visionModels ?? {})) {
     if (id.length === 0) {
-      throw new Error('protocom-api: visionModels keys must be non-empty model ids')
+      throw new Error(`${family.ns}: visionModels keys must be non-empty model ids`)
     }
     if (typeof accepts !== 'boolean') {
-      throw new Error(`protocom-api: visionModels["${id}"] must be a boolean`)
+      throw new Error(`${family.ns}: visionModels["${id}"] must be a boolean`)
     }
     // Keyed by identity so a choice made against either alias spelling of one
     // model configures it once.
-    vision.set(identityKey(id), accepts)
+    vision.set(identityKey(id, family.registry), accepts)
   }
   return {
+    family,
     baseURL,
     streamIdleTimeoutMs,
     groups,
@@ -302,7 +352,7 @@ export function resolveAdapterOptions(config: Config): ResolvedProtocomOptions {
     hiddenModels: new Set(hidden),
     // Aliases collapse to one key, so picking either id recommends the model
     // once and the ordering cannot depend on which spelling was stored.
-    recommendedModels: [...new Set(recommended.map(identityKey))],
+    recommendedModels: [...new Set(recommended.map(id => identityKey(id, family.registry)))],
   }
 }
 

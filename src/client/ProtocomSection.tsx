@@ -1,27 +1,29 @@
 /**
- * Protocom API settings section: one collapsible card per group. A card carries
- * the group's own enable switch, API key, and — the step that follows saving a
- * key — the exact models that group contributes to the model menu, one control
- * row each for visibility, context lengths, image input, and menu priority. The
+ * Provider settings section — shared by the Protocom and OpenCode Go
+ * families: one collapsible card per group. A card carries the group's own
+ * enable switch, API key, and — the step that follows saving a key — the
+ * exact models that group contributes to the model menu, one control row
+ * each for visibility, context lengths, image input, and menu priority. The
  * endpoint's raw listing (model ↔ upstream id) stays behind a collapsed row:
  * it is a diagnostic, not a setting. Every mutation writes through the wire
- * (settings.mutate / credentials.set); the page reloads its snapshot after each
- * landed write.
+ * (settings.mutate / credentials.set) scoped to the family's own namespace;
+ * the page reloads its snapshot after each landed write.
  */
 
 import { useEffect, useState } from 'react'
 import type { ReactNode } from 'react'
 import type { InjectFace } from '@deepseek-ai/dsh-client-ui-slots'
 import type { CredentialInfo, LlmDiscoveredModel, SettingsNamespaceView } from '@deepseek-ai/dsh-api-remotes/client'
-import { DEFAULT_BASE_URL_ORIGIN, defaultKeyRef, GROUP_DEFAULTS, GROUP_KEYS, providerOf } from '../groups.ts'
-import type { GroupKey, Protocol } from '../groups.ts'
+import type { ProviderFamily } from '../family.ts'
+import type { Protocol } from '../groups.ts'
 import { variantLengths } from '../context-variants.ts'
 import { parseBalanceView } from '../balance-view.ts'
 import type { GroupBalance } from '../balance-view.ts'
+import { parseGoUsage } from '../usage-view.ts'
+import type { GoQuotaWindow, GoUsageView } from '../usage-view.ts'
 import {
   CONTEXT_LADDER,
   contextLabel,
-  DEFAULT_RECOMMENDED,
   groupCatalog,
   identityKey,
   matchRegistry,
@@ -31,12 +33,16 @@ import type { GroupCatalogModel, UpstreamModel } from '../model-registry.ts'
 import type { ProtocomOperations } from './operations.ts'
 import type { en } from './locale.ts'
 
-/** Injected dependencies of {`link ProtocomSection} (slot `inject`). */
+/** Injected dependencies of {`link ProviderSection} (slot `inject`). */
 export interface ProtocomInjected {
-  /** The Host operations the section invokes. */
+  /** The Host operations the section invokes, scoped to the family. */
   operations: ProtocomOperations
   /** Section copy. */
   t: (key: keyof typeof en) => string
+  /** Which provider family this section instance serves. */
+  family: ProviderFamily
+  /** The family's heading copy, resolved through `t` at inject time. */
+  copy: { title: string; intro: string }
 }
 
 /**
@@ -85,14 +91,15 @@ function sectionOf(view: SettingsNamespaceView | undefined): SectionValue {
   return value !== null && typeof value === 'object' && !Array.isArray(value) ? value as SectionValue : {}
 }
 
-function groupValueOf(section: SectionValue, key: GroupKey): Required<GroupSectionValue> {
+function groupValueOf(section: SectionValue, key: string, family: ProviderFamily): Required<GroupSectionValue> {
   const raw = section.groups?.[key] ?? {}
+  const defaults = family.defaults[key]
   return {
     enabled: raw.enabled ?? false,
-    protocol: raw.protocol ?? GROUP_DEFAULTS[key].protocol,
+    protocol: raw.protocol ?? defaults?.protocol ?? 'chat-completions',
     // The card shows the effective lengths, so a group that ships a ladder
     // (StepFun) reads as configured before the deployment stores its own.
-    contextLengths: raw.contextLengths ?? [...GROUP_DEFAULTS[key].contextLengths ?? []],
+    contextLengths: raw.contextLengths ?? [...defaults?.contextLengths ?? []],
     showBalance: raw.showBalance ?? true,
   }
 }
@@ -101,9 +108,56 @@ function formatAmount(value: number, unit: string | undefined): string {
   return unit === 'USD' ? `$${value.toFixed(2)}` : `${value}${unit === undefined ? '' : ` ${unit}`}`
 }
 
+/** The quota strip of a Go group card: the subscription's three rate windows. */
+export function QuotaView({ usage, phase, error, onRefresh, t }: {
+  usage: GoUsageView | undefined
+  phase: 'idle' | 'loading' | 'ready' | 'error'
+  error: string | undefined
+  onRefresh: () => void
+  t: Translator
+}): ReactNode {
+  const windows: [string, GoQuotaWindow | undefined][] = [
+    [t('quotaRolling'), usage?.rolling],
+    [t('quotaWeekly'), usage?.weekly],
+    [t('quotaMonthly'), usage?.monthly],
+  ]
+  const rows = windows.filter((pair): pair is [string, GoQuotaWindow] => pair[1] !== undefined)
+  return (
+    <div className="protocom-balance">
+      <div className="protocom-balance-head">
+        <span>{t('usageQuota')}</span>
+        <button type="button" className="protocom-button" disabled={phase === 'loading'} onClick={onRefresh}>
+          {phase === 'loading' ? t('refreshing') : t('refresh')}
+        </button>
+      </div>
+      {phase === 'error' ? <p className="protocom-error">{`${t('loadFailed')}: ${error ?? ''}`}</p> : null}
+      {phase === 'ready' && rows.length === 0 ? <p className="protocom-notice">{t('none')}</p> : null}
+      {rows.map(([label, window]) => {
+        const percent = window.percent ?? 0
+        const limited = window.status === 'rate-limited'
+        return (
+          <div key={label} className="protocom-quota-row">
+            <span className="protocom-quota-label">{label}</span>
+            <span className="protocom-quota-bar">
+              <span
+                className={limited || percent > 80 ? 'protocom-quota-fill is-warn' : 'protocom-quota-fill'}
+                style={{ width: `${Math.min(100, Math.max(0, percent))}%` }}
+              />
+            </span>
+            <span className="protocom-quota-num">
+              {`${percent}%`}
+              <small>{limited ? t('quotaRateLimited') : (window.resetsAt === undefined ? '' : `${t('quotaResets')} ${window.resetsAt.slice(0, 10)}`)}</small>
+            </span>
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
 /** The balance strip of one group card. */
 export function BalanceView({ group, balance, phase, error, onRefresh, t }: {
-  group: GroupKey
+  group: string
   balance: GroupBalance | undefined
   phase: 'idle' | 'loading' | 'ready' | 'error'
   error: string | undefined
@@ -180,9 +234,10 @@ export function BalanceView({ group, balance, phase, error, onRefresh, t }: {
 const FILTER_THRESHOLD = 8
 
 /** One model's control row inside its group's card. */
-function ModelRow({ model, group, hidden, recommended, contexts, vision, writable, busy, t, onWrite }: {
+function ModelRow({ model, group, family, hidden, recommended, contexts, vision, writable, busy, t, onWrite }: {
   model: GroupCatalogModel
   group: Required<GroupSectionValue>
+  family: ProviderFamily
   hidden: readonly string[]
   recommended: readonly string[]
   contexts: Readonly<Record<string, number[]>>
@@ -192,7 +247,7 @@ function ModelRow({ model, group, hidden, recommended, contexts, vision, writabl
   t: Translator
   onWrite: (ops: Parameters<ProtocomOperations['writeSettings']>[0]) => void
 }): ReactNode {
-  const key = identityKey(model.upstreamId)
+  const key = identityKey(model.upstreamId, family.registry)
   const hiddenSet = new Set(hidden)
   const shown = model.ids.every(id => !hiddenSet.has(id))
   const starred = recommended.includes(key)
@@ -313,9 +368,10 @@ function ModelRow({ model, group, hidden, recommended, contexts, vision, writabl
 }
 
 /** One group's card: credentials, its own menu models, and its balance. */
-function GroupCard({ groupKey, group, credential, writable, revision, probe, hidden, recommended, contexts, vision, operations, t, onChanged, onProbe }: {
-  groupKey: GroupKey
+function GroupCard({ groupKey, group, family, credential, writable, revision, probe, hidden, recommended, contexts, vision, operations, t, onChanged, onProbe }: {
+  groupKey: string
   group: Required<GroupSectionValue>
+  family: ProviderFamily
   credential: CredentialInfo | undefined
   writable: boolean
   revision: number | undefined
@@ -329,7 +385,7 @@ function GroupCard({ groupKey, group, credential, writable, revision, probe, hid
   onChanged: () => Promise<void>
   onProbe: () => void
 }): ReactNode {
-  const ref = defaultKeyRef(groupKey)
+  const ref = family.keyRef(groupKey)
   const [keyDraft, setKeyDraft] = useState('')
   const [keyBusy, setKeyBusy] = useState(false)
   const [keyMessage, setKeyMessage] = useState<{ kind: 'ok' | 'error'; text: string } | undefined>(undefined)
@@ -339,7 +395,7 @@ function GroupCard({ groupKey, group, credential, writable, revision, probe, hid
   const [filter, setFilter] = useState('')
   const [balance, setBalance] = useState<{
     phase: 'idle' | 'loading' | 'ready' | 'error'
-    data: GroupBalance | undefined
+    data: GroupBalance | GoUsageView | undefined
     error: string | undefined
   }>({ phase: 'idle', data: undefined, error: undefined })
 
@@ -361,10 +417,10 @@ function GroupCard({ groupKey, group, credential, writable, revision, probe, hid
   const loadBalance = async (): Promise<void> => {
     setBalance(previous => ({ ...previous, phase: 'loading', error: undefined }))
     try {
-      const response = await fetch(`/api/protocom-api/balance?group=${groupKey}`)
+      const response = await fetch(`${family.telemetryPath}?group=${groupKey}`)
       // The route is fenced by the Host carrier, so an unauthenticated request
       // or a profile without the connection service answers 401/403/404. That
-      // is "no balance surface here", not a failure worth a red message.
+      // is "no account surface here", not a failure worth a red message.
       if (response.status === 401 || response.status === 403 || response.status === 404) {
         setBalance({ phase: 'error', data: undefined, error: t('balanceUnavailable') })
         return
@@ -375,7 +431,8 @@ function GroupCard({ groupKey, group, credential, writable, revision, probe, hid
       }
       // The body is a trust boundary: re-validate rather than asserting, so a
       // malformed reply cannot reach toFixed/slice and crash the strip.
-      const data = parseBalanceView(await response.json())
+      const raw: unknown = await response.json()
+      const data = family.telemetryKind === 'quota' ? parseGoUsage(raw) : parseBalanceView(raw)
       if (data === undefined) throw new Error(t('balanceUnavailable'))
       setBalance({ phase: 'ready', data, error: undefined })
     } catch (error: unknown) {
@@ -420,6 +477,7 @@ function GroupCard({ groupKey, group, credential, writable, revision, probe, hid
     })),
     {
       recommended,
+      family,
       // Only once the group has actually been interrogated: an unprobed group
       // must not present every other group's models as its own menu.
       registryFallback: probe.phase === 'ready' || probe.phase === 'error',
@@ -432,7 +490,7 @@ function GroupCard({ groupKey, group, credential, writable, revision, probe, hid
   const groupIds = rows.flatMap(row => [...row.ids])
   const hiddenInGroup = groupIds.filter(id => hidden.includes(id))
   const entryCount = visibleRows.reduce((total, row) => {
-    const stored = contexts[identityKey(row.upstreamId)]
+    const stored = contexts[identityKey(row.upstreamId, family.registry)]
     const lengths = stored ?? variantLengths(row.contextOptions, group.contextLengths) ?? [row.contextWindow]
     return total + Math.max(1, lengths.length)
   }, 0)
@@ -558,6 +616,7 @@ function GroupCard({ groupKey, group, credential, writable, revision, probe, hid
                   key={row.displayName}
                   model={row}
                   group={group}
+                  family={family}
                   hidden={hidden}
                   recommended={recommended}
                   contexts={contexts}
@@ -587,10 +646,10 @@ function GroupCard({ groupKey, group, credential, writable, revision, probe, hid
                           <tr key={model.id}>
                             {/* The raw mapping, so a name the menu shows can
                                 always be traced back to the id on the wire. */}
-                            <td>{matchRegistry(model.id)?.displayName
+                            <td>{matchRegistry(model.id, family.registry)?.displayName
                               ?? (model.name !== undefined && model.name !== model.id ? model.name : model.id)}</td>
                             <td><span className="protocom-probe-id">{model.id}</span></td>
-                            <td>{servesChat(model.id) ? t('servedYes') : t('servedNo')}</td>
+                            <td>{servesChat(model.id, family.refused) ? t('servedYes') : t('servedNo')}</td>
                           </tr>
                         ))}
                       </tbody>
@@ -601,14 +660,26 @@ function GroupCard({ groupKey, group, credential, writable, revision, probe, hid
             </details>
             {balanceVisible
               ? (
-                <BalanceView
-                  group={groupKey}
-                  balance={balance.data}
-                  phase={balance.phase}
-                  error={balance.error}
-                  onRefresh={() => { void loadBalance() }}
-                  t={t}
-                />
+                family.telemetryKind === 'quota'
+                  ? (
+                    <QuotaView
+                      usage={balance.data as GoUsageView | undefined}
+                      phase={balance.phase}
+                      error={balance.error}
+                      onRefresh={() => { void loadBalance() }}
+                      t={t}
+                    />
+                  )
+                  : (
+                    <BalanceView
+                      group={groupKey}
+                      balance={balance.data as GroupBalance | undefined}
+                      phase={balance.phase}
+                      error={balance.error}
+                      onRefresh={() => { void loadBalance() }}
+                      t={t}
+                    />
+                  )
               )
               : null}
           </div>
@@ -624,12 +695,17 @@ function GroupCard({ groupKey, group, credential, writable, revision, probe, hid
  * `returns the section, or null while the shell has not injected yet.
  */
 export function ProtocomSection(props: ProtocomSectionProps): ReactNode {
-  const { operations, t } = props
-  if (operations === undefined || t === undefined) return null
-  return <Loaded operations={operations} t={t} />
+  const { operations, t, family, copy } = props
+  if (operations === undefined || t === undefined || family === undefined || copy === undefined) return null
+  return <Loaded operations={operations} t={t} family={family} copy={copy} />
 }
 
-function Loaded({ operations, t }: { operations: ProtocomOperations; t: Translator }): ReactNode {
+function Loaded({ operations, t, family, copy }: {
+  operations: ProtocomOperations
+  t: Translator
+  family: ProviderFamily
+  copy: { title: string; intro: string }
+}): ReactNode {
   const [state, setState] = useState<PageState>({ phase: 'loading', credentials: {} })
   const [baseDraft, setBaseDraft] = useState<string | undefined>(undefined)
   const [allowCustomDraft, setAllowCustomDraft] = useState<boolean | undefined>(undefined)
@@ -643,7 +719,7 @@ function Loaded({ operations, t }: { operations: ProtocomOperations; t: Translat
       setState({ phase: 'error', credentials: {}, error: 'settings namespace unavailable' })
       return
     }
-    const credentials = await operations.describeCredentials(GROUP_KEYS.map(defaultKeyRef))
+    const credentials = await operations.describeCredentials(family.keys.map(key => family.keyRef(key)))
     setState({ phase: 'ready', view, credentials })
   }
 
@@ -655,10 +731,10 @@ function Loaded({ operations, t }: { operations: ProtocomOperations; t: Translat
 
   const baseURL = state.phase === 'ready' ? sectionOf(state.view).baseURL : undefined
 
-  const runProbe = (groupKey: GroupKey): void => {
+  const runProbe = (groupKey: string): void => {
     setProbes(current => ({ ...current, [groupKey]: { phase: 'loading' } }))
     void operations.discoverModels({
-      provider: providerOf(groupKey),
+      provider: family.providerOf(groupKey),
       ...baseURL === undefined ? {} : { baseURL },
     }).then((outcome) => {
       setProbes(current => ({
@@ -674,13 +750,13 @@ function Loaded({ operations, t }: { operations: ProtocomOperations; t: Translat
   // One interrogation per group that can answer: a disabled group has no route
   // and a keyless one has no credential, and the Host refuses both — that is a
   // refusal to show as a hint, not as an error banner on page load.
-  const probeKey = GROUP_KEYS
-    .filter(key => groupValueOf(section, key).enabled
-      && state.credentials[defaultKeyRef(key)]?.configured === true
+  const probeKey = family.keys
+    .filter(key => groupValueOf(section, key, family).enabled
+      && state.credentials[family.keyRef(key)]?.configured === true
       && probes[key] === undefined)
     .join(',')
   useEffect(() => {
-    for (const key of probeKey.length === 0 ? [] : probeKey.split(',')) void runProbe(key as GroupKey)
+    for (const key of probeKey.length === 0 ? [] : probeKey.split(',')) void runProbe(key)
     // Probing once per group that becomes answerable is the intent; a manual
     // refresh goes through the card's own button.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -709,7 +785,7 @@ function Loaded({ operations, t }: { operations: ProtocomOperations; t: Translat
     } catch {
       origin = undefined
     }
-    const needsCustom = origin !== undefined && origin !== DEFAULT_BASE_URL_ORIGIN
+    const needsCustom = origin !== undefined && origin !== family.origin
     if (needsCustom && !allowCustom) {
       setBaseNotice({ kind: 'error', text: t('allowCustomRequired') })
       return
@@ -742,21 +818,22 @@ function Loaded({ operations, t }: { operations: ProtocomOperations; t: Translat
 
   return (
     <div className="protocom-section">
-      <h2 className="protocom-title">{t('title')}</h2>
-      <p className="protocom-intro">{t('intro')}</p>
+      <h2 className="protocom-title">{copy.title}</h2>
+      <p className="protocom-intro">{copy.intro}</p>
       {writable ? null : <p className="protocom-notice">{t('readOnly')}</p>}
       <ul className="protocom-groups">
-        {GROUP_KEYS.map(key => (
+        {family.keys.map(key => (
           <GroupCard
             key={key}
             groupKey={key}
-            group={groupValueOf(section, key)}
-            credential={state.credentials[defaultKeyRef(key)]}
+            family={family}
+            group={groupValueOf(section, key, family)}
+            credential={state.credentials[family.keyRef(key)]}
             writable={writable}
             revision={revision}
             probe={probes[key] ?? { phase: 'idle' }}
             hidden={section.hiddenModels ?? []}
-            recommended={section.recommendedModels ?? DEFAULT_RECOMMENDED}
+            recommended={section.recommendedModels ?? family.recommended}
             contexts={section.modelContexts ?? {}}
             vision={section.visionModels ?? {}}
             operations={operations}

@@ -33,8 +33,9 @@ import type {
   StreamChunk,
 } from '@deepseek-ai/dsh-llm'
 import type { AttachmentStore, ImageAttachmentRef, ImageRequestPolicy } from '@deepseek-ai/dsh-attachment'
-import { GROUP_DEFAULTS, groupOf } from './config.ts'
-import type { GroupKey, ResolvedGroup, ResolvedProtocomOptions } from './config.ts'
+import { PROTOCOM } from './family.ts'
+import type { ProviderFamily } from './family.ts'
+import type { ResolvedGroup, ResolvedProtocomOptions } from './config.ts'
 import {
   acceptsImages,
   displayNameWithContext,
@@ -184,17 +185,32 @@ function reasoningInfo(reasoning: RegistryReasoning): LlmModelReasoningInfo {
   }
 }
 
-/** One adapter serving every enabled `protocom-*` provider route. */
+/** One adapter serving every enabled route of one provider family. */
 export class ProtocomAdapter extends LlmAdapter {
-  private readonly listings = new Map<GroupKey, { at: number; value: Promise<UpstreamModel[]> }>()
+  private readonly listings = new Map<string, { at: number; value: Promise<UpstreamModel[]> }>()
+
+  /**
+   * Stable per-adapter session id for calls that arrive without
+   * `GenerateOptions.sessionId`. The OpenCode Go endpoint answers 400
+   * `MissingSessionID` without one, so non-conversational traffic (title
+   * generation, probes) rides this value: stable per adapter, never invented
+   * per request, which keeps the gateway's session accounting honest.
+   */
+  private readonly fallbackSession = `dsh-${globalThis.crypto.randomUUID()}`
 
   constructor(private readonly config: ProtocomAdapterOptions) {
     super()
   }
 
+  /** The family this adapter instance serves (Protocom for hand-built options). */
+  private family(): ProviderFamily {
+    return this.config.options().family ?? PROTOCOM
+  }
+
   override providerInfo(provider: string): LlmProviderInfo {
-    const key = groupOf(provider)
-    return { id: provider, name: key === undefined ? provider : GROUP_DEFAULTS[key].displayName }
+    const family = this.family()
+    const key = family.groupOf(provider)
+    return { id: provider, name: key === undefined ? provider : (family.defaults[key]?.displayName ?? provider) }
   }
 
   override providerRetryPolicy(_provider: string): ResolvedRetryPolicy {
@@ -203,10 +219,11 @@ export class ProtocomAdapter extends LlmAdapter {
 
   /** The enabled group behind one route; every dispatch path starts here. */
   private groupFor(provider: string): ResolvedGroup {
-    const key = groupOf(provider)
+    const family = this.family()
+    const key = family.groupOf(provider)
     const group = key === undefined ? undefined : this.config.options().groups.get(key)
     if (group === undefined || !group.enabled) {
-      throw new LlmError(`protocom-api: provider route "${provider}" is not an enabled group`, 'NO_PROVIDER')
+      throw new LlmError(`${family.ns}: provider route "${provider}" is not an enabled group`, 'NO_PROVIDER')
     }
     return group
   }
@@ -238,7 +255,7 @@ export class ProtocomAdapter extends LlmAdapter {
    * into.
    */
   private inputModalitiesFor(upstreamId: string): readonly ModelModality[] {
-    return acceptsImages(upstreamId, this.config.options().visionModels) ? ['text', 'image'] : ['text']
+    return acceptsImages(upstreamId, this.config.options().visionModels, this.family().registry) ? ['text', 'image'] : ['text']
   }
 
   /**
@@ -249,7 +266,7 @@ export class ProtocomAdapter extends LlmAdapter {
    * than advertised, because the model could not honour it.
    */
   private contextLengthsFor(group: ResolvedGroup, model: GroupCatalogModel): number[] | undefined {
-    const chosen = this.config.options().modelContexts.get(identityKey(model.upstreamId))
+    const chosen = this.config.options().modelContexts.get(identityKey(model.upstreamId, this.family().registry))
     if (chosen !== undefined && chosen.length > 0) {
       const allowed = chosen.filter(length => length <= model.contextWindow)
       if (allowed.length > 0) return [...allowed].sort((left, right) => left - right)
@@ -301,6 +318,7 @@ export class ProtocomAdapter extends LlmAdapter {
       hidden: hiddenModels,
       recommended: recommendedModels,
       vision: visionModels,
+      family: this.family(),
     }).flatMap(model => this.modelEntries(provider, group, model))
   }
 
@@ -325,7 +343,8 @@ export class ProtocomAdapter extends LlmAdapter {
     model: string,
   ): Promise<LlmResolvedModelInfo> {
     const { upstreamId, contextWindow: variant } = decodeVariantId(model)
-    const entry = matchRegistry(upstreamId)
+    const family = this.family()
+    const entry = matchRegistry(upstreamId, family.registry)
     const contextWindow = variant ?? entry?.contextWindow ?? FALLBACK_CONTEXT_WINDOW
     let displayName = entry?.displayName
     if (displayName === undefined) {
@@ -341,7 +360,7 @@ export class ProtocomAdapter extends LlmAdapter {
     }
     const reasoning = entry?.reasoning
       ?? await this.disclosedReasoning(group, upstreamId)
-      ?? GROUP_DEFAULTS[group.key].reasoning
+      ?? family.defaults[group.key]?.reasoning
     return {
       provider,
       id: model,
@@ -373,8 +392,19 @@ export class ProtocomAdapter extends LlmAdapter {
     // hold for this whole request, so an in-flight stream never observes a
     // configuration change and the next call re-resolves.
     const { baseURL, streamIdleTimeoutMs } = this.config.options()
+    const family = this.family()
     const apiKey = await this.config.resolveApiKey(group)
-    const connection = { baseURL, apiKey }
+    // Session scoping is contractual on OpenCode Go (a missing header answers
+    // 400 MissingSessionID): the harness's own `x-deepseek-harness-session-id`
+    // rides beside `x-opencode-session` carrying the same value, because the
+    // gateway recognizes the native header on only some model paths.
+    const headers: Record<string, string> | undefined = family.sessionHeader === undefined
+      ? undefined
+      : (() => {
+        const session = options.sessionId === undefined ? this.fallbackSession : String(options.sessionId)
+        return { [family.sessionHeader]: session, 'x-deepseek-harness-session-id': session }
+      })()
+    const connection: ProtocolConnection = { baseURL, apiKey, label: family.label, ...headers === undefined ? {} : { headers } }
     const model = stripVariantId(options.model)
     // A provider that simply stops sending must not hold the request, its
     // socket, and the agent step open forever. The watchdog only *notifies*
@@ -412,14 +442,14 @@ export class ProtocomAdapter extends LlmAdapter {
       }
     } catch (error: unknown) {
       if (timeoutOf(watchdog.signal, STREAM_IDLE_TIMEOUT_CODE) !== undefined) {
-        throw new LlmError(`Protocom stream idle for ${streamIdleTimeoutMs}ms`, 'TIMEOUT', { cause: error })
+        throw new LlmError(`${family.label} stream idle for ${streamIdleTimeoutMs}ms`, 'TIMEOUT', { cause: error })
       }
       if (options.signal?.aborted) {
-        throw new LlmError('Protocom request aborted by caller', 'ABORTED', { cause: error })
+        throw new LlmError(`${family.label} request aborted by caller`, 'ABORTED', { cause: error })
       }
       throw error
     } finally {
-      consumer.abort('Protocom stream consumer stopped')
+      consumer.abort(`${family.label} stream consumer stopped`)
       watchdog[Symbol.dispose]()
       if (!exhausted && iterator !== undefined && iterator.return !== undefined) {
         const pendingReturn = iterator.return()
@@ -449,11 +479,20 @@ export class ProtocomAdapter extends LlmAdapter {
   ): Promise<AsyncIterable<StreamChunk>> {
     const { images, messages } = await this.resolveRequestImages(options, model)
     const projected = messages === options.messages ? options : { ...options, messages: [...messages] }
-    return group.protocol === 'responses'
+    // A registry-declared wire protocol beats the group's: OpenCode Go keeps
+    // one group whose models split across both surfaces (grok-4.6, muse-spark,
+    // gpt-5.6-luna answer only on /responses).
+    const family = this.family()
+    const entry = matchRegistry(model, family.registry)
+    const protocol = entry?.protocol ?? group.protocol
+    return protocol === 'responses'
       ? streamResponses(connection, projected, model, images)
-      : streamChatCompletions(
-        connection, projected, model, images, group.replayReasoning, group.assistantTextReplay,
-      )
+      : streamChatCompletions(connection, projected, model, images, {
+        replayReasoning: group.replayReasoning,
+        assistantTextReplay: group.assistantTextReplay,
+        thinking: family.chatThinking,
+        inlineReasoning: entry?.inlineReasoning,
+      })
   }
 
   /**

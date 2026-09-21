@@ -160,6 +160,12 @@ export const SECTION_CSS = `
 .protocom-quota-bar { height: 6px; border-radius: 999px; background: var(--dsh-track, rgba(128, 128, 128, 0.18)); overflow: hidden; }
 .protocom-quota-fill { height: 100%; border-radius: 999px; background: var(--dsh-accent, #3a7bfd); transition: width 0.3s ease; }
 .protocom-quota-fill.is-warn { background: var(--dsh-danger, #d03050); }
+.protocom-quota-row { display: flex; align-items: center; gap: 10px; font-size: 12px; }
+.protocom-quota-label { flex: 0 0 104px; opacity: 0.82; }
+.protocom-quota-row .protocom-quota-bar { flex: 1; }
+.protocom-quota-num { flex: 0 0 auto; min-width: 92px; text-align: right; opacity: 0.82; }
+.protocom-quota-num small { opacity: 0.6; margin-left: 6px; }
+
 .protocom-balance-grid { display: flex; flex-wrap: wrap; gap: 4px 18px; font-size: 12px; }
 .protocom-balance-item { opacity: 0.82; }
 .protocom-balance-item b { font-weight: 600; }

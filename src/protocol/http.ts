@@ -24,6 +24,14 @@ export interface ProtocolConnection {
   baseURL: string
   /** Bearer token from the same configuration generation as {@link baseURL}. */
   apiKey: string
+  /** Provider name for error messages (default `'Protocom'`). */
+  label?: string
+  /**
+   * Extra request headers this family's endpoint requires, merged over the
+   * shared ones. OpenCode Go uses this for its mandatory `x-opencode-session`
+   * session scoping.
+   */
+  headers?: Record<string, string>
 }
 
 /** One parsed provider error body. */
@@ -77,6 +85,7 @@ export async function postSse(
 ): Promise<Response> {
   const url = `${connection.baseURL}/v1/${path}`
   const serialized = JSON.stringify(body)
+  const label = connection.label ?? 'Protocom'
   let response: Response
   try {
     response = await fetch(url, {
@@ -86,19 +95,20 @@ export async function postSse(
         'content-type': 'application/json',
         'accept': 'text/event-stream',
         ...attributionHeaders(),
+        ...connection.headers,
       },
       body: serialized,
       ...signal === undefined ? {} : { signal },
     })
   } catch (error: unknown) {
-    if (signal?.aborted) throw new LlmError('Protocom request aborted by caller', 'ABORTED', { cause: error })
-    throw new LlmError(`Protocom API request to ${url} failed`, 'TRANSPORT', { cause: error })
+    if (signal?.aborted) throw new LlmError(`${label} request aborted by caller`, 'ABORTED', { cause: error })
+    throw new LlmError(`${label} API request to ${url} failed`, 'TRANSPORT', { cause: error })
   }
   if (response.ok) {
-    if (!response.body) throw new LlmError('Protocom API returned no response body', 'EMPTY_RESPONSE')
+    if (!response.body) throw new LlmError(`${label} API returned no response body`, 'EMPTY_RESPONSE')
     return response
   }
-  let message = `Protocom API error (HTTP ${response.status})`
+  let message = `${label} API error (HTTP ${response.status})`
   let providerError: WireError['error']
   const rawResponse = await response.text()
   try {
@@ -114,7 +124,7 @@ export async function postSse(
   const delay = providerRetryAfterMs(response.headers.get('retry-after'))
   const id = response.headers.get('x-request-id')
   throw new LlmError(message, httpErrorCode(response.status), {
-    cause: new Error(rawResponse.length > 0 ? rawResponse : `Protocom HTTP ${response.status}`),
+    cause: new Error(rawResponse.length > 0 ? rawResponse : `${label} HTTP ${response.status}`),
     status: response.status,
     ...delay === undefined ? {} : { providerRetryAfterMs: delay },
     ...id === null || id.length === 0 ? {} : { requestId: ProviderRequestId(id) },

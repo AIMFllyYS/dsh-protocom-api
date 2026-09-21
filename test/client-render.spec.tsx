@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { ProtocomSection } from '../src/client/ProtocomSection.tsx'
 import { en } from '../src/client/locale.ts'
+import { PROTOCOM } from '../src/family.ts'
 import type { ProtocomOperations } from '../src/client/operations.ts'
 
 const VIEW = {
@@ -30,7 +31,12 @@ function jsonResponse(body: unknown, status = 200): Response {
 }
 
 function renderSection(operations: ProtocomOperations) {
-  return render(<ProtocomSection operations={operations} t={(key) => en[key]} />)
+  return render(<ProtocomSection
+    operations={operations}
+    t={(key) => en[key]}
+    family={PROTOCOM}
+    copy={{ title: en.title, intro: en.intro }}
+  />)
 }
 
 afterEach(() => {

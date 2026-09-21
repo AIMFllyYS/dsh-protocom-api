@@ -16,7 +16,7 @@
  * @module dsh-protocom-api/balance
  */
 import type { GroupBalance } from './balance-view.ts';
-import type { GroupKey, ResolvedGroup, ResolvedProtocomOptions } from './config.ts';
+import type { ResolvedGroup, ResolvedProtocomOptions } from './config.ts';
 export { parseBalanceView, parseRateMultiplier } from './balance-view.ts';
 export type { GroupBalance } from './balance-view.ts';
 /**
@@ -57,7 +57,7 @@ export declare class BalanceService {
      * @param key - the group to query.
      * @param includeRates - whether to also read the optional billing-rate endpoint.
      */
-    balance(key: GroupKey, includeRates?: boolean): Promise<GroupBalance>;
+    balance(key: string, includeRates?: boolean): Promise<GroupBalance>;
     private fetchBalance;
 }
 /**

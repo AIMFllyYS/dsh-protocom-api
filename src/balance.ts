@@ -19,7 +19,7 @@
 import { attributionHeaders, LlmError } from '@deepseek-ai/dsh-llm'
 import { normalizeUsage, parseRateMultiplier } from './balance-view.ts'
 import type { GroupBalance } from './balance-view.ts'
-import type { GroupKey, ResolvedGroup, ResolvedProtocomOptions } from './config.ts'
+import type { ResolvedGroup, ResolvedProtocomOptions } from './config.ts'
 
 export { parseBalanceView, parseRateMultiplier } from './balance-view.ts'
 export type { GroupBalance } from './balance-view.ts'
@@ -57,7 +57,7 @@ export interface BalanceHooks {
   log?: (message: string) => void
 }
 
-function cacheKey(key: GroupKey, includeRates: boolean): string {
+function cacheKey(key: string, includeRates: boolean): string {
   return `${key}|${includeRates ? 'rates' : 'plain'}`
 }
 
@@ -66,7 +66,7 @@ export class BalanceService {
   /** Cache lifetime for one group's balance. */
   static readonly TTL_MS = 60_000
   private readonly cache = new Map<string, { at: number; value: Promise<GroupBalance> }>()
-  private readonly failedAt = new Map<GroupKey, number>()
+  private readonly failedAt = new Map<string, number>()
 
   constructor(private readonly hooks: BalanceHooks) {}
 
@@ -81,7 +81,7 @@ export class BalanceService {
    * @param key - the group to query.
    * @param includeRates - whether to also read the optional billing-rate endpoint.
    */
-  balance(key: GroupKey, includeRates = false): Promise<GroupBalance> {
+  balance(key: string, includeRates = false): Promise<GroupBalance> {
     const options = this.hooks.options()
     const group = options.groups.get(key)
     if (group === undefined || !group.enabled) {
@@ -187,7 +187,7 @@ export function balanceFetchHandler(
     const groupParam = url.searchParams.get('group')
     const options = hooks.options()
     if (groupParam !== null) {
-      const group = options.groups.get(groupParam as GroupKey)
+      const group = options.groups.get(groupParam)
       if (group === undefined || !group.enabled || !group.showBalance) {
         return json(404, { error: 'no enabled balance-reporting group' })
       }

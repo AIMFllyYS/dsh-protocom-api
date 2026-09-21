@@ -25,12 +25,19 @@ export interface WireUsage {
         reasoning_tokens?: number;
     };
 }
+/** How a request spells thinking control on this family's chat surface. */
+export type ThinkingMode = 'toggle' | 'effort-only';
 /**
- * Resolve the wire thinking fields for one request. `off` disables thinking
- * explicitly; any other effort enables it and rides as `reasoning_effort`;
- * an absent effort leaves the provider's own default alone.
+ * Resolve the wire thinking fields for one request. The default `toggle`
+ * spelling sends `thinking: {type}` plus `reasoning_effort`: `off` disables
+ * thinking explicitly; any other effort enables it and rides as
+ * `reasoning_effort`; an absent effort leaves the provider's own default
+ * alone. `effort-only` (OpenCode Go) sends `reasoning_effort` verbatim — the
+ * gateway parses it without a `thinking` block, which GLM routes refuse
+ * outright — and the disabling word (`none`, `off`) is part of the model's
+ * advertised effort vocabulary rather than a special case here.
  */
-export declare function resolveThinking(effort: string | undefined): {
+export declare function resolveThinking(effort: string | undefined, mode?: ThinkingMode): {
     thinking?: {
         type: 'enabled' | 'disabled';
     };
@@ -60,7 +67,28 @@ export declare function mapFinishReason(reason: string): FinishReason;
  */
 export type AssistantTextReplay = 'keep' | 'drop' | 'user';
 /** Serialize one request into the chat-completions wire body. */
-export declare function serializeChatRequest(options: GenerateOptions, model: string, images?: RequestImageUrls, replayReasoning?: boolean, assistantTextReplay?: AssistantTextReplay): Record<string, unknown>;
+export declare function serializeChatRequest(options: GenerateOptions, model: string, images?: RequestImageUrls, replayReasoning?: boolean, assistantTextReplay?: AssistantTextReplay, thinking?: ThinkingMode): Record<string, unknown>;
+/** One extracted stream segment: text, or thinking lifted out of it. */
+interface TextSegment {
+    kind: 'text' | 'reasoning';
+    text: string;
+}
+/**
+ * Lift an inline `<think>…</think>` segment out of a streamed `content`
+ * string. Some routes (MiniMax M3 on OpenCode Go) emit thinking inside the
+ * content stream rather than on a reasoning field; keeping the tag split-safe
+ * across chunk boundaries is the whole job — a suffix that is a proper prefix
+ * of the boundary tag is buffered until the next chunk resolves it, and a
+ * buffered suffix that turns out not to be a tag flows through as text.
+ */
+export declare class ThinkTagExtractor {
+    private pending;
+    private state;
+    /** Consume one content delta; emit the segments it completes. */
+    feed(input: string): TextSegment[];
+    /** Emit whatever remains when the stream ends; an unclosed think stays reasoning. */
+    flush(): TextSegment[];
+}
 /**
  * Consume SSE data payloads (ending with `[DONE]`) and yield StreamChunks.
  * `block-end`s, `usage`, and `finish` are deferred to the `[DONE]` sentinel
@@ -68,6 +96,22 @@ export declare function serializeChatRequest(options: GenerateOptions, model: st
  * blocks maps to an `EMPTY_RESPONSE` error finish instead of a successful
  * empty message.
  */
-export declare function translateChatCompletions(payloads: AsyncIterable<string>): AsyncGenerator<StreamChunk>;
+export declare function translateChatCompletions(payloads: AsyncIterable<string>, behavior?: {
+    inlineReasoning?: boolean;
+}): AsyncGenerator<StreamChunk>;
+/** Per-route request/response behaviour the group cannot express alone. */
+export interface ChatStreamBehavior {
+    /** Whether a replayed assistant turn carries its `reasoning_content` back. */
+    replayReasoning?: boolean;
+    /** How a replayed assistant turn's own text is carried. */
+    assistantTextReplay?: AssistantTextReplay;
+    /** Thinking-control spelling this family's surface expects. */
+    thinking?: ThinkingMode | undefined;
+    /**
+     * Whether this model emits thinking inline as `<think>…</think>` inside
+     * `content`; the extractor lifts it into a reasoning block (MiniMax M3).
+     */
+    inlineReasoning?: boolean | undefined;
+}
 /** Stream one chat-completions call as harness chunks. */
-export declare function streamChatCompletions(connection: ProtocolConnection, options: GenerateOptions, model: string, images?: RequestImageUrls, replayReasoning?: boolean, assistantTextReplay?: AssistantTextReplay): AsyncGenerator<StreamChunk>;
+export declare function streamChatCompletions(connection: ProtocolConnection, options: GenerateOptions, model: string, images?: RequestImageUrls, behavior?: ChatStreamBehavior): AsyncGenerator<StreamChunk>;

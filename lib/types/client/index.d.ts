@@ -14,5 +14,5 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
     }
 }
 export declare const inject: string[];
-/** Wire the section into the settings page. */
+/** Wire both provider sections into the settings page. */
 export declare function apply(ctx: ClientContext): void;
