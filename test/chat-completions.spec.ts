@@ -279,3 +279,90 @@ describe('chat-completions serialization', () => {
     expect(high.reasoning_effort).toBe('high')
   })
 })
+
+
+describe('degenerate completion detection', () => {
+  // GLM-5.3 Flash on OpenCode Go intermittently ends a turn with a full
+  // reasoning_content stream, an empty content delta, and finish_reason
+  // "stop" (measured on one prompt: 5 of 16 requests). Counting the reasoning
+  // block as output reported that as a successful turn, so the agent turn
+  // closed with no reply and no tool call to run — indistinguishable from a
+  // hang, and nothing retried it. The reasoning-only shape must therefore
+  // reach the retryable EMPTY_RESPONSE code.
+  const REASONING_ONLY_STOP = [
+    'data: {"id":"c","choices":[{"index":0,"delta":{"role":"assistant","content":"","refusal":null},"finish_reason":null}]}',
+    '',
+    'data: {"id":"c","choices":[{"index":0,"delta":{"reasoning_content":"思考"},"finish_reason":null}]}',
+    '',
+    'data: {"id":"c","choices":[{"index":0,"delta":{"reasoning_content":"完毕"},"finish_reason":null}]}',
+    '',
+    'data: {"id":"c","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}',
+    '',
+    'data: [DONE]',
+    '',
+    '',
+  ].join('\n')
+
+  it('reports a reasoning-only stop as the retryable EMPTY_RESPONSE error', async () => {
+    const chunks = await collect(REASONING_ONLY_STOP)
+    // The thinking stays visible; only the terminal reason is corrected.
+    expect(chunks.filter(chunk => chunk.type === 'reasoning-delta').map(chunk => chunk.text)).toEqual(['思考', '完毕'])
+    expect(chunks.at(-1)).toEqual({
+      type: 'finish',
+      reason: {
+        kind: 'error',
+        failure: {
+          message: 'model ended the turn after reasoning without a reply or a tool call',
+          code: 'EMPTY_RESPONSE',
+        },
+      },
+    })
+  })
+
+  it('keeps a genuinely empty completion on its historical message and code', async () => {
+    const chunks = await collect([
+      'data: {"id":"c","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}',
+      '',
+      'data: [DONE]',
+      '',
+      '',
+    ].join('\n'))
+    expect(chunks.at(-1)).toEqual({
+      type: 'finish',
+      reason: {
+        kind: 'error',
+        failure: { message: 'model returned a completed response with no content', code: 'EMPTY_RESPONSE' },
+      },
+    })
+  })
+
+  it('still reports a reasoning turn that also produced text as a normal stop', async () => {
+    const chunks = await collect([
+      'data: {"id":"c","choices":[{"index":0,"delta":{"reasoning_content":"想"},"finish_reason":null}]}',
+      '',
+      'data: {"id":"c","choices":[{"index":0,"delta":{"content":"答案"},"finish_reason":null}]}',
+      '',
+      'data: {"id":"c","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}',
+      '',
+      'data: [DONE]',
+      '',
+      '',
+    ].join('\n'))
+    expect(chunks.at(-1)).toEqual({ type: 'finish', reason: { kind: 'stop' } })
+  })
+
+  it('still reports a reasoning turn that produced a tool call as tool-calls', async () => {
+    const chunks = await collect([
+      'data: {"id":"c","choices":[{"index":0,"delta":{"reasoning_content":"想"},"finish_reason":null}]}',
+      '',
+      'data: {"id":"c","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_1","function":{"name":"run_code","arguments":"{}"}}]},"finish_reason":null}]}',
+      '',
+      'data: {"id":"c","choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}',
+      '',
+      'data: [DONE]',
+      '',
+      '',
+    ].join('\n'))
+    expect(chunks.at(-1)).toEqual({ type: 'finish', reason: { kind: 'tool-calls' } })
+  })
+})

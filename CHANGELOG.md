@@ -2,6 +2,109 @@
 
 All notable changes to `dsh-protocom-api` are documented here.
 
+## [0.6.1] — 修掉「调用一两次工具之后彻底停住」
+
+### 根因（实测，非推断）
+
+**GLM-5.3 Flash 会间歇性地「只想不说」地结束一轮。** 拿真实会话的原文（真实 system prompt 35923 字符 + 真实 run_code schema + 逐字会话历史）对同一提示词重复请求：
+
+```
+16 次请求：10 次正常出工具调用，1 次正常出文本，5 次拿到下面这个形状
+
+delta: {"role":"assistant","content":"","refusal":null}   ← content 是空串
+delta: {"reasoning_content":"……"}  × 43                  ← 思考正常流式，约 300~1400 字
+delta: {}  + finish_reason: "stop"                        ← 没有 answer，也没有 tool_call
+```
+
+思考满格、正文为空、上游直接判 stop。这是上游的随机行为，与请求内容无关（同一提示词约 30% 触发）。
+
+**而翻译层把它当成了成功的一轮。** 判空只数「有没有任何 block」，而思考本身就是一个 block，于是 order.length !== 0 → finish: stop。agent loop 拿到 stop、又找不到 tool-call，就 return { kind: "completed" } 收尾 —— **界面上没有任何报错、没有重试、也没有下一轮**，从外部看就是「彻底停住」。因为它被判定为「成功」，连重试的机会都没有。
+
+这也是为什么它只在部分模型上出现：上游是否会在思考后直接收尾是模型的随机行为，DeepSeek 系没被观测到。
+
+### 修复
+
+chat-completions 与 responses 两条翻译路径的**退化完成判定**收紧为：stop 且没有任何 model-visible 输出（text / tool-call）就是退化完成 → EMPTY_RESPONSE。
+
+| 流的内容 | 判定 |
+| --- | --- |
+| 只有思考，没有 text / tool-call | EMPTY_RESPONSE · model ended the turn after reasoning without a reply or a tool call |
+| 完全空 | EMPTY_RESPONSE · 保留原文案 model returned a completed response with no content |
+| 有 text 或 tool-call | 不变（stop / tool-calls） |
+
+EMPTY_RESPONSE 本来就在适配器自己声明的 retryableCodes 里，所以随机静默停住现在的代价是**一次退避重试**（默认最多 5 次），而不是整轮丢失。
+
+**实测（构建产物 + 真实凭据，走适配器自己的代码路径，同一提示词 16 次）**：
+
+```
+修复前：13 x tool-calls | 3 x（被当成成功的）静默空轮
+修复后：13 x tool-calls | 3 x EMPTY_RESPONSE（进入重试）| 0 x 静默空轮
+```
+
+### 顺带：阶跃星辰补上思考强度菜单
+
+排查「阶跃星辰每次调用工具都要很久」时实测到：reasoning.effort 在这个中转站上**被接受且真实生效** —— 同一提示词下 minimal/low 产出的 reasoning token 为 **0**，medium/high 为 14/24，不传时约等于 medium。
+
+但 stepfun 分组此前既没有名录结论也没有分组默认词表，所以 resolveModel 返回的 reasoning 是 undefined —— **界面上根本没有 Effort 子菜单**，思考预算既不可控也看不到。这正是某次会话在第一轮工具调用前就烧掉 **28534 个 reasoning token** 的原因（同一会话单步输出 40686 token，耗时 687 秒）。
+
+现在 GROUP_DEFAULTS.stepfun 声明实测词表 minimal/low/medium/high（defaultEffort: medium，与不传时的行为一致）。三个能服务的模型（step-5-preview、step-3.7-flash、step-router-v1）均已逐条实测 HTTP 200。
+
+### 全量模型可用性普查（三族 × 两条协议，逐模型实测）
+
+对端点 listing 里的**每一个 id** 各发一次 chat-completions 与 responses 请求（**故意不下发 reasoning_effort**：词表不匹配会返回 400，那会与「协议不可用」混淆）。
+
+| 族 | listing | 两通道都可用 | 只有 chat | 只有 responses | 都不可用 |
+| --- | --- | --- | --- | --- | --- |
+| OpenCode Go | 31 | 5 | 19 | 5 | 1 (minimax-m2.7) |
+| Protocom aggregate | 26 | 22 | 0 | 0 | 4 |
+| Protocom stepfun | 11 | 3 | 0 | 0 | 8 |
+
+结论：**Go 族除 grok-4.7 外全部登记正确；stepfun 族的拒收名单完全正确；aggregate 有 4 个 listing 里的模型端点侧不可服务。**
+
+### 修复一：grok-4.7 此前被发到了错误的通道
+
+端点 listing 有 grok-4.7，且它在 **/v1/responses 上真实可用**——用 17×23 提问实测 3 次全部正确答出 391，并带回真实 reasoning token（81~98）与缓存命中。但名录里没有它，于是协议回落到分组的 chat-completions，而 Go 网关对 grok 族的 chat 通道一律 503：
+
+```
+{"error":{"type":"server_error","message":"Upstream request failed: Endpoint is unavailable."}}
+```
+
+会话 session-18b010c6 就是这个签名：切到 grok-4.7 后 0.6 秒返回 503，重试 3 次全部 503，最后 turn/end reason: aborted。
+
+现在补上名录条目（protocol: responses）。它的思考词表**逐词单独实测**而非继承 grok-4.6：minimal/low/medium/high/xhigh 均 200，none/max 均 400 —— 结论相同，但结论来自它自己的探测。
+
+### 修复二：4 个 aggregate 模型进了拒收名单
+
+这 4 个 id 在两条协议上都是 400，报文中转站自己说「Model X is not available on this endpoint. Call it on /provider/v1/chat/completions instead.」：
+
+```
+Qwen/Qwen3.8-Flash
+google/gemini-3.7-flash
+tencent/hy4-preview
+inclusionai/ling-3.0-flash-sante:free
+```
+
+**它指的那条路不是可用 API**：/provider/v1/chat/completions 返回的是 Cloudflare 的 525 SSL handshake failed HTML 页（或 HTTP 200 + text/html），实测 4 次无一例外。所以插件无法改路绕开，只能不让它们进菜单。
+
+其中 3 个此前只是本机 settings.yaml 里手动隐藏，换台机器就会重新出现；现在收进 REFUSED_CHAT_MODEL_IDS，插件层生效，并在设置页的「端点提供」列标为否。
+
+### 工具调用对接：已逐条验证无缺陷
+
+
+
+「工具调用对不上」在两条协议上都不成立——用真实工具 schema 走适配器实测：
+
+```
+step-5-preview (responses) : 4/4 id、name、arguments 全部合法且可 JSON.parse
+glm-5.3-flash  (chat)      : 4/4 同上
+```
+
+思考侧也不需要额外配置：OpenCode Go 的 reasoning_content 与阶跃星辰三条 reasoning_* 词表都已正确折叠进 reasoning-delta。
+
+### 新增
+
+- 退化完成检测用例组（chat-completions 4 条 + responses 3 条），并修正 2 条把旧行为写死的既有断言（它们断言的正是本次要修的「只有思考算成功」）。
+- 用例总数 182 → 235。
 ## [0.6.0] — OpenCode Go 订阅接入（第二 provider 族）
 
 插件升级为双 provider 族：原有 Protocom 面板之外，设置页新增并列的「OpenCode Go」整页（`opencode-go` 命名空间，route 名 `opencode-go-sub`），订阅源为 `https://opencode.ai/zen/go`，承载端点约 28 个模型。

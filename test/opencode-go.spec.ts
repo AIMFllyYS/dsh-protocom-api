@@ -95,8 +95,8 @@ describe('OpenCode Go registry', () => {
   })
 
   it('carries the per-model protocol override the live route verified', () => {
-    // chat-completions 503s on these four; only /responses accepts them.
-    for (const id of ['grok-4.6', 'muse-spark-1.2-contributor', 'muse-spark-1.3-contributor', 'gpt-5.6-luna']) {
+    // chat-completions 503s on these five; only /responses accepts them.
+    for (const id of ['grok-4.6', 'grok-4.7', 'muse-spark-1.2-contributor', 'muse-spark-1.3-contributor', 'gpt-5.6-luna']) {
       expect(matchRegistry(id, GO_REGISTRY)?.protocol).toBe('responses')
     }
     expect(matchRegistry('glm-5.3', GO_REGISTRY)?.protocol).toBeUndefined()
@@ -377,5 +377,33 @@ describe('OpenCode Go adapter requests', () => {
     const body = JSON.parse(String(requests[0]?.init.body))
     expect(body.reasoning_effort).toBe('xhigh')
     expect('thinking' in body).toBe(false)
+  })
+})
+
+describe('grok-4.7 routing', () => {
+  // The endpoint lists grok-4.7 and serves it on /v1/responses, but the Go
+  // gateway 503s it on /v1/chat/completions exactly like the rest of the grok
+  // family. With no registry entry the id fell back to the group's chat
+  // protocol, so every call answered 503 "Endpoint is unavailable" (measured).
+  // The entry is what routes it, so this guards against losing it again.
+  it('routes grok-4.7 through the responses protocol', () => {
+    const entry = matchRegistry('grok-4.7', GO_REGISTRY)
+    expect(entry).toBeDefined()
+    expect(entry?.protocol).toBe('responses')
+  })
+
+  it('carries grok-4.7 in the go menu', () => {
+    const catalog = groupCatalog('go', undefined, { family: OPENCODE_GO })
+    expect(catalog.some(model => model.upstreamId === 'grok-4.7')).toBe(true)
+  })
+
+  it('declares grok-4.7 its own probed effort vocabulary', () => {
+    // Probed model by model rather than inherited: minimal/low/medium/high/
+    // xhigh answer 200 and none/max answer 400 -- the same set as grok-4.6,
+    // verified separately so a future divergence is caught here.
+    const efforts = matchRegistry('grok-4.7', GO_REGISTRY)?.reasoning?.efforts
+    expect(efforts).toEqual(expect.arrayContaining(['minimal', 'low', 'medium', 'high', 'xhigh']))
+    expect(efforts).not.toContain('none')
+    expect(efforts).not.toContain('max')
   })
 })

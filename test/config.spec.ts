@@ -129,3 +129,16 @@ describe('stored credential is pinned to the shipped origin (F-2)', () => {
       .toBe('http://127.0.0.1:19999')
   })
 })
+
+describe('StepFun reasoning vocabulary', () => {
+  // The relay accepts reasoning.effort on every StepFun model that serves, and
+  // the value visibly changes the thinking budget (verified by request). The
+  // group has to declare it, or the picker offers no Effort submenu at all and
+  // the thinking budget stays uncontrollable.
+  it('declares the four verified efforts and a default for the stepfun group', () => {
+    expect(GROUP_DEFAULTS.stepfun.reasoning).toEqual({
+      efforts: ['minimal', 'low', 'medium', 'high'],
+      defaultEffort: 'medium',
+    })
+  })
+})
