@@ -421,8 +421,9 @@ function GroupCard({ groupKey, group, family, credential, writable, revision, pr
       // The route is fenced by the Host carrier, so an unauthenticated request
       // or a profile without the connection service answers 401/403/404. That
       // is "no account surface here", not a failure worth a red message.
+      const unavailable = family.telemetryKind === 'quota' ? t('quotaUnavailable') : t('balanceUnavailable')
       if (response.status === 401 || response.status === 403 || response.status === 404) {
-        setBalance({ phase: 'error', data: undefined, error: t('balanceUnavailable') })
+        setBalance({ phase: 'error', data: undefined, error: unavailable })
         return
       }
       if (!response.ok) {
@@ -433,7 +434,7 @@ function GroupCard({ groupKey, group, family, credential, writable, revision, pr
       // malformed reply cannot reach toFixed/slice and crash the strip.
       const raw: unknown = await response.json()
       const data = family.telemetryKind === 'quota' ? parseGoUsage(raw) : parseBalanceView(raw)
-      if (data === undefined) throw new Error(t('balanceUnavailable'))
+      if (data === undefined) throw new Error(unavailable)
       setBalance({ phase: 'ready', data, error: undefined })
     } catch (error: unknown) {
       setBalance({ phase: 'error', data: undefined, error: error instanceof Error ? error.message : String(error) })
