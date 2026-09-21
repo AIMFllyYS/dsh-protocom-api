@@ -98,8 +98,9 @@ function groupValueOf(section: SectionValue, key: string, family: ProviderFamily
     enabled: raw.enabled ?? false,
     protocol: raw.protocol ?? defaults?.protocol ?? 'chat-completions',
     // The card shows the effective lengths, so a group that ships a ladder
-    // (StepFun) reads as configured before the deployment stores its own.
-    contextLengths: raw.contextLengths ?? [...defaults?.contextLengths ?? []],
+    // (StepFun) reads as configured before the deployment stores its own. A
+    // normalized empty array means unset, matching the adapter's resolution.
+    contextLengths: raw.contextLengths?.length ? raw.contextLengths : [...defaults?.contextLengths ?? []],
     showBalance: raw.showBalance ?? true,
   }
 }
