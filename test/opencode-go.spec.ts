@@ -54,6 +54,17 @@ describe('OpenCode Go options resolution', () => {
 })
 
 describe('OpenCode Go config schema', () => {
+  it('treats an empty contextLengths array as unset (schemastery normalizes missing to [])', () => {
+    // A described section document can carry contextLengths: [] for a group
+    // the user never edited; that must not collapse every model to its raw
+    // context window — the shipped ladder still applies.
+    const resolved = resolveAdapterOptions(
+      { groups: { go: { enabled: true, contextLengths: [] } } },
+      OPENCODE_GO,
+    )
+    expect(resolved.groups.get('go')?.contextLengths).toEqual([204_800, 262_144, 409_600, 1_048_576])
+  })
+
   it('parses a nested opencode section alongside the protocom one', () => {
     const parsed = Config({
       groups: { codex: { enabled: true } },
@@ -251,6 +262,14 @@ describe('OpenCode Go usage view', () => {
     expect(view?.rolling).toEqual({ status: 'ok', percent: 12.5, resetsAt: '2026-09-21T08:00:00Z' })
     expect(view?.weekly).toEqual({ status: 'rate-limited', percent: 100 })
     expect(view?.monthly).toBeUndefined()
+  })
+
+  it('accepts the flat view the fenced route serves', () => {
+    // /api/opencode-go/usage returns the normalized GoUsageView directly, not
+    // the upstream {usage:{}} envelope — the strip must parse that reply.
+    const view = parseGoUsage({ rolling: { status: 'ok', percent: 2 }, weekly: { percent: 0 } })
+    expect(view?.rolling).toEqual({ status: 'ok', percent: 2 })
+    expect(view?.weekly).toEqual({ percent: 0 })
   })
 
   it('refuses a body that is not a usage object', () => {

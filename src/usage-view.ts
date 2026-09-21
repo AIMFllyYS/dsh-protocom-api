@@ -74,7 +74,10 @@ function normalizeWindow(value: WireWindow | undefined): GoQuotaWindow | undefin
  */
 export function parseGoUsage(body: unknown): GoUsageView | undefined {
   if (body === null || typeof body !== 'object' || Array.isArray(body)) return undefined
-  const usage = (body as WireUsage).usage
+  // The fenced route answers the normalized flat view; the upstream endpoint
+  // wraps the same windows in a `usage` envelope. Accept either.
+  const wrapped = (body as WireUsage).usage
+  const usage = (wrapped ?? body) as WireUsage['usage']
   if (usage === null || typeof usage !== 'object') return undefined
   const view: GoUsageView = {}
   const rolling = normalizeWindow(usage.rolling)
