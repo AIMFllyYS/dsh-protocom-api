@@ -9,6 +9,7 @@
 import z from '@deepseek-ai/schemastery';
 import type { CredentialRef } from '@deepseek-ai/dsh-credentials';
 import type { ProviderFamily } from './family.ts';
+import type { FusionConfig } from './fusion.ts';
 export { DEFAULT_BASE_URL, DEFAULT_BASE_URL_ORIGIN, GROUP_DEFAULTS, GROUP_KEYS, groupOf, providerOf } from './groups.ts';
 export type { GroupKey, GroupReasoning, Protocol } from './groups.ts';
 export { FAMILIES, GO_CREDENTIAL_REF, GO_DEFAULT_BASE_URL, GO_DEFAULT_BASE_URL_ORIGIN, GO_PROVIDER, OPENCODE_GO, PROTOCOM } from './family.ts';
@@ -124,11 +125,20 @@ export interface SectionConfig {
 export interface Config extends SectionConfig {
     /** OpenCode Go family profile; same section shape under its own namespace. */
     opencode?: SectionConfig;
+    /** Fusion dual-model routing profile; the same shape as its own settings section. */
+    fusion?: FusionConfig;
 }
 /** Settings-section schema for the `protocom-api` namespace. */
 export declare const ProtocomSection: z<SectionConfig>;
 /** Settings-section schema for the `opencode-go` namespace. */
 export declare const GoSection: z<SectionConfig>;
+/**
+ * Settings-section schema for the `model-fusion` namespace, and the shape of
+ * the plugin's own `fusion` config slice. Only `enabled` defaults here; the
+ * seat-required-when-enabled rule is a cross-field constraint Schemastery
+ * cannot express, so `resolveFusion` is the authority and runs on every write.
+ */
+export declare const FusionSection: z<FusionConfig>;
 /** Runtime schema for the plugin's yml configuration. */
 export declare const Config: z<Config>;
 /** Validated per-group facts with every adapter-owned default resolved. */

@@ -1,7 +1,7 @@
 {
   "name": "dsh-protocom-api",
   "description": "Protocom official API + OpenCode Go subscription adapter for the DeepSeek Harness LLM seam",
-  "version": "0.6.1",
+  "version": "0.7.0",
   "type": "module",
   "main": "lib/index.js",
   "types": "lib/types/index.d.ts",
@@ -46,6 +46,7 @@
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "^4.0.2",
+    "@deepseek-ai/dsh-agent": "^0.1.5-rc.2",
     "@deepseek-ai/dsh-attachment": "^0.1.5-rc.2",
     "@deepseek-ai/dsh-client-connection": "^0.1.5-rc.2",
     "@deepseek-ai/dsh-credentials": "^0.1.5-rc.2",
@@ -59,6 +60,7 @@
   },
   "devDependencies": {
     "@deepseek-ai/cordis": "4.0.2",
+    "@deepseek-ai/dsh-agent": "0.1.5-rc.2",
     "@deepseek-ai/dsh-api-remotes": "0.1.5-rc.2",
     "@deepseek-ai/dsh-attachment": "0.1.5-rc.2",
     "@deepseek-ai/dsh-client-connection": "0.1.5-rc.2",

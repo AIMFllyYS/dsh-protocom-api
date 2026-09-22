@@ -2,6 +2,21 @@
 
 All notable changes to `dsh-protocom-api` are documented here.
 
+## [0.7.0] — Fusion 双模型：主线走指挥位，子智能体固定走执行位
+
+新增设置段 `model-fusion`，与既有两个 provider 段并列。主线对话用强模型（指挥位），所有委派出去的子智能体请求固定用性价比模型（执行位）。
+
+**实现**：单一 Host 侧全局 waterfall `ctx.on('agent/request', …, { global: true, prepend: true })`。改写发生在 `llm.prepareCall()` **之前**，因此：
+
+- 能力校验按执行位执行，请求头按执行位持久化 —— 后续 step 与冷恢复的子会话继续停在执行位；
+- 子会话的压缩/标题等辅助调用读同一个 header，自动跟随执行位，**不需要**额外的 `llm/stream` 监听（原计划有，实测后删除：它会把「实际派发」和「已落盘 header」拆成两套路由）。
+
+判定用持久化字段 `session.header.origin === 'subagent'`，覆盖 spawn / fork / 孙级 / 冷恢复 / continuable；fork 是否纳入由 `includeForks` 控制（默认纳入，为忠实「永远走执行位」的语义）。
+
+指挥位是**软应用**：保存时写入 `agent-default-model` 并对当前顶层会话 selectModel，composer 仍可临时换型。子会话绝不被 selectModel 寻址（harness 会拒绝，且子会话本就属于执行位）。
+
+其它：启用但缺少任一席位在**写入时**即被 `validate` 钩子拒绝（不是等到请求时才失败）；执行位路由失效会响亮失败而不是静默回落；改动 live 生效，下一个 step 就使用新席位。
+
 ## [0.6.1] — 修掉「调用一两次工具之后彻底停住」
 
 ### 根因（实测，非推断）

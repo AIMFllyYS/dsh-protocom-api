@@ -13,9 +13,14 @@ import type {} from '@deepseek-ai/dsh-client-locale/client'
 import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
 import type {} from '@deepseek-ai/dsh-api-remotes/client'
 import { OPENCODE_GO, PROTOCOM } from '../family.ts'
+import { FUSION_NS } from '../fusion.ts'
 import { ProtocomSection } from './ProtocomSection.tsx'
 import type { ProtocomInjected } from './ProtocomSection.tsx'
+import { FusionSection } from './FusionSection.tsx'
+import type { FusionInjected } from './FusionSection.tsx'
 import { createProtocomOperations } from './operations.ts'
+import { createFusionOperations } from './fusion-operations.ts'
+import type { FusionOperations } from './fusion-operations.ts'
 import { en, zh } from './locale.ts'
 import type { ProtocomKey } from './locale.ts'
 import { SECTION_CSS } from './styles.ts'
@@ -29,6 +34,15 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
 /** The locale namespace this section owns. */
 const NS = 'settings.protocom' as const
 
+/**
+ * Required services. Deliberately NOT including the Fusion-only two
+ * (`remote.session`, `settingsScope`): a missing entry here deactivates the
+ * whole client plugin, which would take the working provider panels down with
+ * a feature they do not depend on. Fusion declares its own dependencies in a
+ * scoped `ctx.inject` below instead, so an unusual deployment loses the Fusion
+ * section and nothing else — the same trade the Host half makes for
+ * `connection`.
+ */
 export const inject = [
   'slots',
   'locale',
@@ -59,6 +73,26 @@ export function apply(ctx: ClientContext): void {
     return () => { tag.remove() }
   })
 
+  // Built once, not per injection: binding a settings scope registers an
+  // unsubscribe on this plugin's fiber, so a fresh bind on every inject call
+  // would accumulate scopes for as long as the plugin lives. The face is lazy
+  // so constructing it here never touches a service the deployment may lack.
+  /** Whether this deployment exposes the two services the Fusion section reads. */
+  const fusionAvailable = (): boolean =>
+    ctx.get('remote') !== undefined
+    && (ctx.remote as { session?: unknown }).session !== undefined
+    && ctx.get('settingsScope') !== undefined
+
+  let fusionOperations: FusionOperations | undefined
+  const fusionInjected = (): FusionInjected => {
+    fusionOperations ??= createFusionOperations(ctx)
+    return {
+      operations: fusionOperations,
+      t,
+      copy: { title: t('titleFusion'), intro: t('introFusion') },
+    }
+  }
+
   ctx.slots.inject('settings.section', () => {
     const protocom = ctx.slots.register({
       name: 'settings.section',
@@ -74,6 +108,19 @@ export function apply(ctx: ClientContext): void {
       label: () => t('navGo'),
       inject: injectedFor(OPENCODE_GO, 'titleGo', 'introGo'),
     }, ProtocomSection)
-    return () => { protocom(); go() }
+    // Fusion additionally needs the Host catalog and the settings scope. They
+    // are probed rather than declared in the plugin's own `inject`, so their
+    // absence removes only this one section instead of deactivating the client
+    // plugin and taking the provider panels with it.
+    const fusion = fusionAvailable()
+      ? ctx.slots.register({
+        name: 'settings.section',
+        id: FUSION_NS,
+        order: 22,
+        label: () => t('navFusion'),
+        inject: fusionInjected,
+      }, FusionSection)
+      : () => {}
+    return () => { protocom(); go(); fusion() }
   })
 }

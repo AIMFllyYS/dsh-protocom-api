@@ -24,8 +24,9 @@ import type z from '@deepseek-ai/schemastery'
 import { ProtocomAdapter } from './adapter.ts'
 import { BalanceService, balanceFetchHandler } from './balance.ts'
 import { GoUsageService, goUsageFetchHandler } from './go-usage.ts'
-import { GoSection, OPENCODE_GO, PROTOCOM, ProtocomSection, resolveAdapterOptions } from './config.ts'
+import { FusionSection, GoSection, OPENCODE_GO, PROTOCOM, ProtocomSection, resolveAdapterOptions } from './config.ts'
 import type { Config, ResolvedGroup, ResolvedProtocomOptions, SectionConfig } from './config.ts'
+import { mountFusion } from './fusion-host.ts'
 import type { ProviderFamily } from './family.ts'
 import { discoverModels } from './discovery.ts'
 
@@ -47,6 +48,7 @@ export {
   GO_CREDENTIAL_REF,
   GO_DEFAULT_BASE_URL,
   GO_DEFAULT_BASE_URL_ORIGIN,
+  FusionSection,
   GoSection,
   GROUP_DEFAULTS,
   GROUP_KEYS,
@@ -69,6 +71,10 @@ export type {
   ResolvedProtocomOptions,
   SectionConfig,
 } from './config.ts'
+export { FUSION_NS, resolveFusion, resolveFusionSeat, sameFusionSeat } from './fusion.ts'
+export type { FusionConfig, FusionSeatConfig, ResolvedFusion, ResolvedFusionSeat } from './fusion.ts'
+export { fuseCallConfig, mountFusion, subagentFacts } from './fusion-host.ts'
+export type { FusionSource, SubagentSessionFacts } from './fusion-host.ts'
 export { decodeVariantId, encodeVariantId, stripVariantId, variantLengths } from './context-variants.ts'
 export { discoverModels, endpointOrigin, fetchUpstreamModels, parseModelsListing } from './discovery.ts'
 export type { DiscoveryHooks } from './discovery.ts'
@@ -344,9 +350,12 @@ function goTelemetry(hooks: TelemetryHooks): FamilyTelemetry {
 }
 
 export function apply(ctx: Context, config: Config): void {
-  const { opencode, ...protocom } = config
+  const { opencode, fusion, ...protocom } = config
   mountFamily(ctx, PROTOCOM, ProtocomSection, protocom, protocomTelemetry)
   // The Go section is optional in yml; absent it resolves to the family's own
   // defaults (all-disabled single group waiting on a key).
   mountFamily(ctx, OPENCODE_GO, GoSection, opencode ?? GoSection({}), goTelemetry)
+  // Fusion is a routing layer over the routes the two families above register,
+  // so it mounts last: with neither family active it simply pins nothing.
+  mountFusion(ctx, fusion ?? FusionSection({}))
 }

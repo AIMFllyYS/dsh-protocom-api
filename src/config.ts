@@ -15,6 +15,7 @@ import { DEFAULT_BASE_URL } from './groups.ts'
 import { DEFAULT_RECOMMENDED, GO_DEFAULT_RECOMMENDED, identityKey } from './model-registry.ts'
 import { GO_DEFAULT_BASE_URL, PROTOCOM } from './family.ts'
 import type { FamilyGroupDefaults, ProviderFamily } from './family.ts'
+import type { FusionConfig, FusionSeatConfig } from './fusion.ts'
 
 export { DEFAULT_BASE_URL, DEFAULT_BASE_URL_ORIGIN, GROUP_DEFAULTS, GROUP_KEYS, groupOf, providerOf } from './groups.ts'
 export type { GroupKey, GroupReasoning, Protocol } from './groups.ts'
@@ -136,6 +137,8 @@ export interface SectionConfig {
 export interface Config extends SectionConfig {
   /** OpenCode Go family profile; same section shape under its own namespace. */
   opencode?: SectionConfig
+  /** Fusion dual-model routing profile; the same shape as its own settings section. */
+  fusion?: FusionConfig
 }
 
 const group: z<GroupConfig> = z.object({
@@ -172,6 +175,32 @@ export const ProtocomSection: z<SectionConfig> = sectionSchema(DEFAULT_BASE_URL,
 /** Settings-section schema for the `opencode-go` namespace. */
 export const GoSection: z<SectionConfig> = sectionSchema(GO_DEFAULT_BASE_URL, GO_DEFAULT_RECOMMENDED)
 
+/**
+ * One Fusion seat. No field carries a schema default: Schemastery normalizes
+ * an absent seat to an empty object, and `resolveFusionSeat` reads that empty
+ * object as "this seat is unset" — a defaulted `provider: ''` would make the
+ * two indistinguishable.
+ */
+const fusionSeat: z<FusionSeatConfig> = z.object({
+  provider: z.string(),
+  model: z.string(),
+  reasoningEffort: z.string(),
+})
+
+/**
+ * Settings-section schema for the `model-fusion` namespace, and the shape of
+ * the plugin's own `fusion` config slice. Only `enabled` defaults here; the
+ * seat-required-when-enabled rule is a cross-field constraint Schemastery
+ * cannot express, so `resolveFusion` is the authority and runs on every write.
+ */
+export const FusionSection: z<FusionConfig> = z.object({
+  enabled: z.boolean().default(false),
+  leader: fusionSeat,
+  coder: fusionSeat,
+  includeForks: z.boolean().default(true),
+  applyLeader: z.boolean().default(true),
+})
+
 /** Runtime schema for the plugin's yml configuration. */
 export const Config: z<Config> = z.object({
   baseURL: z.string().default(DEFAULT_BASE_URL),
@@ -183,6 +212,7 @@ export const Config: z<Config> = z.object({
   modelContexts: z.dict(z.array(z.number().step(1).min(1))).default({}),
   visionModels: z.dict(z.boolean()).default({}),
   opencode: GoSection,
+  fusion: FusionSection,
 })
 
 /** Validated per-group facts with every adapter-owned default resolved. */

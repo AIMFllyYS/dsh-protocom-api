@@ -13,6 +13,15 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
         'settings.protocom': ProtocomKey;
     }
 }
+/**
+ * Required services. Deliberately NOT including the Fusion-only two
+ * (`remote.session`, `settingsScope`): a missing entry here deactivates the
+ * whole client plugin, which would take the working provider panels down with
+ * a feature they do not depend on. Fusion declares its own dependencies in a
+ * scoped `ctx.inject` below instead, so an unusual deployment loses the Fusion
+ * section and nothing else — the same trade the Host half makes for
+ * `connection`.
+ */
 export declare const inject: string[];
 /** Wire both provider sections into the settings page. */
 export declare function apply(ctx: ClientContext): void;

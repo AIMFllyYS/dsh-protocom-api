@@ -13,16 +13,24 @@ function fakeContext(hasConnection = true): {
   fetchRoutes: RecordedRoute[]
   webRoutes: unknown[]
   adapterRoutes: string[][]
+  listeners: { name: string; options: unknown }[]
+  sections: string[]
 } {
   const fetchRoutes: RecordedRoute[] = []
   const webRoutes: unknown[] = []
   const adapterRoutes: string[][] = []
+  const listeners: { name: string; options: unknown }[] = []
+  const sections: string[] = []
   const ctx: any = {
     logger: { error: () => {}, warn: () => {}, info: () => {}, debug: () => {} },
     get: () => undefined,
     effect: (fn: () => unknown) => {
       const disposer = fn()
       return () => { if (typeof disposer === 'function') (disposer as () => void)() }
+    },
+    on: (name: string, _listener: unknown, options: unknown) => {
+      listeners.push({ name, options })
+      return () => {}
     },
     inject: (_names: string[], callback: (context: unknown) => void) => {
       callback(ctx)
@@ -38,7 +46,9 @@ function fakeContext(hasConnection = true): {
         return handle
       },
     },
-    settings: { installSection: () => {} },
+    settings: {
+      installSection: (_owner: unknown, ns: string) => { sections.push(ns) },
+    },
     webServer: {
       register: (route: unknown) => {
         webRoutes.push(route)
@@ -56,7 +66,7 @@ function fakeContext(hasConnection = true): {
       },
     }
   }
-  return { ctx, fetchRoutes, webRoutes, adapterRoutes }
+  return { ctx, fetchRoutes, webRoutes, adapterRoutes, listeners, sections }
 }
 
 const config = { groups: { codex: { enabled: true, apiKey: 'PROTOCOM_CODEX_API_KEY' } } }
@@ -82,5 +92,15 @@ describe('plugin assembly (P0-1)', () => {
     expect(() => apply(ctx, config)).not.toThrow()
     expect(fetchRoutes).toEqual([])
     expect(webRoutes).toEqual([])
+  })
+
+  it('mounts the Fusion section and its global request rule', () => {
+    const { ctx, sections, listeners } = fakeContext()
+    apply(ctx, config)
+    // Both families plus Fusion install their own namespace.
+    expect(sections).toEqual(['protocom-api', 'opencode-go', 'model-fusion'])
+    // The rule only works from a global, outermost listener: a subagent's agent
+    // scope is below whatever scope this plugin mounts in.
+    expect(listeners).toEqual([{ name: 'agent/request', options: { global: true, prepend: true } }])
   })
 })
