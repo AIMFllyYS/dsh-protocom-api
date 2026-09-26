@@ -147,6 +147,50 @@ Two docs rows have no listing row (`claude-haiku-4-5`, `typesafe/jev`).
 degrade gracefully: a scrape failure yields models with no capability claims
 (and says so), never an empty menu.
 
+## ACCOUNT VERIFICATION with a real key (2026-09-23, plan individual-goat)
+
+All four `/alpha/*` endpoints answered 200 (shapes recorded in
+`src/commandcode.ts`). The subscription's `planId` is the load-bearing fact:
+
+- `/alpha/billing/subscriptions` -> `data.planId = "individual-goat"` -> tier `goat`
+- `/alpha/billing/credits` -> `credits.monthlyCredits` = remaining dollars,
+  `windowLimits.fiveHour {used,cap,resetAt}`, `windowLimits.weekly {…}`
+  (observed: $19.84 remaining, 5h $2.61 of $14, weekly $32.09 of $35)
+- `/alpha/usage/summary` -> `totalCount`, `totalCost`, `successRate` (a
+  PERCENTAGE: 100), `totalTokensIn`, `totalTokensOut`
+
+### THE LISTING IS NOT PLAN-FILTERED
+
+The decisive discovery, and the reason the tier gate exists. One model per tier:
+
+| Model | Tier | Result |
+| --- | --- | --- |
+| `deepseek/deepseek-v4-flash` | Go | **200** |
+| `gpt-5.6-sol` | GOAT | **200** |
+| `gpt-6-sol` | Pro | **403 MODEL_NOT_IN_PLAN** |
+| `gpt-6-astra` | Max | **403 MODEL_NOT_IN_PLAN** |
+
+So the 82-row listing advertises models this account cannot call. With the gate:
+21 of 82 rows are out of plan, leaving a **60-row menu**, and a sampled menu
+model answered HTTP 200.
+
+### The Anthropic wire is NOT reachable on this plan
+
+`claude-sonnet-5` on `/chat/completions` answers **400**: *"Model
+\"claude-sonnet-5\" must be called via /provider/v1/messages (Anthropic Messages
+shape)."* — confirming the `supported_endpoints` routing rule applies to the
+letter.
+
+But every one of the 9 `/messages`-only models is gated **Pro (3) or Max (6)**,
+and **no model supports both wires** (0 of 82). On a goat-tier account the
+Anthropic wire therefore cannot be exercised at all.
+
+**Conclusion: do NOT implement the messages wire now.** It cannot be verified by
+request on this plan, and this repo's rule is that unverified wire behavior is
+not shipped. The 9 Claude models stay hidden, which the endpoint filter already
+does correctly; implementing the wire needs a Pro-or-above key to verify against.
+This is recorded as the one deliberately deferred item.
+
 ### Decision this drives
 
 Ship the family now with the two existing wires plus **per-model routing driven
