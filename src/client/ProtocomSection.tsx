@@ -381,14 +381,17 @@ function ModelRow({ model, group, family, hidden, recommended, contexts, vision,
   // The floor is applied only where the model is genuinely unsized: a group
   // ladder is the authority for its own uncurated models, so filtering by a
   // guessed window would hide steps the model can honour.
-  const advertised = variantLengths(model.contextOptions, group.contextLengths)
-  const stored = (contexts[key] ?? []).filter(length => length <= model.contextWindow)
-  const options = stored.length > 0
-    ? [...stored].sort((left, right) => left - right)
-    : advertised ?? [model.contextWindow]
-  // Every step in force is exactly what the adapter advertises: the stored set
-  // when there is one, the whole ladder otherwise.
-  const chosen = options
+  // The steps this row OFFERS. Constant per model: it does not shrink when a
+  // step is turned off, because a turned-off step must stay visible and
+  // re-selectable. Deriving the chips from the stored set instead would make
+  // the control vanish under the pointer that just used it.
+  const options = variantLengths(model.contextOptions, group.contextLengths)
+    ?? [model.contextWindow]
+  // Which of them are in force. An absent store entry means the whole ladder,
+  // which is exactly what the adapter advertises with no override; a stored
+  // entry is the choice, narrowed to steps this model can still honour.
+  const stored = (contexts[key] ?? []).filter(length => options.includes(length))
+  const chosen = stored.length > 0 ? stored : options
   const images = vision[key] ?? model.vision
   const meta = [
     ...model.reasoning === undefined ? [] : [t('tagReasoning')],
@@ -497,7 +500,7 @@ function ModelRow({ model, group, family, hidden, recommended, contexts, vision,
 }
 
 /** One group's card: credentials, its own menu models, and its balance. */
-function GroupCard({ groupKey, group, family, credential, writable, revision, probe, hidden, recommended, contexts, vision, operations, t, onChanged, onProbe }: {
+function GroupCard({ groupKey, group, family, credential, writable, revision, probe, hidden, recommended, contexts, vision, operations, t, onChanged, onCommitted, onProbe }: {
   groupKey: string
   group: Required<GroupSectionValue>
   family: ProviderFamily
@@ -511,7 +514,13 @@ function GroupCard({ groupKey, group, family, credential, writable, revision, pr
   vision: Readonly<Record<string, boolean>>
   operations: ProtocomOperations
   t: Translator
+  /** Full reload, for the states a committed view cannot repair. */
   onChanged: () => Promise<void>
+  /**
+   * Apply one committed view without re-reading. Same shape as the initial
+   * load, so the section re-renders from the value the Host just confirmed.
+   */
+  onCommitted: (view: SettingsNamespaceView) => void
   onProbe: () => void
 }): ReactNode {
   const ref = family.keyRef(groupKey)
@@ -559,11 +568,19 @@ function GroupCard({ groupKey, group, family, credential, writable, revision, pr
     setBusy(true)
     void operations.writeSettings(ops, revision)
       .then(async (outcome) => {
-        if (outcome.kind !== 'written') {
-          setCardError(outcome.message)
-          // A conflict means the card's snapshot is stale: reload so the next
-          // toggle rides the current revision instead of wedging on the old one.
+        if (outcome.kind === 'written') {
+          // Apply the committed view in place. It is the SAME shape the initial
+          // read returns, and re-fetching it would cost a round trip plus a
+          // page-wide state replacement -- which is what made the whole panel
+          // flash on every single toggle, and what disabled every control while
+          // it did.
+          onCommitted(outcome.view)
+          return
         }
+        setCardError(outcome.message)
+        // A refusal or conflict leaves this card's snapshot stale, so the full
+        // reload is still the right recovery: the next toggle must ride the
+        // current revision instead of wedging on the old one.
         await onChanged()
       })
       .finally(() => { setBusy(false) })
@@ -947,9 +964,27 @@ function Loaded({ operations, t, family, copy }: {
     setState({ phase: 'ready', view, credentials })
   }
 
+  /**
+   * Adopt a view the Host has just committed.
+   *
+   * Only the settings value is replaced, and it is replaced from the reply the
+   * write already carried. The previous behaviour re-read BOTH the settings and
+   * every group's credential state on each write, then swapped the whole page
+   * state -- one round trip and a full-subtree re-render per toggle, which is
+   * what a person sees as the page flashing. Credential state cannot change
+   * from a settings write, so re-reading it was pure cost.
+   * @param view - the committed section view, already section-shaped.
+   */
+  const applyCommitted = (view: SettingsNamespaceView): void => {
+    console.warn('[commit] value=' + JSON.stringify((view as { value?: unknown }).value))
+    setState(previous => previous.phase === 'ready'
+      ? { ...previous, view, credentials: previous.credentials }
+      : previous)
+  }
+
   useEffect(() => {
     if (state.phase === 'loading') void load()
-    // The initial load is the only automatic one; writes reload explicitly.
+    // The initial load is the only automatic one; writes apply their own reply.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
@@ -1090,6 +1125,7 @@ function Loaded({ operations, t, family, copy }: {
             operations={operations}
             t={t}
             onChanged={load}
+            onCommitted={applyCommitted}
             onProbe={() => { runProbe(key) }}
           />
         ))}

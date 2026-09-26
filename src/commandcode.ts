@@ -118,6 +118,15 @@ export const COMMANDCODE: ProviderFamily = {
   // offered a thinking control. The vendor's CLI catalog publishes the exact
   // per-model tiers and joins this listing on all 82 ids, so it is the source.
   reasoningFor: commandCodeReasoning,
+  // Bare `reasoning_effort`, with no `thinking` block beside it.
+  //
+  // The default spelling sends `thinking: {type}` too, which this gateway
+  // accepts on its Anthropic wire only: the vendor's own BYOK reference
+  // documents the OpenAI surface as taking `reasoning_effort` alone, and its
+  // CLI emits that single field. Sending the block anyway would be a
+  // provider-side rejection that reads like a plugin defect, so the mode is
+  // declared rather than inherited from the default.
+  chatThinking: 'effort-only',
   // Account endpoints, all verified live on 2026-09-23 with a real key:
   //   GET /alpha/whoami                -> 200 {success,user,org}
   //   GET /alpha/billing/credits       -> 200 {credits,windowLimits{limited,
