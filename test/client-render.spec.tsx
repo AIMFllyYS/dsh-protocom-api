@@ -422,6 +422,18 @@ describe('per-group model editing (issue 1)', () => {
     ])
   })
 
+  /**
+   * Open one row's settings disclosure.
+   *
+   * The per-row controls sit behind it, so a row must be opened before any of
+   * them is reachable; the collapsed summary is what a row shows by default.
+   * @param row - the model row to open.
+   */
+  function openRow(row: HTMLElement): void {
+    const more = row.querySelector('.protocom-model-more') as HTMLElement
+    if (more.getAttribute('aria-expanded') !== 'true') fireEvent.click(more)
+  }
+
   it('declares a model text-only from its own row', async () => {
     const writeSettings = vi.fn(async () => ({ kind: 'written', view: TWO_GROUPS }) as never)
     vi.stubGlobal('fetch', vi.fn(async () => jsonResponse({})))
@@ -429,8 +441,13 @@ describe('per-group model editing (issue 1)', () => {
     const stepfun = await groupCard(en.groupStepfun)
     await waitFor(() => expect(within(modelList(stepfun)).getByText('Step 5 Preview')).toBeTruthy())
     const row = within(modelList(stepfun)).getByText('Step 5 Preview').closest('.protocom-model-row') as HTMLElement
+    // The collapsed row already announces the capability as a summary tag.
     expect(within(row).getByText(en.tagVision)).toBeTruthy()
-    fireEvent.click(within(row).getByTitle(en.visionTitle))
+    openRow(row)
+    // Scoped to the opened detail: the summary tag carries the same word, so a
+    // row-wide query would match twice.
+    const detail = row.querySelector('.protocom-model-detail') as HTMLElement
+    fireEvent.click(within(detail).getByText(en.tagVision))
     await waitFor(() => expect(writeSettings).toHaveBeenCalledOnce())
     expect(writeSettings.mock.calls[0]?.[0]).toEqual([
       { op: 'set', path: ['visionModels', 'step-5-preview'], value: false },
@@ -443,7 +460,12 @@ describe('per-group model editing (issue 1)', () => {
     const stepfun = await groupCard(en.groupStepfun)
     await waitFor(() => expect(within(modelList(stepfun)).getByText('step-3.7-flash')).toBeTruthy())
     const row = within(modelList(stepfun)).getByText('step-3.7-flash').closest('.protocom-model-row') as HTMLElement
-    expect(within(row).getAllByRole('button').map(button => button.textContent))
+    // The collapsed row summarizes the whole ladder and offers exactly one
+    // control: the disclosure. Everything else is one click away.
+    expect(within(row).getByText('200K · 256K · 400K · 1M')).toBeTruthy()
+    openRow(row)
+    const detail = row.querySelector('.protocom-model-detail') as HTMLElement
+    expect(within(detail).getAllByRole('button').map(button => button.textContent))
       .toEqual(['200K', '256K', '400K', '1M', en.tagVision, '★'])
   })
 

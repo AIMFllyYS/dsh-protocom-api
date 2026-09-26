@@ -360,6 +360,9 @@ function ModelRow({ model, group, family, hidden, recommended, contexts, vision,
   t: Translator
   onWrite: (ops: Parameters<ProtocomOperations['writeSettings']>[0]) => void
 }): ReactNode {
+  // Each row owns its own disclosure state, so opening one does not close
+  // another: comparing two models is the reason to open them at all.
+  const [openRow, setOpenRow] = useState(false)
   const key = identityKey(model.upstreamId, family.registry)
   const hiddenSet = new Set(hidden)
   const shown = model.ids.every(id => !hiddenSet.has(id))
@@ -444,57 +447,99 @@ function ModelRow({ model, group, family, hidden, recommended, contexts, vision,
         <span className="protocom-model-dot" />
         <span className="protocom-model-name">{model.displayName}</span>
       </label>
-      {meta.length === 0 ? null : <span className="protocom-model-meta">{meta}</span>}
       <span className="protocom-model-spacer" />
-      {/* The ladder stays visible while a model is listed so its context set
-          reads as one control, not a hidden setting. */}
-      {shown
+      {/*
+        A compact summary of what this row is set to, always visible. It is the
+        collapsed reading of the controls below, so a row communicates its state
+        without being opened -- the point of progressive disclosure is that the
+        summary carries the answer, not that the answer is hidden.
+      */}
+      <span className="protocom-model-summary">
+        <span className="protocom-summary-ctx">
+          {chosen.map(length => contextLabel(length)).join(' · ')}
+        </span>
+        {images ? <span className="protocom-summary-tag">{t('tagVision')}</span> : null}
+        {starred ? <span className="protocom-summary-tag is-lead">{t('tagLead')}</span> : null}
+      </span>
+      {/*
+        The editing controls live behind a per-row expansion. Four clusters on
+        every row of a sixty-row list is roughly five hundred controls in the
+        default view; the published guidance is to persist one or two per row and
+        group the rest. Rows open independently and several may be open at once,
+        because the task is comparing models rather than editing one.
+      */}
+      <button
+        type="button"
+        className="protocom-model-more"
+        aria-expanded={openRow}
+        aria-label={t('rowSettings')}
+        title={t('rowSettings')}
+        onClick={() => { setOpenRow(!openRow) }}
+      >
+        <span className="protocom-caret" aria-hidden="true">{openRow ? '▾' : '▸'}</span>
+      </button>
+      {openRow
         ? (
-          <span className="protocom-ctx" role="group" aria-label={t('contextTitle')}>
-            {options.map((length) => {
-              const on = chosen.includes(length)
-              const last = on && chosen.length === 1
-              return (
-                <button
-                  key={length}
-                  type="button"
-                  className={on ? 'is-on' : undefined}
-                  aria-pressed={on}
-                  disabled={!writable || busy || last}
-                  title={last ? t('contextLastTitle') : t('contextTitle')}
-                  onClick={() => {
-                    writeContexts(on
-                      ? chosen.filter(value => value !== length)
-                      : [...chosen, length].sort((left, right) => left - right))
-                  }}
-                >
-                  {contextLabel(length)}
-                </button>
-              )
-            })}
-          </span>
+          <div className="protocom-model-detail">
+            <span className="protocom-detail-field">
+              <span className="protocom-detail-label">{t('contextTitle')}</span>
+              <span className="protocom-ctx" role="group" aria-label={t('contextTitle')}>
+                {options.map((length) => {
+                  const on = chosen.includes(length)
+                  const last = on && chosen.length === 1
+                  return (
+                    <button
+                      key={length}
+                      type="button"
+                      className={on ? 'is-on' : undefined}
+                      aria-pressed={on}
+                      disabled={!writable || busy || last}
+                      title={last ? t('contextLastTitle') : t('contextTitle')}
+                      onClick={() => {
+                        writeContexts(on
+                          ? chosen.filter(value => value !== length)
+                          : [...chosen, length].sort((left, right) => left - right))
+                      }}
+                    >
+                      {contextLabel(length)}
+                    </button>
+                  )
+                })}
+              </span>
+            </span>
+            <span className="protocom-detail-field">
+              <span className="protocom-detail-label">{t('visionTitle')}</span>
+              <button
+                type="button"
+                className={images ? 'protocom-vision is-on' : 'protocom-vision'}
+                disabled={!writable || busy}
+                aria-pressed={images}
+                onClick={toggleVision}
+              >
+                {images ? t('tagVision') : t('visionOff')}
+              </button>
+            </span>
+            <span className="protocom-detail-field">
+              <span className="protocom-detail-label">{t('leadTitle')}</span>
+              <button
+                type="button"
+                className={starred ? 'protocom-model-star is-on' : 'protocom-model-star'}
+                disabled={!writable || busy}
+                aria-pressed={starred}
+                onClick={toggleStar}
+              >
+                ★
+              </button>
+            </span>
+            {meta.length === 0 ? null : (
+              <span className="protocom-detail-field">
+                <span className="protocom-detail-label">{t('capabilityTitle')}</span>
+                <span className="protocom-model-meta">{meta}</span>
+              </span>
+            )}
+          </div>
         )
         : null}
-      <button
-        type="button"
-        className={images ? 'protocom-vision is-on' : 'protocom-vision'}
-        disabled={!writable || busy}
-        aria-pressed={images}
-        title={t('visionTitle')}
-        onClick={toggleVision}
-      >
-        {images ? t('tagVision') : t('visionOff')}
-      </button>
-      <button
-        type="button"
-        className={starred ? 'protocom-model-star is-on' : 'protocom-model-star'}
-        disabled={!writable || busy}
-        aria-pressed={starred}
-        title={starred ? t('unstarTitle') : t('starTitle')}
-        onClick={toggleStar}
-      >
-        ★
-      </button>
     </div>
   )
 }

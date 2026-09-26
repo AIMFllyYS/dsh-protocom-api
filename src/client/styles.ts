@@ -102,7 +102,7 @@ export const SECTION_CSS = `
 .protocom-models-title { font-size: 12.5px; font-weight: 600; }
 .protocom-models-count { font-size: 11.5px; opacity: 0.6; font-variant-numeric: tabular-nums; }
 .protocom-vision {
-  font-size: 11px; padding: 2px 9px; border-radius: 999px; cursor: pointer;
+  font-size: 11px; padding: 3px 10px; min-height: 24px; border-radius: 999px; cursor: pointer;
   border: 1px solid var(--dsh-border, rgba(128, 128, 128, 0.35));
   background: transparent; color: inherit; opacity: 0.55;
   transition: opacity 0.15s ease, color 0.15s ease, border-color 0.15s ease;
@@ -133,6 +133,40 @@ export const SECTION_CSS = `
 .protocom-model-row.is-off .protocom-model-name { text-decoration: line-through; }
 .protocom-model-meta { font-size: 11px; opacity: 0.6; letter-spacing: 0.02em; }
 .protocom-model-spacer { flex: 1 1 12px; }
+
+/* The collapsed reading of a row: what it is set to, without opening it. */
+.protocom-model-summary {
+  display: inline-flex; align-items: center; gap: 8px;
+  font-size: 11px; opacity: 0.62; font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.protocom-summary-ctx { letter-spacing: 0.02em; }
+.protocom-summary-tag {
+  border: 1px solid var(--dsh-border, rgba(128, 128, 128, 0.3));
+  border-radius: 999px; padding: 1px 7px; font-size: 10.5px;
+}
+.protocom-summary-tag.is-lead { color: var(--dsh-accent, #3a7bfd); border-color: var(--dsh-accent, #3a7bfd); }
+
+/* The per-row disclosure. Sized to the 24px WCAG 2.2 target minimum. */
+.protocom-model-more {
+  border: 0; background: transparent; color: inherit; cursor: pointer;
+  min-width: 24px; min-height: 24px; padding: 2px 6px; border-radius: 6px;
+  display: inline-flex; align-items: center; justify-content: center;
+  opacity: 0.45; transition: opacity 0.15s ease, background 0.15s ease;
+}
+.protocom-model-more:hover { opacity: 1; background: var(--dsh-hover, rgba(128, 128, 128, 0.14)); }
+.protocom-model-more:focus-visible { outline: 2px solid var(--dsh-accent, #3a7bfd); outline-offset: 1px; }
+
+/* The opened row: labelled fields on their own line, wrapping rather than
+   compressing, so no control shrinks below its target size. */
+.protocom-model-detail {
+  flex: 1 0 100%; display: flex; flex-wrap: wrap; align-items: center;
+  gap: 10px 18px; padding: 8px 2px 4px 26px;
+  border-top: 1px dashed var(--dsh-border, rgba(128, 128, 128, 0.22));
+  margin-top: 5px;
+}
+.protocom-detail-field { display: inline-flex; align-items: center; gap: 8px; }
+.protocom-detail-label { font-size: 11px; opacity: 0.55; }
 .protocom-model-star {
   border: 0; background: transparent; color: inherit; cursor: pointer;
   font-size: 12px; line-height: 1; padding: 3px 5px; border-radius: 50%;
@@ -146,7 +180,10 @@ export const SECTION_CSS = `
 .protocom-ctx button {
   border: 0; border-right: 1px solid var(--dsh-border, rgba(128, 128, 128, 0.22));
   background: transparent; color: inherit; cursor: pointer;
-  font-size: 11px; padding: 3px 10px; font-variant-numeric: tabular-nums;
+  font-size: 11px; padding: 4px 11px; font-variant-numeric: tabular-nums;
+  /* WCAG 2.2 SC 2.5.8: a pointer target is at least 24x24 CSS px, or spaced so
+     that 24px circles centred on adjacent targets do not intersect. */
+  min-height: 24px;
   transition: background 0.15s ease, color 0.15s ease;
 }
 .protocom-ctx button:last-child { border-right: 0; }

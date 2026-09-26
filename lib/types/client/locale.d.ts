@@ -81,6 +81,10 @@ export declare const en: {
     filterModels: string;
     visionTitle: string;
     visionOff: string;
+    rowSettings: string;
+    leadTitle: string;
+    capabilityTitle: string;
+    tagLead: string;
     collapse: string;
     expand: string;
     selectAll: string;

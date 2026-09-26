@@ -53,14 +53,23 @@ function renderSection(operations: ProtocomOperations) {
   />)
 }
 
-/** Expand the StepFun card and run its discovery. */
+/**
+ * Run the StepFun card's discovery and open its one model row.
+ *
+ * The per-row controls sit behind a disclosure, so a row must be opened before
+ * any of them can be clicked. Opening is idempotent here.
+ * @returns the opened row.
+ */
 async function stepfunRow(): Promise<HTMLElement> {
   await screen.findAllByText(en.groupStepfun)
   const cards = [...document.querySelectorAll('.protocom-card')]
   const card = cards.find(c => c.querySelector('.protocom-card-name')?.textContent === en.groupStepfun) as HTMLElement
   fireEvent.click([...card.querySelectorAll('button')].find(b => b.textContent === en.probeRefresh) as HTMLElement)
   await waitFor(() => expect(card.querySelector('.protocom-model-row')).not.toBeNull(), { timeout: 3000 })
-  return card.querySelector('.protocom-model-row') as HTMLElement
+  const row = card.querySelector('.protocom-model-row') as HTMLElement
+  const more = row.querySelector('.protocom-model-more') as HTMLElement
+  if (more.getAttribute('aria-expanded') !== 'true') fireEvent.click(more)
+  return row
 }
 
 afterEach(() => {
@@ -104,13 +113,19 @@ describe('one toggle costs one write (R3)', () => {
     // Scoped to the StepFun card: `document.querySelector` would return the
     // FIRST row in the DOM, which belongs to the aggregate card and legitimately
     // offers a single step.
-    const chips = (): HTMLElement[] => {
+    const rowOf = (): HTMLElement => {
       const card = [...document.querySelectorAll('.protocom-card')].find(
         candidate => candidate.querySelector('.protocom-card-name')?.textContent === en.groupStepfun,
       ) as HTMLElement
       const rows = [...card.querySelectorAll('.protocom-model-row')]
       // The uncurated id whose store entry the write targets.
-      const row = rows.find(candidate => candidate.textContent?.includes('step-3.7-flash')) as HTMLElement
+      return rows.find(candidate => candidate.textContent?.includes('step-3.7-flash')) as HTMLElement
+    }
+    /** Open the row's disclosure, then read its chips. */
+    const chips = (): HTMLElement[] => {
+      const row = rowOf()
+      const more = row.querySelector('.protocom-model-more') as HTMLElement
+      if (more.getAttribute('aria-expanded') !== 'true') fireEvent.click(more)
       return [...row.querySelectorAll('.protocom-ctx button')] as HTMLElement[]
     }
     expect(chips().every(chip => chip.getAttribute('aria-pressed') === 'true')).toBe(true)

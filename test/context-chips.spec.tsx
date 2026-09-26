@@ -84,8 +84,15 @@ async function stepfunRow(): Promise<HTMLElement> {
   return card.querySelector('.protocom-model-row') as HTMLElement
 }
 
-/** The chips of one row, in ladder order. */
+/**
+ * The chips of one row, in ladder order.
+ *
+ * Opens the row's disclosure first: the per-row controls moved behind it, so a
+ * row communicates its state through a summary and edits on request.
+ */
 function chips(row: HTMLElement): HTMLButtonElement[] {
+  const more = row.querySelector('.protocom-model-more') as HTMLElement
+  if (more.getAttribute('aria-expanded') !== 'true') fireEvent.click(more)
   return [...row.querySelectorAll('.protocom-ctx button')] as HTMLButtonElement[]
 }
 
