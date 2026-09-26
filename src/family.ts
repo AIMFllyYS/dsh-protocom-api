@@ -99,6 +99,20 @@ export interface ProviderFamily {
    * capability claims", never to an empty menu.
    */
   capabilityCatalogUrl?: string
+  /**
+   * Endpoint answering this account's subscription, whose planId decides which
+   * models the account may actually call.
+   *
+   * Verified necessary: an account on individual-goat got HTTP 200 for Go- and
+   * GOAT-tier models and HTTP 403 MODEL_NOT_IN_PLAN for Pro- and Max-tier ones,
+   * so the endpoints listing -- which is NOT plan-filtered -- advertises models
+   * the account cannot use.
+   */
+  planIdPath?: string
+  /** Endpoint answering the account's credit balances and rolling windows. */
+  creditsPath?: string
+  /** Endpoint answering the account's usage totals for the period. */
+  usagePath?: string
 }
 
 /** The Protocom official API family: the four original group routes. */

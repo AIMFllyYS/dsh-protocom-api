@@ -110,9 +110,17 @@ export const COMMANDCODE: ProviderFamily = {
   // The endpoints listing discloses no capability at all; this page embeds the
   // reasoning/vision/pricing catalog the menu renders.
   capabilityCatalogUrl: COMMANDCODE_CATALOG_URL,
-  // No account surface yet. The alpha endpoints exist (/alpha/whoami answers
-  // 401 to a bogus bearer, so the route is real), but their RESPONSE shape was
-  // never observed here — no key for this service exists in this environment —
-  // and this plugin's rule is that every field it renders was confirmed by a
-  // request. Filling in credits is a follow-up that needs one live key.
+  // Account endpoints, all verified live on 2026-09-23 with a real key:
+  //   GET /alpha/whoami                -> 200 {success,user,org}
+  //   GET /alpha/billing/credits       -> 200 {credits,windowLimits{limited,
+  //                                         fiveHour{used,cap,resetAt},weekly{...}}}
+  //   GET /alpha/billing/subscriptions -> 200 {data{planId,status,currentPeriodEnd}}
+  //   GET /alpha/usage/summary         -> 200 {totalCount,totalCost,successRate,
+  //                                         totalTokensIn,totalTokensOut,...}
+  // The subscription's planId ("individual-goat") is what gates the model menu:
+  // the endpoints listing is NOT plan-filtered and advertises Pro/Max models an
+  // account on a lower tier cannot call.
+  planIdPath: '/alpha/billing/subscriptions',
+  creditsPath: '/alpha/billing/credits',
+  usagePath: '/alpha/usage/summary',
 } as ProviderFamily

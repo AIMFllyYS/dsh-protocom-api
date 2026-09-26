@@ -19,6 +19,63 @@
  * @module dsh-protocom-api/commandcode-catalog
  */
 
+/**
+ * Subscription tiers, weakest first.
+ *
+ * The page states a model's gate as a NAME (`Go`, `GOAT`, `Pro`, `Max`). The
+ * tiers are CUMULATIVE — which was confirmed by request: an account on
+ * `individual-goat` got HTTP 200 for a Go-tier model and a GOAT-tier model, and
+ * HTTP 403 `MODEL_NOT_IN_PLAN` for Pro- and Max-tier models. So a model is
+ * usable when its gate is at or below the account's own tier.
+ *
+ * The names are matched case-insensitively because the page spells the cheapest
+ * tier `Go` while the plan id uses `goat`; both appear in live data.
+ */
+export const COMMANDCODE_TIERS: readonly string[] = ['go', 'goat', 'pro', 'max']
+
+/**
+ * Rank one plan name, or undefined when it is not a tier this plugin knows.
+ * @param name - the plan name from the page or a plan id.
+ * @returns the zero-based rank, weakest first.
+ */
+export function tierRank(name: string | undefined): number | undefined {
+  if (name === undefined) return undefined
+  const at = COMMANDCODE_TIERS.indexOf(name.trim().toLowerCase())
+  return at === -1 ? undefined : at
+}
+
+/**
+ * Extract the tier from a subscription plan id such as `individual-goat`.
+ * @param planId - the plan id, if any.
+ * @returns the tier name in canonical lower case, or undefined.
+ */
+export function tierFromPlanId(planId: string | undefined): string | undefined {
+  if (planId === undefined) return undefined
+  for (const tier of COMMANDCODE_TIERS) {
+    // Matching on a word boundary avoids reading a hypothetical "goatx" as goat.
+    if (new RegExp(`(^|[^a-z])${tier}([^a-z]|$)`).test(planId.toLowerCase())) return tier
+  }
+  return undefined
+}
+
+/**
+ * Whether a model's own gate is included in the account's tier.
+ *
+ * An unknown gate on EITHER side means the question cannot be answered, and the
+ * model is kept: hiding a model the account can use is worse than showing one
+ * that fails with a clear provider message, and an unrecognized tier name is a
+ * catalog change rather than evidence of exclusion.
+ * @param modelGate - the model's `minPlanName`.
+ * @param accountTier - the account's own tier, lower case.
+ * @returns whether to offer the model.
+ */
+export function withinTier(modelGate: string | undefined, accountTier: string | undefined): boolean {
+  const gate = tierRank(modelGate)
+  const have = tierRank(accountTier)
+  if (gate === undefined || have === undefined) return true
+  return gate <= have
+}
+
 /** One model's capabilities, as the pricing page states them. */
 export interface CatalogCapabilities {
   /** Whether the model may be sent a thinking parameter at all. */

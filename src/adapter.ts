@@ -41,6 +41,8 @@ import {
   CATALOG_TTL_MS,
   MAX_CATALOG_BYTES,
   scrapeCatalog,
+  tierFromPlanId,
+  withinTier,
 } from './commandcode-catalog.ts'
 import type { CatalogScrape } from './commandcode-catalog.ts'
 import {
@@ -61,6 +63,9 @@ import { streamResponses } from './protocol/responses.ts'
 
 /** How long one fetched model listing is reused per group. */
 export const MODEL_LIST_TTL_MS = 60_000
+
+/** How long one resolved account tier is reused. It changes per billing period. */
+export const PLAN_TTL_MS = 15 * 60 * 1_000
 
 /**
  * The request-image projection budget. Mirrors the harness's own default
@@ -212,6 +217,12 @@ export class ProtocomAdapter extends LlmAdapter {
    * discovery and settings read.
    */
   private readonly capabilityCache = new Map<string, { at: number; value: CatalogScrape }>()
+  /**
+   * The account's subscription tier per family. Cached for the same reason the
+   * catalog is: it changes at most once a billing period while the menu is
+   * rebuilt on every discovery and settings read.
+   */
+  private readonly tierCache = new Map<string, { at: number; value: string | undefined }>()
 
   /**
    * Stable per-adapter session id for calls that arrive without
@@ -286,9 +297,14 @@ export class ProtocomAdapter extends LlmAdapter {
         if (family.capabilityCatalogUrl === undefined) return rows
         const { byId } = await this.capabilities(family)
         if (byId.size === 0) return rows
+        // The account's own tier gates the menu: the endpoints listing is not
+        // plan-filtered, so a Pro- or Max-tier model would be offered here and
+        // then rejected with MODEL_NOT_IN_PLAN on every call.
+        const tier = await this.accountTier(family, group)
         return rows.map((row) => {
           const found = catalogFor(byId, row.id)
           if (found === undefined) return row
+          if (!withinTier(found.minPlan, tier)) return { ...row, outOfPlan: true }
           return {
             ...row,
             ...found.contextWindow === undefined || row.contextWindow !== undefined
@@ -409,6 +425,47 @@ export class ProtocomAdapter extends LlmAdapter {
       this.config.log?.(family.ns + ': ' + value.problem + '; models will be offered without capability claims')
     }
     this.capabilityCache.set(url, { at: Date.now(), value })
+    return value
+  }
+
+  /**
+   * The subscription tier this account is on, read from the family's own
+   * subscription endpoint and cached.
+   *
+   * Needed because an endpoints listing is NOT plan-filtered: the live Command
+   * Code listing advertised 82 models, but an account on `individual-goat` got
+   * HTTP 403 MODEL_NOT_IN_PLAN for every Pro- and Max-tier one. Offering those
+   * would put models in the menu whose every call fails.
+   *
+   * Any failure yields undefined, which the caller reads as "tier unknown" and
+   * therefore "do not filter": hiding models on a network blip would be a worse
+   * failure than showing one the account cannot use.
+   * @param family - the family whose account surface to read.
+   * @param group - the group whose credential authorizes the read.
+   * @returns the tier name, lower case, or undefined when it could not be read.
+   */
+  private async accountTier(family: ProviderFamily, group: ResolvedGroup): Promise<string | undefined> {
+    const path = family.planIdPath
+    if (path === undefined) return undefined
+    const cached = this.tierCache.get(family.ns)
+    if (cached !== undefined && Date.now() - cached.at < PLAN_TTL_MS) return cached.value
+    let value: string | undefined
+    try {
+      const { baseURL } = this.config.options()
+      const apiKey = await this.config.resolveApiKey(group)
+      const response = await fetch(new URL(path, new URL(baseURL).origin).toString(), {
+        headers: { authorization: `Bearer ${apiKey}`, accept: 'application/json' },
+        redirect: 'follow',
+      })
+      if (response.ok) {
+        const body = await response.json() as { data?: { planId?: unknown }; planId?: unknown }
+        const planId = body.data?.planId ?? body.planId
+        value = tierFromPlanId(typeof planId === 'string' ? planId : undefined)
+      }
+    } catch {
+      value = undefined
+    }
+    this.tierCache.set(family.ns, { at: Date.now(), value })
     return value
   }
 

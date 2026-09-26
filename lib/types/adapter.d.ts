@@ -15,6 +15,8 @@ import type { AttachmentStore, ImageRequestPolicy } from '@deepseek-ai/dsh-attac
 import type { ResolvedGroup, ResolvedProtocomOptions } from './config.ts';
 /** How long one fetched model listing is reused per group. */
 export declare const MODEL_LIST_TTL_MS = 60000;
+/** How long one resolved account tier is reused. It changes per billing period. */
+export declare const PLAN_TTL_MS: number;
 /**
  * The request-image projection budget. Mirrors the harness's own default
  * vision budget: the attachment service re-encodes each stored image to fit,
@@ -88,6 +90,12 @@ export declare class ProtocomAdapter extends LlmAdapter {
      */
     private readonly capabilityCache;
     /**
+     * The account's subscription tier per family. Cached for the same reason the
+     * catalog is: it changes at most once a billing period while the menu is
+     * rebuilt on every discovery and settings read.
+     */
+    private readonly tierCache;
+    /**
      * Stable per-adapter session id for calls that arrive without
      * `GenerateOptions.sessionId`. The OpenCode Go endpoint answers 400
      * `MissingSessionID` without one, so non-conversational traffic (title
@@ -142,6 +150,23 @@ export declare class ProtocomAdapter extends LlmAdapter {
      * @returns capabilities by id, and the reason when the scrape degraded.
      */
     private capabilities;
+    /**
+     * The subscription tier this account is on, read from the family's own
+     * subscription endpoint and cached.
+     *
+     * Needed because an endpoints listing is NOT plan-filtered: the live Command
+     * Code listing advertised 82 models, but an account on `individual-goat` got
+     * HTTP 403 MODEL_NOT_IN_PLAN for every Pro- and Max-tier one. Offering those
+     * would put models in the menu whose every call fails.
+     *
+     * Any failure yields undefined, which the caller reads as "tier unknown" and
+     * therefore "do not filter": hiding models on a network blip would be a worse
+     * failure than showing one the account cannot use.
+     * @param family - the family whose account surface to read.
+     * @param group - the group whose credential authorizes the read.
+     * @returns the tier name, lower case, or undefined when it could not be read.
+     */
+    private accountTier;
     /**
      * The catalog offered for one route, projected by the same function the
      * settings panel reads (model-registry's `groupCatalog`), so the models a

@@ -21,6 +21,7 @@ import {
   protocolForEndpoints,
   servesDeclaredEndpoints,
 } from '../src/model-registry.ts'
+import { tierFromPlanId, tierRank, withinTier } from '../src/commandcode-catalog.ts'
 import { resolveAdapterOptions } from '../src/config.ts'
 import { parseModelsListing } from '../src/discovery.ts'
 
@@ -134,6 +135,69 @@ describe('catalog filtering by declared endpoints', () => {
   it('keeps an undisclosed model, so an older gateway still works', () => {
     const rows = groupCatalog('cc', [{ id: 'legacy-model' }], { family: COMMANDCODE, registryFallback: false })
     expect(rows.flatMap(row => row.ids)).toContain('legacy-model')
+  })
+})
+
+describe('subscription tier gating', () => {
+  it('ranks the tiers cumulatively, weakest first', () => {
+    expect(tierRank('Go')).toBe(0)
+    expect(tierRank('goat')).toBe(1)
+    expect(tierRank('Pro')).toBe(2)
+    expect(tierRank('MAX')).toBe(3)
+    expect(tierRank('Enterprise')).toBeUndefined()
+    expect(tierRank(undefined)).toBeUndefined()
+  })
+
+  it('reads a tier out of a plan id like individual-goat', () => {
+    expect(tierFromPlanId('individual-goat')).toBe('goat')
+    expect(tierFromPlanId('individual-pro')).toBe('pro')
+    expect(tierFromPlanId('individual-max')).toBe('max')
+    expect(tierFromPlanId('some-go-plan')).toBe('go')
+    expect(tierFromPlanId('unknown-plan')).toBeUndefined()
+    expect(tierFromPlanId(undefined)).toBeUndefined()
+    // A word-boundary match must not read a hypothetical goatx plan as goat.
+    expect(tierFromPlanId('goatx-plan')).toBeUndefined()
+  })
+
+  it('includes a model at or below the account tier and excludes the rest', () => {
+    // Verified live: an individual-goat account got 200 for Go- and GOAT-tier
+    // models and 403 MODEL_NOT_IN_PLAN for Pro- and Max-tier ones.
+    expect(withinTier('Go', 'goat')).toBe(true)
+    expect(withinTier('GOAT', 'goat')).toBe(true)
+    expect(withinTier('Pro', 'goat')).toBe(false)
+    expect(withinTier('Max', 'goat')).toBe(false)
+    expect(withinTier('go', 'pro')).toBe(true)
+    expect(withinTier('goat', 'pro')).toBe(true)
+    expect(withinTier('max', 'pro')).toBe(false)
+  })
+
+  it('keeps a model when either side is unknown', () => {
+    // Hiding a usable model is worse than showing one that fails with a clear
+    // provider message, and an unrecognized tier name is a catalog change.
+    expect(withinTier(undefined, 'goat')).toBe(true)
+    expect(withinTier('Pro', undefined)).toBe(true)
+    expect(withinTier('Enterprise', 'goat')).toBe(true)
+    expect(withinTier('Pro', 'enterprise')).toBe(true)
+  })
+})
+
+describe('out-of-plan models stay out of the menu', () => {
+  it('drops a model the account cannot call', () => {
+    const rows = groupCatalog('cc', [
+      { id: 'in-plan', endpoints: ['/chat/completions'] },
+      { id: 'too-high', endpoints: ['/chat/completions'], outOfPlan: true },
+    ], { family: COMMANDCODE, registryFallback: false })
+    const ids = rows.flatMap(row => row.ids)
+    expect(ids).toContain('in-plan')
+    expect(ids).not.toContain('too-high')
+  })
+
+  it('keeps a model when the flag is absent', () => {
+    const rows = groupCatalog('cc', [{ id: 'plain', endpoints: ['/chat/completions'] }], {
+      family: COMMANDCODE,
+      registryFallback: false,
+    })
+    expect(rows.flatMap(row => row.ids)).toContain('plain')
   })
 })
 

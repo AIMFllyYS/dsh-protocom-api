@@ -231,6 +231,16 @@ export interface UpstreamModel {
     outputCost?: number;
     /** Dollars per million cached input tokens, when published. */
     cacheReadCost?: number;
+    /**
+     * Whether the account's subscription tier excludes this model.
+     *
+     * Set by the adapter from the account's own plan, because the endpoints
+     * listing is NOT plan-filtered: verified live, the listing advertised Pro-
+     * and Max-tier models that an individual-goat account answers 403
+     * MODEL_NOT_IN_PLAN for. Such a model is kept out of the menu rather than
+     * listed and failing on every call.
+     */
+    outOfPlan?: boolean;
 }
 /** One catalog model after registry projection, before variant expansion. */
 export interface CatalogModel {
