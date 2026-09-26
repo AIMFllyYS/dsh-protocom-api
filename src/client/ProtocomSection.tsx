@@ -1021,7 +1021,6 @@ function Loaded({ operations, t, family, copy }: {
    * @param view - the committed section view, already section-shaped.
    */
   const applyCommitted = (view: SettingsNamespaceView): void => {
-    console.warn('[commit] value=' + JSON.stringify((view as { value?: unknown }).value))
     setState(previous => previous.phase === 'ready'
       ? { ...previous, view, credentials: previous.credentials }
       : previous)
