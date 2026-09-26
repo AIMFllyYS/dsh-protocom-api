@@ -545,10 +545,19 @@ export function contextLabel(tokens: number): string {
   // Providers report windows in both bases: binary (1,048,576) and decimal
   // (1,000,000 — OpenCode Go's models.dev figures). Label either cleanly
   // rather than printing 977K for a decimal million.
-  if (tokens >= 1_000_000 && tokens % 1_000_000 === 0) return `${tokens / 1_000_000}M`
-  return tokens >= 1_048_576 && tokens % 1_048_576 === 0
-    ? `${tokens / 1_048_576}M`
-    : `${Math.round(tokens / 1024)}K`
+  //
+  // A model can now offer BOTH of those as separate steps, and the naive
+  // labels collide -- 1M and 1M -- which leaves the operator choosing between
+  // two identical chips with different budgets behind them. The binary figure
+  // is distinguished because it is the larger of the two: "1M" reads as the
+  // decimal million, so the binary one is the exception that needs marking.
+  // The binary figure keeps the plain label it has always had, because it is
+  // the one this ladder is built from. The decimal million is the exception
+  // that needs marking, and it only ever appears beside the binary one when a
+  // model's own window is decimal.
+  if (tokens === 1_000_000) return '1M (dec)'
+  if (tokens % 1_048_576 === 0) return `${tokens / 1_048_576}M`
+  return `${Math.round(tokens / 1024)}K`
 }
 
 /** Selector name for one entry at one context length: `{displayName} [{label}]`. */
