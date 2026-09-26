@@ -1,2 +1,12 @@
 .devhome/
 node_modules/
+
+# Scratch space for analysis and audit agents. Named after a credential
+# REFERENCE rather than a value, but a cache keyed by "which key fetched this"
+# is still not something to publish, and neither are half-finished probes.
+scripts/_audit-cache/
+scripts/_audit.cjs
+scratch-*.ts
+scratch-*.mjs
+scratch-*.cjs
+
