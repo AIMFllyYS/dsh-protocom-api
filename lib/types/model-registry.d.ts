@@ -76,6 +76,23 @@ export interface RegistryEntry {
      */
     groups?: readonly string[];
     /**
+     * Identity key, when this entry must NOT be aliased with another entry that
+     * happens to share its display name.
+     *
+     * Aliasing exists because one model is often listed under several ids --
+     * `glm-5.2` and its vendor-prefixed form, a bare id and a dated snapshot --
+     * and a visibility or context choice should cover all of them. The join is by
+     * display name, which is normally right and occasionally wrong: the relay's
+     * `glm-5.2` and `zai-org/GLM-5.2` share a name, a window and a vocabulary,
+     * yet the first answers 400 to a disabled-thinking request and the second
+     * answers 200. They are different upstream routes, so a setting made for one
+     * must not silently govern the other.
+     *
+     * Setting this keeps the entry on its own identity and implicitly removes it
+     * from any name-group it would otherwise join.
+     */
+    identity?: string;
+    /**
      * Wire protocol this model must use on its family's endpoint, overriding the
      * group's default. OpenCode Go routes a per-model set to the Responses
      * surface only (grok-4.6, muse-spark-*, gpt-5.6-luna answer 503/ModelError
@@ -198,9 +215,21 @@ export declare const DEFAULT_RECOMMENDED: readonly string[];
  * The identity key of one upstream id: the first registry id of the model it
  * belongs to. Aliases of one model share a key, so a recommendation or a
  * visibility choice made against either id applies to both.
+ *
+ * An entry that declares its own {@link RegistryEntry.identity} opts out of the
+ * name join entirely, and no name group may absorb it either -- otherwise the
+ * opt-out would only work in one direction, and a choice made on the OTHER id
+ * would still land on both.
  */
 export declare function identityKey(id: string, registry?: readonly RegistryEntry[]): string;
-/** Collapse the registry into one identity per display name, in registry order. */
+/**
+ * Collapse the registry into one row per identity, in registry order.
+ *
+ * Keyed by {@link identityKey} rather than by display name, so an entry that
+ * opts out of the name join stays its own row. Grouping by name here would
+ * re-merge exactly the pair an opt-out exists to separate, and every count
+ * derived from this list would disagree with the menu it describes.
+ */
 export declare function modelIdentities(registry?: readonly RegistryEntry[]): ModelIdentity[];
 /** Short capacity label: 128K, 256K, 512K, 1M. */
 export declare function contextLabel(tokens: number): string;

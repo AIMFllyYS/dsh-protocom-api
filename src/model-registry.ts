@@ -99,6 +99,23 @@ export interface RegistryEntry {
    */
   groups?: readonly string[]
   /**
+   * Identity key, when this entry must NOT be aliased with another entry that
+   * happens to share its display name.
+   *
+   * Aliasing exists because one model is often listed under several ids --
+   * `glm-5.2` and its vendor-prefixed form, a bare id and a dated snapshot --
+   * and a visibility or context choice should cover all of them. The join is by
+   * display name, which is normally right and occasionally wrong: the relay's
+   * `glm-5.2` and `zai-org/GLM-5.2` share a name, a window and a vocabulary,
+   * yet the first answers 400 to a disabled-thinking request and the second
+   * answers 200. They are different upstream routes, so a setting made for one
+   * must not silently govern the other.
+   *
+   * Setting this keeps the entry on its own identity and implicitly removes it
+   * from any name-group it would otherwise join.
+   */
+  identity?: string
+  /**
    * Wire protocol this model must use on its family's endpoint, overriding the
    * group's default. OpenCode Go routes a per-model set to the Responses
    * surface only (grok-4.6, muse-spark-*, gpt-5.6-luna answer 503/ModelError
@@ -253,6 +270,12 @@ export const REGISTRY: readonly RegistryEntry[] = [
     contextWindow: CONTEXT_1M,
     reasoning: GLM_REASONING,
     vision: false,
+    // Same name as the bare id, but NOT the same route: live-verified
+    // 2026-09-27, the bare `glm-5.2` answers 400 to a disabled-thinking
+    // request while this one answers 200. Aliasing them by name, which is the
+    // default, would make a visibility or context choice on either silently
+    // govern both, so this entry keeps its own identity.
+    identity: 'zai-org/GLM-5.2',
   },
   {
     id: 'glm-5.3',
@@ -522,22 +545,38 @@ export const DEFAULT_RECOMMENDED: readonly string[] = REGISTRY
  * The identity key of one upstream id: the first registry id of the model it
  * belongs to. Aliases of one model share a key, so a recommendation or a
  * visibility choice made against either id applies to both.
+ *
+ * An entry that declares its own {@link RegistryEntry.identity} opts out of the
+ * name join entirely, and no name group may absorb it either -- otherwise the
+ * opt-out would only work in one direction, and a choice made on the OTHER id
+ * would still land on both.
  */
 export function identityKey(id: string, registry: readonly RegistryEntry[] = REGISTRY): string {
   const entry = matchRegistry(id, registry)
   if (entry === undefined) return id
-  return registry.find(candidate => candidate.displayName === entry.displayName)?.id ?? id
+  if (entry.identity !== undefined) return entry.identity
+  const sibling = registry.find(candidate => candidate.displayName === entry.displayName
+    && candidate.identity === undefined)
+  return sibling?.id ?? id
 }
 
-/** Collapse the registry into one identity per display name, in registry order. */
+/**
+ * Collapse the registry into one row per identity, in registry order.
+ *
+ * Keyed by {@link identityKey} rather than by display name, so an entry that
+ * opts out of the name join stays its own row. Grouping by name here would
+ * re-merge exactly the pair an opt-out exists to separate, and every count
+ * derived from this list would disagree with the menu it describes.
+ */
 export function modelIdentities(registry: readonly RegistryEntry[] = REGISTRY): ModelIdentity[] {
-  const byName = new Map<string, { entry: RegistryEntry; ids: string[] }>()
+  const byIdentity = new Map<string, { entry: RegistryEntry; ids: string[] }>()
   for (const entry of registry) {
-    const hit = byName.get(entry.displayName)
-    if (hit === undefined) byName.set(entry.displayName, { entry, ids: [entry.id] })
+    const identity = identityKey(entry.id, registry)
+    const hit = byIdentity.get(identity)
+    if (hit === undefined) byIdentity.set(identity, { entry, ids: [entry.id] })
     else hit.ids.push(entry.id)
   }
-  return [...byName.values()].map(({ entry, ids }) => ({ displayName: entry.displayName, ids, entry }))
+  return [...byIdentity.values()].map(({ entry, ids }) => ({ displayName: entry.displayName, ids, entry }))
 }
 
 /** Short capacity label: 128K, 256K, 512K, 1M. */
@@ -831,12 +870,18 @@ export function groupCatalog(
       && options.hidden?.has(row.id) !== true)
     .map((row, index) => ({ index, row, rank: rankOf(row.id) }))
     .sort((left, right) => left.rank - right.rank || left.index - right.index)
-  const byName = new Map<string, MutableCatalogRow>()
+  // Grouped by IDENTITY, not by display name. The two usually agree -- one
+  // model listed under a prefixed and a bare id is one row -- but an entry may
+  // opt out of the name join, and those two routes must stay separate rows
+  // because they behave differently. Grouping by name here would silently
+  // re-merge exactly the pair the opt-out exists to separate.
+  const byIdentity = new Map<string, MutableCatalogRow>()
   for (const { row } of ranked) {
     const model = catalogEntry(row, groupReasoning, options.vision, registry)
-    const hit = byName.get(model.displayName)
+    const identity = identityKey(row.id, registry)
+    const hit = byIdentity.get(identity)
     if (hit === undefined) {
-      byName.set(model.displayName, {
+      byIdentity.set(identity, {
         upstreamId: row.id,
         ids: [row.id],
         displayName: model.displayName,
@@ -853,7 +898,7 @@ export function groupCatalog(
     }
     hit.ids.push(row.id)
   }
-  return [...byName.values()]
+  return [...byIdentity.values()]
 }
 /* ------------------------------------------------------------------------
  * OpenCode Go (`https://opencode.ai/zen/go`): the subscription surface. Its

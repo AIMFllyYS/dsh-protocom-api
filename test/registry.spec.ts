@@ -62,9 +62,21 @@ describe('model-registry', () => {
 
   it('resolves an alias to its model identity', () => {
     expect(identityKey('deepseek-v4.1-flash')).toBe('deepseek/deepseek-v4.1-flash')
-    expect(identityKey('zai-org/GLM-5.2')).toBe('glm-5.2')
     // An unknown id is its own identity.
     expect(identityKey('meta/unknown')).toBe('meta/unknown')
+  })
+
+  it('keeps two same-named routes apart when they behave differently', () => {
+    // Aliasing joins by display name, which is right for the same model listed
+    // under several ids. These two share a name, a window and a vocabulary but
+    // NOT their thinking semantics: live-verified 2026-09-27, the bare id
+    // answers 400 to a disabled-thinking request where this one answers 200.
+    // A setting made on either must not silently govern both.
+    expect(identityKey('zai-org/GLM-5.2')).toBe('zai-org/GLM-5.2')
+    expect(identityKey('glm-5.2')).toBe('glm-5.2')
+    // The opt-out works in BOTH directions: the other side cannot absorb it
+    // either, or a choice made there would still land on both.
+    expect(identityKey('zai-org/GLM-5.2')).not.toBe(identityKey('glm-5.2'))
   })
 
   it('keeps every advertised model catalogued rather than blocking any', () => {

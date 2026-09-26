@@ -109,12 +109,28 @@ describe('catalog composition', () => {
   })
 
   it('applies a per-model choice made against an alias', async () => {
+    // A real alias: one model listed under a vendor-prefixed and a bare id.
+    const listed = await offlineAdapter({
+      ...ENABLED,
+      modelContexts: { 'deepseek/deepseek-v4.1-flash': [204_800, 262_144] },
+    }).listModels('protocom-aggregate')
+    expect(listed.filter(model => model.id.startsWith('deepseek/deepseek-v4.1-flash::')).map(model => model.name))
+      .toEqual(['DeepSeek V4.1 Flash [200K]', 'DeepSeek V4.1 Flash [256K]'])
+  })
+
+  it('keeps a same-named but different route its own identity', async () => {
+    // The GLM pair shares a display name yet differs on thinking semantics,
+    // so a choice made on one must NOT reach the other. This is the negative
+    // of the case above, and the reason the alias join needed an opt-out.
     const listed = await offlineAdapter({
       ...ENABLED,
       modelContexts: { 'zai-org/GLM-5.2': [204_800, 262_144] },
     }).listModels('protocom-aggregate')
-    expect(listed.filter(model => model.id.startsWith('glm-5.2')).map(model => model.name))
-      .toEqual(['GLM-5.2 [200K]', 'GLM-5.2 [256K]'])
+    const prefixed = listed.filter(model => model.id.startsWith('zai-org/GLM-5.2::'))
+    const bare = listed.filter(model => model.id.startsWith('glm-5.2::'))
+    expect(prefixed.map(model => model.name)).toEqual(['GLM-5.2 [200K]', 'GLM-5.2 [256K]'])
+    // The bare id is untouched by that choice.
+    expect(bare).toEqual([])
   })
 
   it('refuses an empty or malformed per-model context choice', () => {
@@ -134,15 +150,33 @@ describe('catalog composition', () => {
     expect(flash).toHaveLength(1)
     // The first registry id is the one dispatched.
     expect(flash[0]?.id).toBe('deepseek/deepseek-v4.1-flash')
-    const names = listed.map(model => model.name)
-    expect(new Set(names).size).toBe(names.length)
+    // Every row is a distinct identity. Names may repeat -- two routes can
+    // share one -- so the invariant is on the ids, which is what a request
+    // actually dispatches.
+    const ids = listed.map(model => model.id)
+    expect(new Set(ids).size).toBe(ids.length)
   })
 
   it('groups every alias of one model under a single identity', () => {
     const flash = modelIdentities().find(identity => identity.displayName === 'DeepSeek V4.1 Flash')
     expect(flash?.ids).toEqual(['deepseek/deepseek-v4.1-flash', 'deepseek-v4.1-flash'])
     expect(flash?.entry.contextWindow).toBe(1_048_576)
-    expect(modelIdentities()).toHaveLength(new Set(REGISTRY.map(entry => entry.displayName)).size)
+    // Identities are keyed by identity, not by display name: two routes may
+    // share a name while differing in behaviour, and they must stay separate
+    // rows. So the count is one per identity, which is the display-name count
+    // PLUS one for each entry that opted out of the name join.
+    const optedOut = REGISTRY.filter(entry => entry.identity !== undefined).length
+    expect(modelIdentities()).toHaveLength(new Set(REGISTRY.map(entry => entry.displayName)).size + optedOut)
+  })
+
+  it('keeps a same-named but different route as its own identity', () => {
+    // glm-5.2 and zai-org/GLM-5.2 share a name, a window and a vocabulary,
+    // but the first answers 400 to a disabled-thinking request where the
+    // second answers 200. Sharing an identity would make one setting govern
+    // both, so the count above is not simply the display-name count.
+    const identities = modelIdentities().filter(row => row.displayName === 'GLM-5.2')
+    expect(identities).toHaveLength(2)
+    expect(identities.map(row => row.ids[0]).sort()).toEqual(['glm-5.2', 'zai-org/GLM-5.2'])
   })
 
   it('leads with the configured recommendation and keeps the rest selectable', async () => {
@@ -159,9 +193,9 @@ describe('catalog composition', () => {
     // Recommending either spelling must order the one identity.
     const listed = await offlineAdapter({
       ...ENABLED,
-      recommendedModels: ['zai-org/GLM-5.2'],
+      recommendedModels: ['deepseek-v4.1-flash'],
     }).listModels('protocom-aggregate')
-    expect(listed[0]?.id).toBe('glm-5.2')
+    expect(listed[0]?.id).toBe('deepseek/deepseek-v4.1-flash')
   })
 
   it('refuses an empty recommended id', () => {
