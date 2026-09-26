@@ -24,7 +24,9 @@ describe('model-registry', () => {
     expect(prefixed?.displayName).toBe('DeepSeek V4.1 Flash')
     expect(bare?.displayName).toBe('DeepSeek V4.1 Flash')
     expect(prefixed?.contextWindow).toBe(1_048_576)
-    expect(prefixed?.reasoning).toEqual({ efforts: ['off', 'low', 'high', 'max'], defaultEffort: 'off' })
+    // The relay's disabling word is `none`; it answers 400 to `off` and names
+    // its own enum. Verified live 2026-09-27.
+    expect(prefixed?.reasoning).toEqual({ efforts: ['none', 'low', 'high', 'max'], defaultEffort: 'none' })
     // Verified against the endpoint: the flash model accepts image input.
     expect(prefixed?.vision).toBe(true)
   })

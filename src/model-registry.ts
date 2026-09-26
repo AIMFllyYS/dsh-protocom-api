@@ -186,7 +186,7 @@ export const REGISTRY: readonly RegistryEntry[] = [
     displayName: 'MiMo V2.5',
     family: 'mimo',
     contextWindow: CONTEXT_1M,
-    reasoning: { efforts: ['off', 'low', 'medium', 'high'], defaultEffort: 'high' },
+    reasoning: { efforts: ['none', 'low', 'medium', 'high'], defaultEffort: 'high' },
     vision: true,
     rank: 3,
   },
@@ -195,7 +195,7 @@ export const REGISTRY: readonly RegistryEntry[] = [
     displayName: 'DeepSeek V4.1 Flash',
     family: 'deepseek',
     contextWindow: CONTEXT_1M,
-    reasoning: { efforts: ['off', 'low', 'high', 'max'], defaultEffort: 'off' },
+    reasoning: { efforts: ['none', 'low', 'high', 'max'], defaultEffort: 'none' },
     vision: true,
   },
   {
@@ -203,7 +203,7 @@ export const REGISTRY: readonly RegistryEntry[] = [
     displayName: 'DeepSeek V4.1 Flash',
     family: 'deepseek',
     contextWindow: CONTEXT_1M,
-    reasoning: { efforts: ['off', 'low', 'high', 'max'], defaultEffort: 'off' },
+    reasoning: { efforts: ['none', 'low', 'high', 'max'], defaultEffort: 'none' },
     vision: true,
   },
   {
@@ -268,7 +268,7 @@ export const REGISTRY: readonly RegistryEntry[] = [
     displayName: 'MiMo V2.5 Pro',
     family: 'mimo',
     contextWindow: CONTEXT_1M,
-    reasoning: { efforts: ['off', 'low', 'medium', 'high'], defaultEffort: 'high' },
+    reasoning: { efforts: ['none', 'low', 'medium', 'high'], defaultEffort: 'high' },
     // The endpoint answered 404 "no endpoints found that support image input".
     vision: false,
   },
