@@ -164,6 +164,15 @@ pnpm dsh plugin --profile web add "/path/to/dsh-protocom-api-plugin"
 
 没写的分节由 schema 补默认值，所以只写 `protocom` 也能正常挂载。**界面方式不受影响**：设置页会自动渲染全部四个分节。
 
+旧值一般还留在 `~/.dsh/settings.yaml.imported`（宿主只在 `settings.yaml` 存在时导入一次，而那次导入发生在插件还没有可写表单的时候，因此**没有被导入**）。仓库自带迁移脚本：
+
+```bash
+node scripts/migrate-legacy-settings.mjs ~/.dsh/settings.yaml.imported migrated.yml
+# 校验无误后把 migrated.yml 的内容追加到 profile 的 cordis.patch.yml
+```
+
+脚本会打印重命名对照，并在写出前用插件真实的 `Config` schema 校验结果——形状写错是**静默失败**（旧形状照样能解析，只是全部落到默认值，看起来像插件装了却没生效）。
+
 密钥值放入 `~/.dsh/.credentials.yaml`，或启动时经同名环境变量注入：
 
 ```bash
