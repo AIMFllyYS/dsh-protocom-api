@@ -12,7 +12,14 @@
  *
  * @module dsh-protocom-api/fusion
  */
-/** Settings namespace this section owns. */
+/**
+ * Diagnostic label for this feature, and the settings-page cell key.
+ *
+ * It is NOT a settings namespace: 1.7 keys a form by Loader entry, and this
+ * section is the `fusion` field of the plugin's single Config. The name
+ * survives because log lines and the sidebar cell still need a stable word for
+ * it.
+ */
 export declare const FUSION_NS = "model-fusion";
 /**
  * One seat's stored route. `reasoningEffort` is an adapter-owned effort id:

@@ -2,6 +2,65 @@
 
 All notable changes to `dsh-protocom-api` are documented here.
 
+## [1.0.0] — DSH 1.7 兼容（破坏性）
+
+**本版本要求 DSH ≥ 0.1.7-rc.2，不再支持 0.1.6 及以前。** 1.7 重写了设置子系统，旧接口已被删除，因此不存在同时兼容两代的写法。
+
+### 为什么旧版本在 1.7 上完全无法加载
+
+`@deepseek-ai/dsh-llm` 删除了 `offloadRequestImagesWithPolicy`。ESM 的具名导入在**模块求值阶段**就因缺失导出而抛错，于是宿主只报告 `failed to import` —— 插件连激活都到不了。
+
+> 排查提示：本机 checkout 的 `lib/`（构建产物）可能是**旧版本**，仍含该符号；只有 `src/` 代表当前版本。`scripts/audit-dsh-api.mjs` 因此只比对 `src/`。
+
+### 三处被删除/改名的接口
+
+| 旧 | 新（1.7） | 我们怎么改 |
+| --- | --- | --- |
+| `offloadRequestImagesWithPolicy` | **删除** | 适配器不再自己卸载图片，改为算出还需卸载几张并抛 `IMAGE_OFFLOAD_REQUIRED`；由 base bundle 里的 `compaction-image-offload` 持久记录并重试，**不消耗重试预算** |
+| `settings.installSection` | **删除** | 插件不再注册任何东西：自己的 `Config` 就是表单（按 Loader 行 id 索引），只有 `.volatile()` 字段可写 |
+| `ctx.settingsScope` | `ctx.configForms` | Fusion 改为按**路径**寻址共享 entry 的字段 |
+
+### 还发现一处不在计划内的破坏
+
+`tool-result` **内容块不存在了**：工具结果现在是 `role: 'tool'` 的一等消息。两个 wire 序列化器和图片遍历都跟着改了。**上游协议形状没变**，只是它在 harness 里的位置变了。
+
+### 配置形状变化（需要手动迁移）
+
+四个设置命名空间收进**一个** `Config` —— 1.7 下一个插件行只能有一个表单，这是唯一可行的形状：
+
+```yaml
+# 旧（0.8.0）
+- id: protocom-api
+  config:
+    groups: { ... }
+    opencode: { groups: { ... } }
+    commandcode: { ... }
+    fusion: { ... }
+
+# 新（1.0.0）
+- id: protocom-api
+  config:
+    protocom:     { groups: { ... } }
+    opencodeGo:   { groups: { ... } }
+    commandcode:  { ... }
+    fusion:       { ... }
+```
+
+未提供的分节由 schema 补默认值，所以只写 `protocom` 也能正常挂载。
+
+### 两处刻意变弱的行为（1.7 强制）
+
+1. **跨字段校验无法在写入时拒绝**：1.7 不给插件提供自己 Config 的写入校验钩子，所以「启用 Fusion 必须两个席位齐全」不再能拒绝写入。
+   - 客户端表单**仍然拒绝提交**（未变）；
+   - 手工编辑配置文件的违规值由**读取侧**兜住：保留上一条可用规则，并**记一条错误日志**（以前是静默失败）。
+2. **`applyLeader` 在没有当前会话时不再持久化默认模型**：1.7 的 `session.selectModel()` 自己就会持久化，我们那次写入既冗余又已无接口可用。
+
+### 其他
+
+- 依赖：`cordis` 4.0.4、全部 `@deepseek-ai/dsh-*` 0.1.7-rc.2、`schemastery` 3.18.4（`.volatile()` 在 3.18.2 中不存在）。
+- peer 范围一并更新：`^0.1.5-rc.2` 在 semver 的预发布规则下**本来就匹配不到** `0.1.7-rc.2`。
+- **420 个测试通过**。
+
 ## [0.8.0] — Command Code 供应商 + 由端点声明的协议路由
 
 新增第三个供应商族 **Command Code**（设置页第三块面板），并为此实现了「按网关自己声明的端点选择协议」的能力。

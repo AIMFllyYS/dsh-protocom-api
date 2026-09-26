@@ -114,7 +114,10 @@ Command Code 一个分组一条 route（`commandcode`），实测 listing 共 **
 
 ## 首次安装
 
-要求：DSH v1.5+，pnpm。
+要求：**DSH ≥ 0.1.7-rc.2**，pnpm。
+
+> ⚠️ **1.0.0 是破坏性升级。** DSH 1.7 重写了设置子系统并删除了 `offloadRequestImagesWithPolicy`，旧接口已不存在，因此没有同时兼容 0.1.6 与 0.1.7 的写法。
+> 0.1.6 及以前请用 **0.8.0**。从旧版本升级时必须改配置形状，见下方《配置密钥》。
 
 ```bash
 # 在 DSH 仓库目录执行（web profile；用其他 profile 就替换名字）
@@ -134,19 +137,32 @@ pnpm dsh plugin --profile web add "/path/to/dsh-protocom-api-plugin"
 
 **界面方式（推荐）**：设置 → Protocom API → 对应分组卡片 → 粘贴 API key → 保存密钥（保存即自动启用该分组）→ 点「探测模型」验证 → 卡片底部查看余额。
 
-**配置文件方式**：编辑 `~/.dsh/settings.yaml`：
+**配置文件方式**：编辑 profile 的 patch（1.7 起不再是 `settings.yaml`，该文件已被宿主改名归档为 `settings.yaml.imported`）：
 
 ```yaml
-protocom-api:
-  # 默认锚定官方 relay。改用自建/中转网关时需同时打开下面这行：
-  # allowCustomBaseURL: true
-  groups:
-    aggregate:
-      enabled: true
-      apiKey: PROTOCOM_AGGREGATE_API_KEY   # credential-ref 引用名，不是密钥本身
-      contextLengths: [204800, 262144, 1048576]   # 可选：启用上下文变体
-      showBalance: true                    # 默认 true
+- id: protocom-api
+  config:
+    protocom:
+      # 默认锚定官方 relay。改用自建/中转网关时需同时打开下面这行：
+      # allowCustomBaseURL: true
+      groups:
+        aggregate:
+          enabled: true
+          apiKey: PROTOCOM_AGGREGATE_API_KEY   # credential-ref 引用名，不是密钥本身
+          contextLengths: [204800, 262144, 1048576]   # 可选：启用上下文变体
+          showBalance: true                    # 默认 true
 ```
+
+**从 0.8.0 升级**：四个分节从顶层收进了各自的名字下——1.7 下一个插件行只能有一个表单，所以四个功能共用一个 `Config`：
+
+| 旧（≤0.8.0） | 新（1.0.0） |
+| --- | --- |
+| `groups:`（顶层） | `protocom.groups:` |
+| `opencode:` | `opencodeGo:` |
+| `commandcode:` | `commandcode:` |
+| `fusion:` | `fusion:` |
+
+没写的分节由 schema 补默认值，所以只写 `protocom` 也能正常挂载。**界面方式不受影响**：设置页会自动渲染全部四个分节。
 
 密钥值放入 `~/.dsh/.credentials.yaml`，或启动时经同名环境变量注入：
 
