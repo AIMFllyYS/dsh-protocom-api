@@ -105,8 +105,19 @@ export interface RegistryEntry {
  */
 export declare const FALLBACK_CONTEXT_WINDOW = 204800;
 /**
- * The ladder steps one model can offer. A window below the whole ladder still
- * offers itself, so no model is left without a choice.
+ * The ladder steps one model can offer.
+ *
+ * A rung is offered when it is no larger than the model's window, and the
+ * model's OWN window is always offered as a final rung. Both halves matter:
+ *
+ *  - Without the second, a model whose window falls between two rungs loses
+ *    its ceiling. The ladder is binary (1,048,576) while providers publish
+ *    decimal figures, so a 1,000,000-token model used to top out at 400K --
+ *    24 of the 41 Go entries could never be offered their own window, and a
+ *    500,000-token model could never be offered more than 400K either.
+ *
+ *  - The window is added once and sorted, so a model that IS a rung does not
+ *    list it twice.
  * @param contextWindow - the model's declared capacity.
  * @returns the offered lengths, smallest first.
  */
