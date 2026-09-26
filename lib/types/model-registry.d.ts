@@ -214,6 +214,23 @@ export interface UpstreamModel {
      * group's own protocol stands.
      */
     endpoints?: readonly string[];
+    /**
+     * A DEFINITE image verdict, when a capability source stated one. Absent means
+     * "not stated", which the permissive default reads as accepted; false means
+     * the model is text-only and must not be sent an image.
+     */
+    vision?: boolean;
+    /**
+     * A definite "this model cannot reason" verdict, when a capability source
+     * stated one. Absent leaves the group's own vocabulary in charge.
+     */
+    reasoning?: boolean;
+    /** Dollars per million input tokens, when a capability source published one. */
+    inputCost?: number;
+    /** Dollars per million output tokens, when published. */
+    outputCost?: number;
+    /** Dollars per million cached input tokens, when published. */
+    cacheReadCost?: number;
 }
 /** One catalog model after registry projection, before variant expansion. */
 export interface CatalogModel {

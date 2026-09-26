@@ -107,6 +107,46 @@ The live listing was downloaded (snapshot: `commandcode-models-2026-09-23.json`,
 - `context_length` values seen: 200000, 256000, 262000, 262144, 400000,
   500000, 1000000, 1048576, 1050000.
 
+## SECOND SOURCE: the capability catalog (found after the first pass)
+
+The docs page `https://commandcode.ai/docs/plans/goat` is a Next.js app whose
+**RSC streaming payload** carries a full structured model catalog. Extracted
+(script: `scripts/extract-cc-docs.mjs`, snapshot:
+`commandcode-catalog-2026-09-23.json`, 83 rows):
+
+| Field | Meaning |
+| --- | --- |
+| `id` | sometimes vendor-prefixed (`stealth/space-bunny-alpha`), sometimes bare |
+| `contextWindow` | tokens |
+| `reasoning` | bool — **69 of 83 true** |
+| `vision` | bool — **62 of 83 true** |
+| `caps` | `{text, vision, reasoning}` booleans (same verdicts) |
+| `minPlanName` | tier gate: **Go (52), GOAT (9), Max (8), Pro (14)** |
+| `inputCost` / `outputCost` / `cacheReadCost` | dollars per Mtok — **79 of 83 publish a nonzero input cost** |
+| `blendedCostPerMTok`, `codingIndex`, `intelligenceIndex`, `latencyTier`, `deal`, `tiers`, … | extra marketing/benchmark data, not needed |
+
+**Join quality (script: `scripts/verify-cc-join.mjs`): 81 of 82 listing rows
+match a docs row** by exact id or vendor-suffix. The one miss is
+`claude-haiku-4-5-20251001` (a dated snapshot; the docs carry the undated id).
+Two docs rows have no listing row (`claude-haiku-4-5`, `typesafe/jev`).
+
+### Why this matters for THIS plugin
+
+1. **Vision** — the endpoint's own listing does NOT disclose modality, so our
+   permissive default ("unknown means images accepted") would claim vision for
+   all 82. The catalog gives the real answer: 62 true, 21 false. A wrong "yes"
+   costs an upstream error per call; a wrong "no" hides a real capability.
+2. **Reasoning effort** — the listing discloses nothing, so no model would get
+   an Effort submenu. The catalog says 69 of 83 can reason.
+3. **Pricing** — this is the data the Fusion cost strip has been rendering as
+   "no published price" since 0.7.0. A Command Code model would light it up.
+4. **Tier gating** — a Go-tier account cannot use a Max-tier model; the listing
+   already filters by account, so this is informational rather than load-bearing.
+
+**Risk**: this is a scraped, undocumented surface. Per this repo's rule it must
+degrade gracefully: a scrape failure yields models with no capability claims
+(and says so), never an empty menu.
+
 ### Decision this drives
 
 Ship the family now with the two existing wires plus **per-model routing driven

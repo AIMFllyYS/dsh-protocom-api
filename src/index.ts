@@ -286,6 +286,7 @@ function mountFamily(
     options,
     resolveApiKey,
     reportKeyFailure,
+    log: (message) => { ctx.logger.warn(message) },
     // Optional seam, like credentials: a deployment without the attachment
     // service still runs, it just refuses image input instead of dropping it.
     resolveAttachments: () => ctx.get('attachments'),

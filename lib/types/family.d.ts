@@ -81,6 +81,18 @@ export interface ProviderFamily {
     telemetryPath?: string;
     /** What that route answers: currency balance (Protocom) or quota windows (Go). */
     telemetryKind?: 'balance' | 'quota';
+    /**
+     * Page carrying this family's capability catalog, when the endpoints listing
+     * discloses no capabilities of its own.
+     *
+     * Command Code's listing says which WIRE serves a model but nothing about
+     * what the model can do; the vendor's pricing page embeds a structured
+     * catalog with `reasoning`, `vision`, and per-model prices. Naming the page
+     * here is what lets the adapter enrich the menu without hard-coding a scrape
+     * inside the generic family machinery. A scrape failure degrades to "no
+     * capability claims", never to an empty menu.
+     */
+    capabilityCatalogUrl?: string;
 }
 /** The Protocom official API family: the four original group routes. */
 export declare const PROTOCOM: ProviderFamily;

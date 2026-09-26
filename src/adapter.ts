@@ -37,6 +37,13 @@ import type { ProviderFamily } from './family.ts'
 import type { ResolvedGroup, ResolvedProtocomOptions } from './config.ts'
 import { retryPolicyFor } from './retry.ts'
 import {
+  catalogFor,
+  CATALOG_TTL_MS,
+  MAX_CATALOG_BYTES,
+  scrapeCatalog,
+} from './commandcode-catalog.ts'
+import type { CatalogScrape } from './commandcode-catalog.ts'
+import {
   acceptsImages,
   displayNameWithContext,
   protocolForEndpoints,
@@ -171,6 +178,12 @@ export interface ProtocomAdapterOptions {
    * silently dropped.
    */
   resolveAttachments?: () => AttachmentStore | undefined
+  /**
+   * Report a non-fatal degradation — today, a capability page that could not be
+   * scraped. Absent means the deployment has no logger seam, and the
+   * degradation stays silent rather than throwing.
+   */
+  log?: (message: string) => void
 }
 
 function reasoningInfo(reasoning: RegistryReasoning): LlmModelReasoningInfo {
@@ -193,6 +206,12 @@ export class ProtocomAdapter extends LlmAdapter {
    * promise cache so the two can never disagree.
    */
   private readonly resolved = new Map<string, readonly UpstreamModel[]>()
+  /**
+   * Scraped capability catalogs, keyed by page URL. Cached because the page is
+   * large (~765 KB) and changes at most daily, while the menu is built on every
+   * discovery and settings read.
+   */
+  private readonly capabilityCache = new Map<string, { at: number; value: CatalogScrape }>()
 
   /**
    * Stable per-adapter session id for calls that arrive without
@@ -256,8 +275,36 @@ export class ProtocomAdapter extends LlmAdapter {
     const { baseURL } = this.config.options()
     // A listing has no conversation to pin, so the pool hands out its default
     // key; nothing here is cacheable against a Session.
+    const family = this.family()
     const value = this.config.resolveApiKey(group)
       .then(apiKey => fetchUpstreamModels(baseURL, apiKey, signal))
+      .then(async (rows) => {
+        // Enrich with the family's capability catalog, when it has one. The
+        // listing is the routing truth; the catalog is the capability truth,
+        // and this is where they join. A degraded scrape leaves the rows
+        // untouched, so no menu depends on the page being readable.
+        if (family.capabilityCatalogUrl === undefined) return rows
+        const { byId } = await this.capabilities(family)
+        if (byId.size === 0) return rows
+        return rows.map((row) => {
+          const found = catalogFor(byId, row.id)
+          if (found === undefined) return row
+          return {
+            ...row,
+            ...found.contextWindow === undefined || row.contextWindow !== undefined
+              ? {}
+              : { contextWindow: found.contextWindow },
+            ...found.inputCost === undefined ? {} : { inputCost: found.inputCost },
+            ...found.outputCost === undefined ? {} : { outputCost: found.outputCost },
+            ...found.cacheReadCost === undefined ? {} : { cacheReadCost: found.cacheReadCost },
+            // A definite vision verdict always wins; the permissive default
+            // only applies where the catalog said nothing.
+            ...row.vision === undefined ? { vision: found.vision } : {},
+            // A model that cannot reason must not be sent a thinking parameter.
+            ...found.reasoning ? {} : { reasoning: false },
+          }
+        })
+      })
     value.then((rows) => {
       // A resolved listing also feeds the dispatch hot path, which must pick a
       // wire protocol without a network round trip.
@@ -327,6 +374,45 @@ export class ProtocomAdapter extends LlmAdapter {
   }
 
   /**
+   * The capability catalog for one family, scraped from its own page and cached.
+   *
+   * Absent when the family names no page. A failed scrape returns an empty map
+   * with the reason recorded, so callers degrade to "no capability claims"
+   * rather than failing: the listing is still enough to serve models, and the
+   * menu must not empty because a marketing page changed its markup.
+   * @param family - the family whose page to read.
+   * @returns capabilities by id, and the reason when the scrape degraded.
+   */
+  private async capabilities(family: ProviderFamily): Promise<CatalogScrape> {
+    const url = family.capabilityCatalogUrl
+    if (url === undefined) return { byId: new Map() }
+    const hit = this.capabilityCache.get(url)
+    if (hit !== undefined && Date.now() - hit.at < CATALOG_TTL_MS) return hit.value
+    let value: CatalogScrape
+    try {
+      const response = await fetch(url, { headers: { accept: 'text/html' }, redirect: 'follow' })
+      if (!response.ok) {
+        value = scrapeCatalog(undefined, `the capability page answered HTTP ${response.status}`)
+      } else {
+        const body = await response.text()
+        value = body.length > MAX_CATALOG_BYTES
+          ? scrapeCatalog(undefined, 'the capability page was larger than the accepted bound')
+          : scrapeCatalog(body)
+      }
+    } catch (error) {
+      value = scrapeCatalog(undefined, `the capability page could not be reached: ${error instanceof Error ? error.message : String(error)}`)
+    }
+    if (value.problem !== undefined) {
+      // Reported once per failed scrape, not per request: the degradation is
+      // real but the menu keeps working, so this is a warning rather than a
+      // failure the caller has to handle.
+      this.config.log?.(family.ns + ': ' + value.problem + '; models will be offered without capability claims')
+    }
+    this.capabilityCache.set(url, { at: Date.now(), value })
+    return value
+  }
+
+  /**
    * The catalog offered for one route, projected by the same function the
    * settings panel reads (model-registry's `groupCatalog`), so the models a
    * user configures for a group are exactly the models that group's menu
@@ -351,6 +437,21 @@ export class ProtocomAdapter extends LlmAdapter {
       vision: visionModels,
       family: this.family(),
     }).flatMap(model => this.modelEntries(provider, group, model))
+  }
+
+  /**
+   * Whether a capability source stated that this model cannot reason at all.
+   * @param group - the group whose listing is consulted.
+   * @param upstreamId - the upstream model id.
+   * @returns true only for a definite negative verdict; false when unstated.
+   */
+  private async modelCannotReason(group: ResolvedGroup, upstreamId: string): Promise<boolean> {
+    try {
+      const upstream = await this.upstreamModels(group)
+      return upstream.find(model => model.id === upstreamId)?.reasoning === false
+    } catch {
+      return false
+    }
   }
 
   /** Endpoint-disclosed reasoning vocabulary for one model, when the listing says any. */
@@ -389,9 +490,16 @@ export class ProtocomAdapter extends LlmAdapter {
         displayName = upstreamId
       }
     }
-    const reasoning = entry?.reasoning
-      ?? await this.disclosedReasoning(group, upstreamId)
-      ?? family.defaults[group.key]?.reasoning
+    // A capability source that says a model CANNOT reason is authoritative: the
+    // model must not be sent a thinking parameter, so it gets no Effort
+    // submenu. Without this gate the group's own vocabulary would offer one and
+    // every request carrying an effort would be a provider error.
+    const cannotReason = await this.modelCannotReason(group, upstreamId)
+    const reasoning = cannotReason
+      ? undefined
+      : entry?.reasoning
+        ?? await this.disclosedReasoning(group, upstreamId)
+        ?? family.defaults[group.key]?.reasoning
     return {
       provider,
       id: model,

@@ -28,6 +28,7 @@
  */
 
 import type { ProviderFamily } from './family.ts'
+import { COMMANDCODE_CATALOG_URL } from './commandcode-catalog.ts'
 
 /** Endpoint base. `/v1/models` is appended for discovery; any endpoint-root
  * normalization that strips a trailing `/v1` must leave `/provider/v1` intact. */
@@ -106,6 +107,9 @@ export const COMMANDCODE: ProviderFamily = {
   // routing on every row, so a hand-written copy could only go stale.
   registry: [],
   refused: COMMANDCODE_REFUSED_MODEL_IDS,
+  // The endpoints listing discloses no capability at all; this page embeds the
+  // reasoning/vision/pricing catalog the menu renders.
+  capabilityCatalogUrl: COMMANDCODE_CATALOG_URL,
   // No account surface yet. The alpha endpoints exist (/alpha/whoami answers
   // 401 to a bogus bearer, so the route is real), but their RESPONSE shape was
   // never observed here — no key for this service exists in this environment —

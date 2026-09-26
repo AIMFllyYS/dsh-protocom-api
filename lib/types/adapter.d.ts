@@ -63,6 +63,12 @@ export interface ProtocomAdapterOptions {
      * silently dropped.
      */
     resolveAttachments?: () => AttachmentStore | undefined;
+    /**
+     * Report a non-fatal degradation — today, a capability page that could not be
+     * scraped. Absent means the deployment has no logger seam, and the
+     * degradation stays silent rather than throwing.
+     */
+    log?: (message: string) => void;
 }
 /** One adapter serving every enabled route of one provider family. */
 export declare class ProtocomAdapter extends LlmAdapter {
@@ -75,6 +81,12 @@ export declare class ProtocomAdapter extends LlmAdapter {
      * promise cache so the two can never disagree.
      */
     private readonly resolved;
+    /**
+     * Scraped capability catalogs, keyed by page URL. Cached because the page is
+     * large (~765 KB) and changes at most daily, while the menu is built on every
+     * discovery and settings read.
+     */
+    private readonly capabilityCache;
     /**
      * Stable per-adapter session id for calls that arrive without
      * `GenerateOptions.sessionId`. The OpenCode Go endpoint answers 400
@@ -120,6 +132,17 @@ export declare class ProtocomAdapter extends LlmAdapter {
     /** The catalog entries one model advertises, one per variant. */
     private modelEntries;
     /**
+     * The capability catalog for one family, scraped from its own page and cached.
+     *
+     * Absent when the family names no page. A failed scrape returns an empty map
+     * with the reason recorded, so callers degrade to "no capability claims"
+     * rather than failing: the listing is still enough to serve models, and the
+     * menu must not empty because a marketing page changed its markup.
+     * @param family - the family whose page to read.
+     * @returns capabilities by id, and the reason when the scrape degraded.
+     */
+    private capabilities;
+    /**
      * The catalog offered for one route, projected by the same function the
      * settings panel reads (model-registry's `groupCatalog`), so the models a
      * user configures for a group are exactly the models that group's menu
@@ -130,6 +153,13 @@ export declare class ProtocomAdapter extends LlmAdapter {
      * deployment's recommendation decides the head of the list.
      */
     listModels(provider: string): Promise<readonly LlmModelInfo[]>;
+    /**
+     * Whether a capability source stated that this model cannot reason at all.
+     * @param group - the group whose listing is consulted.
+     * @param upstreamId - the upstream model id.
+     * @returns true only for a definite negative verdict; false when unstated.
+     */
+    private modelCannotReason;
     /** Endpoint-disclosed reasoning vocabulary for one model, when the listing says any. */
     private disclosedReasoning;
     private modelInfoFor;
