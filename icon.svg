@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Protocom API Providers">
+  <rect width="64" height="64" rx="14" fill="#12161f"/>
+  <g stroke="#5b8cff" stroke-width="3.5" stroke-linecap="round">
+    <path d="M32 34 L18 20"/>
+    <path d="M32 34 L46 20"/>
+    <path d="M32 34 L32 52"/>
+  </g>
+  <circle cx="32" cy="34" r="7" fill="#5b8cff"/>
+  <g fill="#9db8ff">
+    <circle cx="18" cy="20" r="5"/>
+    <circle cx="46" cy="20" r="5"/>
+    <circle cx="32" cy="52" r="5"/>
+  </g>
+</svg>

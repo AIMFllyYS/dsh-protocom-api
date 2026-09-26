@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Protocom API 供应商",
+    "description": "接入 Protocom 官方 API、OpenCode Go 与 Command Code 订阅，并附带 Fusion 双模型路由。"
+  }
+}
