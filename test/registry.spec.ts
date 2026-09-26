@@ -35,7 +35,10 @@ describe('model-registry', () => {
     const entry = matchRegistry('kimi-k3')
     expect(entry?.displayName).toBe('Kimi K3')
     expect(entry?.contextWindow).toBe(262_144)
-    expect(entry?.reasoning).toEqual({ efforts: ['low', 'high'], defaultEffort: 'high' })
+    // Widened after live probing: minimal, medium, xhigh and max all answer 200
+    // here; only `none` is refused. A test that pinned the narrower pair was
+    // pinning a menu restriction as though it were a capability.
+    expect(entry?.reasoning).toEqual({ efforts: ['minimal', 'low', 'medium', 'high', 'xhigh', 'max'], defaultEffort: 'high' })
     expect(entry?.vision).toBe(true)
   })
 
@@ -219,7 +222,7 @@ describe('model-registry', () => {
     const known = catalogEntry({ id: 'kimi-k3', displayName: 'whatever' })
     expect(known.displayName).toBe('Kimi K3')
     expect(known.contextWindow).toBe(262_144)
-    expect(known.reasoning?.efforts).toEqual(['low', 'high'])
+    expect(known.reasoning?.efforts).toEqual(['minimal', 'low', 'medium', 'high', 'xhigh', 'max'])
     expect(known.vision).toBe(true)
 
     // The endpoint discloses no reasoning metadata, so a row without one takes

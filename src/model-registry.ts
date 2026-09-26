@@ -166,7 +166,10 @@ export const REGISTRY: readonly RegistryEntry[] = [
     displayName: 'Kimi K3',
     family: 'kimi',
     contextWindow: CONTEXT_256K,
-    reasoning: { efforts: ['low', 'high'], defaultEffort: 'high' },
+    // Live-verified 2026-09-27: minimal, medium, xhigh and max all answer 200.
+    // Only `none` is refused, so the narrower pair this used to declare hid
+    // levels the model serves.
+    reasoning: { efforts: ['minimal', 'low', 'medium', 'high', 'xhigh', 'max'], defaultEffort: 'high' },
     vision: true,
     rank: 1,
   },
@@ -260,7 +263,10 @@ export const REGISTRY: readonly RegistryEntry[] = [
     displayName: 'MiniMax M3',
     family: 'minimax',
     contextWindow: CONTEXT_1M,
-    reasoning: { efforts: ['low', 'medium', 'high'], defaultEffort: 'high' },
+    // Live-verified 2026-09-27: none and xhigh both answer 200 on top of the
+    // three this declared, so the pair was a menu restriction rather than a
+    // capability limit.
+    reasoning: { efforts: ['none', 'low', 'medium', 'high', 'xhigh'], defaultEffort: 'high' },
     vision: true,
   },
   {
