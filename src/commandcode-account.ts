@@ -15,6 +15,7 @@
  */
 
 import { attributionHeaders, LlmError } from '@deepseek-ai/dsh-llm'
+import { readBoundedBytes } from './bounded-read.ts'
 import { parseCommandCodeAccount } from './commandcode-view.ts'
 import type { CommandCodeAccount } from './commandcode-view.ts'
 import type { ResolvedGroup, ResolvedProtocomOptions } from './config.ts'
@@ -52,11 +53,25 @@ export interface CommandCodeAccountHooks {
   log: (message: string) => void
 }
 
-/** Read one endpoint's JSON body, or a failure description. */
+/**
+ * Read one endpoint's JSON body, or a failure description.
+ *
+ * The returned `error` is rendered to the operator as plugin text, so it stays
+ * a fixed phrase naming the endpoint. The transport's own words go to `log`,
+ * because they quote upstream bytes -- a parse failure embeds a snippet of the
+ * body that caused it, which a hostile upstream can shape into apparent UI copy.
+ * @param baseURL - the family's endpoint root.
+ * @param path - the account path to read.
+ * @param apiKey - resolved credential.
+ * @param log - sink for the detail that must not reach the reply.
+ * @param signal - caller cancellation.
+ * @returns the parsed body, or a fixed description of what went wrong.
+ */
 async function readJson(
   baseURL: string,
   path: string,
   apiKey: string,
+  log: (message: string) => void,
   signal?: AbortSignal,
 ): Promise<{ body?: unknown; status?: number; error?: string }> {
   const url = baseURL.replace(/\/+$/, '') + path
@@ -68,15 +83,22 @@ async function readJson(
       ...signal === undefined ? {} : { signal },
     })
   } catch (error: unknown) {
-    return { error: `could not reach ${path}: ${error instanceof Error ? error.message : String(error)}` }
+    // The transport detail goes to the local log, never into this message. The
+    // reply is rendered by the settings panel as plugin-authored text, so a
+    // hostile upstream could otherwise compose UI copy: a parse error quotes a
+    // snippet of the body it choked on, which is enough to invent an instruction
+    // like "re-enter your key at <address>" and have it appear as our own words.
+    log(`${COMMANDCODE.ns}: account read of ${path} failed: ${error instanceof Error ? error.message : String(error)}`)
+    return { error: `could not reach ${path}` }
   }
   if (!response.ok) return { status: response.status, error: `${path} answered ${response.status}` }
   try {
-    const text = await response.text()
-    if (text.length > MAX_RESPONSE_BYTES) return { error: `${path} answered more than the accepted bound` }
-    return { body: JSON.parse(text) as unknown }
+    // Bounded while reading. The previous form buffered the whole body and then
+    // compared its UTF-16 length, which bounds neither memory nor bytes.
+    return { body: JSON.parse(await readBoundedBytes(response, MAX_RESPONSE_BYTES)) as unknown }
   } catch (error: unknown) {
-    return { error: `${path} did not answer JSON: ${error instanceof Error ? error.message : String(error)}` }
+    log(`${COMMANDCODE.ns}: account read of ${path} was unusable: ${error instanceof Error ? error.message : String(error)}`)
+    return { error: `${path} did not answer usable JSON` }
   }
 }
 
@@ -112,10 +134,10 @@ export class CommandCodeAccountService {
       ;[credits, usage] = await Promise.all([
         COMMANDCODE.creditsPath === undefined
           ? Promise.resolve({ error: 'no credits endpoint configured' })
-          : readJson(root, COMMANDCODE.creditsPath, apiKey, signal),
+          : readJson(root, COMMANDCODE.creditsPath, apiKey, this.hooks.log, signal),
         COMMANDCODE.usagePath === undefined
           ? Promise.resolve({ error: 'no usage endpoint configured' })
-          : readJson(root, COMMANDCODE.usagePath, apiKey, signal),
+          : readJson(root, COMMANDCODE.usagePath, apiKey, this.hooks.log, signal),
       ])
     } catch (error: unknown) {
       if (signal?.aborted) throw new LlmError('Command Code account read aborted by caller', 'ABORTED', { cause: error })

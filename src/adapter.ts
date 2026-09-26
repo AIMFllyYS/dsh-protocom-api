@@ -43,6 +43,7 @@ import {
   catalogFor,
   CATALOG_TTL_MS,
   MAX_CATALOG_BYTES,
+  MAX_PLAN_BYTES,
   scrapeCatalog,
   tierFromPlanId,
   withinTier,
@@ -51,6 +52,7 @@ import type { CatalogScrape } from './commandcode-catalog.ts'
 import {
   acceptsImages,
   displayNameWithContext,
+  contextStepsFor,
   protocolForEndpoints,
   FALLBACK_CONTEXT_WINDOW,
   groupCatalog,
@@ -58,7 +60,8 @@ import {
   matchRegistry,
 } from './model-registry.ts'
 import type { GroupCatalogModel, RegistryReasoning, UpstreamModel } from './model-registry.ts'
-import { decodeVariantId, encodeVariantId, stripVariantId, variantLengths } from './context-variants.ts'
+import { readBoundedBytes } from './bounded-read.ts'
+import { decodeVariantId, encodeVariantId, stripVariantId } from './context-variants.ts'
 import { fetchUpstreamModels } from './discovery.ts'
 import { streamChatCompletions } from './protocol/chat-completions.ts'
 import type { ProtocolConnection, RequestImageUrls } from './protocol/http.ts'
@@ -398,11 +401,15 @@ export class ProtocomAdapter extends LlmAdapter {
       if (allowed.length > 0) return [...allowed].sort((left, right) => left - right)
       return undefined
     }
-    // NOT narrowed to the model's window: a model the registry does not size
-    // carries only a FLOOR guess, so filtering by it would hide steps the model
-    // can honour. The group's ladder is the authority for its own uncurated
-    // models, exactly as the registry comment on step-5-preview records.
-    return variantLengths(model.contextOptions, group.contextLengths)
+    // CONFIGURATION is the switch, exactly as variantLengths documents: without a
+    // group ladder the model lists once, under its bare id. A registry entry
+    // carries contextOptions as the set it COULD offer, not as an instruction to
+    // expand every menu row, so this guard must come first. It is also the shape
+    // most deployments run, and the historical one.
+    if (group.contextLengths === undefined || group.contextLengths.length === 0) return undefined
+    // Otherwise one shared expression, evaluated here and by the settings row
+    // that draws the chips, so the entries and the controls cannot drift apart.
+    return contextStepsFor(model, group.contextLengths)
   }
 
   /** The catalog entries one model advertises, one per variant. */
@@ -442,14 +449,17 @@ export class ProtocomAdapter extends LlmAdapter {
     if (hit !== undefined && Date.now() - hit.at < CATALOG_TTL_MS) return hit.value
     let value: CatalogScrape
     try {
-      const response = await fetch(url, { headers: { accept: 'text/html' }, redirect: 'follow' })
+      // redirect:'error' rather than 'follow': this fetch carries no credential,
+      // but a vendor URL that redirects is either a mistake or an interception,
+      // and neither is a reason to keep reading whatever it points at next.
+      const response = await fetch(url, { headers: { accept: 'text/html' }, redirect: 'error' })
       if (!response.ok) {
         value = scrapeCatalog(undefined, `the capability page answered HTTP ${response.status}`)
       } else {
-        const body = await response.text()
-        value = body.length > MAX_CATALOG_BYTES
-          ? scrapeCatalog(undefined, 'the capability page was larger than the accepted bound')
-          : scrapeCatalog(body)
+        // Bounded while reading, not after: see readBoundedBytes for why a cap
+        // applied to an already-buffered body bounds nothing.
+        const body = await readBoundedBytes(response, MAX_CATALOG_BYTES)
+        value = scrapeCatalog(body)
       }
     } catch (error) {
       value = scrapeCatalog(undefined, `the capability page could not be reached: ${error instanceof Error ? error.message : String(error)}`)
@@ -489,12 +499,18 @@ export class ProtocomAdapter extends LlmAdapter {
     try {
       const { baseURL } = this.config.options()
       const apiKey = await this.config.resolveApiKey(group)
+      // redirect:'error', because THIS fetch carries the stored credential. A
+      // 30x would otherwise hand the Authorization header to whatever the
+      // redirect names -- the operator consented to the configured origin, not
+      // to wherever it points next. The body is read under the same bound as
+      // every other upstream reply rather than through response.json(), which
+      // buffers without limit.
       const response = await fetch(new URL(path, new URL(baseURL).origin).toString(), {
         headers: { authorization: `Bearer ${apiKey}`, accept: 'application/json' },
-        redirect: 'follow',
+        redirect: 'error',
       })
       if (response.ok) {
-        const body = await response.json() as { data?: { planId?: unknown }; planId?: unknown }
+        const body = JSON.parse(await readBoundedBytes(response, MAX_PLAN_BYTES)) as { data?: { planId?: unknown }; planId?: unknown }
         const planId = body.data?.planId ?? body.planId
         value = tierFromPlanId(typeof planId === 'string' ? planId : undefined)
       }

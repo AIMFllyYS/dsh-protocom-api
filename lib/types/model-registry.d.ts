@@ -247,6 +247,8 @@ export interface CatalogModel {
     upstreamId: string;
     displayName: string;
     contextWindow: number;
+    /** Whether the endpoint published this window, rather than this plugin assuming it. */
+    contextWindowDisclosed?: boolean;
     contextOptions?: number[];
     reasoning?: RegistryReasoning;
     /** Whether the model accepts image input, after the deployment's override. */
@@ -266,6 +268,30 @@ export interface CatalogModel {
  * @returns the model as the menu presents it.
  */
 export declare function catalogEntry(upstream: UpstreamModel, groupReasoning?: GroupReasoning, declaredVision?: ReadonlyMap<string, boolean>, registry?: readonly RegistryEntry[]): CatalogModel;
+/**
+ * The context steps one model may be offered.
+ *
+ * One expression, evaluated by both the adapter that mints menu entries and the
+ * settings row that draws the chips, so the two cannot disagree -- the defect
+ * that made a row show a single pressed chip which refused every click.
+ *
+ * Three inputs, in order of authority:
+ *
+ *  1. the registry's own options for a model it sizes,
+ *  2. the endpoint's DISCLOSED length, when it publishes one per row,
+ *  3. the group ladder unfiltered, when nothing but this plugin's assumption
+ *     bounds the model.
+ *
+ * The distinction in (2) and (3) is load-bearing rather than pedantic. Command
+ * Code publishes `context_length` on every row, so a step above it is an entry
+ * the model cannot honour: a 256K model was offered 400K and 1M. StepFun
+ * publishes nothing, and its uncurated ids carry only a floor guess, so the same
+ * filtering there would hide steps those models serve.
+ * @param model - the projected row.
+ * @param ladder - the group's effective ladder.
+ * @returns the steps to offer, never empty.
+ */
+export declare function contextStepsFor(model: Pick<GroupCatalogModel, 'contextOptions' | 'contextWindow' | 'contextWindowDisclosed'>, ladder: readonly number[] | undefined): number[];
 /** One model as a group's own model menu presents it. */
 export interface GroupCatalogModel {
     /** The upstream id this row's menu entries dispatch. */
@@ -278,6 +304,17 @@ export interface GroupCatalogModel {
     ids: readonly string[];
     displayName: string;
     contextWindow: number;
+    /**
+     * Whether {@link contextWindow} is the ENDPOINT's own disclosure rather than
+     * a registry value or a floor default.
+     *
+     * The distinction decides whether the window may be used to filter the
+     * ladder. An endpoint that publishes a per-row length is stating a fact, so a
+     * step above it is a menu entry the model cannot honour. A number this plugin
+     * assumed is only a floor, and filtering by it would hide steps the model can
+     * serve -- which is the case StepFun's uncurated ids depend on.
+     */
+    contextWindowDisclosed?: boolean;
     /** Ladder steps the registry allows this model, when it sizes the model. */
     contextOptions?: readonly number[];
     reasoning?: RegistryReasoning;

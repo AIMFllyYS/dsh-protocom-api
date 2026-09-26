@@ -135,5 +135,15 @@ export declare function scrapeCatalog(html: string | undefined, failure?: string
 export declare const COMMANDCODE_CATALOG_URL = "https://commandcode.ai/docs/plans/goat";
 /** How long one scraped catalog is reused. The page changes at most daily. */
 export declare const CATALOG_TTL_MS: number;
-/** Largest page body accepted, in bytes. The live page is ~765 KB. */
+/**
+ * Largest page body accepted, in bytes.
+ *
+ * The live page is ~765 KB. The bound matters twice over: it caps memory, and it
+ * caps how long the catalog scan can run, since the scan's cost is a function of
+ * the payload it is handed. Both are attacker-influenced -- the fetch is
+ * unauthenticated, so a DNS hijack or a compromised vendor host decides what
+ * arrives.
+ */
 export declare const MAX_CATALOG_BYTES: number;
+/** Largest subscription reply accepted, in bytes. A planId document is tiny. */
+export declare const MAX_PLAN_BYTES: number;
