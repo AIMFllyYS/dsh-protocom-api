@@ -398,6 +398,10 @@ export class ProtocomAdapter extends LlmAdapter {
       if (allowed.length > 0) return [...allowed].sort((left, right) => left - right)
       return undefined
     }
+    // NOT narrowed to the model's window: a model the registry does not size
+    // carries only a FLOOR guess, so filtering by it would hide steps the model
+    // can honour. The group's ladder is the authority for its own uncurated
+    // models, exactly as the registry comment on step-5-preview records.
     return variantLengths(model.contextOptions, group.contextLengths)
   }
 
@@ -584,10 +588,15 @@ export class ProtocomAdapter extends LlmAdapter {
     // submenu. Without this gate the group's own vocabulary would offer one and
     // every request carrying an effort would be a provider error.
     const cannotReason = await this.modelCannotReason(group, upstreamId)
+    // Order matters: the registry is hand-verified per model, the endpoint's own
+    // disclosure outranks a group-wide default, and a family that knows its
+    // models' vocabularies but cannot publish them sits between the two. The
+    // group default is LAST because it is the only one not about this model.
     const reasoning = cannotReason
       ? undefined
       : entry?.reasoning
         ?? await this.disclosedReasoning(group, upstreamId)
+        ?? family.reasoningFor?.(upstreamId)
         ?? family.defaults[group.key]?.reasoning
     return {
       provider,

@@ -28,6 +28,7 @@
  */
 
 import type { ProviderFamily } from './family.ts'
+import { commandCodeReasoning } from './commandcode-tiers.ts'
 import { COMMANDCODE_CATALOG_URL } from './commandcode-catalog.ts'
 
 /** Endpoint base. `/v1/models` is appended for discovery; any endpoint-root
@@ -111,6 +112,12 @@ export const COMMANDCODE: ProviderFamily = {
   // The endpoints listing discloses no capability at all; this page embeds the
   // reasoning/vision/pricing catalog the menu renders.
   capabilityCatalogUrl: COMMANDCODE_CATALOG_URL,
+  // The capability page answers WHETHER a model reasons but never which depths
+  // it accepts, and the endpoints listing has no reasoning field at all. Both
+  // sources are therefore silent on effort, which is why no Command Code model
+  // offered a thinking control. The vendor's CLI catalog publishes the exact
+  // per-model tiers and joins this listing on all 82 ids, so it is the source.
+  reasoningFor: commandCodeReasoning,
   // Account endpoints, all verified live on 2026-09-23 with a real key:
   //   GET /alpha/whoami                -> 200 {success,user,org}
   //   GET /alpha/billing/credits       -> 200 {credits,windowLimits{limited,

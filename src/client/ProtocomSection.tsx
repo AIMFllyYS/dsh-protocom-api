@@ -31,7 +31,6 @@ import type { GoQuotaWindow, GoUsageView } from '../usage-view.ts'
 import { parseCommandCodeAccountView } from '../commandcode-view.ts'
 import type { CommandCodeAccountView } from '../commandcode-view.ts'
 import {
-  CONTEXT_LADDER,
   contextLabel,
   groupCatalog,
   identityKey,
@@ -110,6 +109,7 @@ function sectionOf(view: SettingsNamespaceView | undefined): SectionValue {
 function groupValueOf(section: SectionValue, key: string, family: ProviderFamily): Required<GroupSectionValue> {
   const raw = section.groups?.[key] ?? {}
   const defaults = family.defaults[key]
+
   return {
     enabled: raw.enabled ?? false,
     protocol: raw.protocol ?? defaults?.protocol ?? 'chat-completions',
@@ -364,15 +364,31 @@ function ModelRow({ model, group, family, hidden, recommended, contexts, vision,
   const hiddenSet = new Set(hidden)
   const shown = model.ids.every(id => !hiddenSet.has(id))
   const starred = recommended.includes(key)
-  // The lengths this model offers when nothing is stored: the group's own
-  // ladder narrowed to the model's window, or its full window when the group
-  // ships no ladder. Exactly what the adapter advertises, so the row and the
-  // menu cannot disagree.
-  const fallback = variantLengths(model.contextOptions, group.contextLengths) ?? [model.contextWindow]
-  const stored = contexts[key]
-  const selected = (stored ?? fallback).filter(length => length <= model.contextWindow)
-  const chosen = selected.length > 0 ? selected : fallback
-  const ladder = model.contextOptions ?? CONTEXT_LADDER
+  // The ladder this row offers. This is the SAME resolution the adapter's
+  // `contextLengthsFor` performs, in the same order, because the chips must
+  // describe the menu entries that resolution produces:
+  //
+  //   1. a per-model choice the deployment stored, else
+  //   2. the group's effective ladder intersected with the model's own options.
+  //
+  // The chips previously came from step 2 alone while the SELECTION came from
+  // the stored map. Whenever a stored choice existed the two disagreed: the
+  // ladder drew only the group's steps and the selection named only the stored
+  // ones, so an intersection of ONE was common -- a single pressed chip, and
+  // that chip was the one the at-least-one guard disables. A row could thus
+  // show exactly one usable-looking chip that refused every click.
+  //
+  // The floor is applied only where the model is genuinely unsized: a group
+  // ladder is the authority for its own uncurated models, so filtering by a
+  // guessed window would hide steps the model can honour.
+  const advertised = variantLengths(model.contextOptions, group.contextLengths)
+  const stored = (contexts[key] ?? []).filter(length => length <= model.contextWindow)
+  const options = stored.length > 0
+    ? [...stored].sort((left, right) => left - right)
+    : advertised ?? [model.contextWindow]
+  // Every step in force is exactly what the adapter advertises: the stored set
+  // when there is one, the whole ladder otherwise.
+  const chosen = options
   const images = vision[key] ?? model.vision
   const meta = [
     ...model.reasoning === undefined ? [] : [t('tagReasoning')],
@@ -387,7 +403,7 @@ function ModelRow({ model, group, family, hidden, recommended, contexts, vision,
   }
 
   const writeContexts = (next: number[]): void => {
-    const isDefault = next.length === fallback.length && next.every((length, index) => length === fallback[index])
+    const isDefault = next.length === options.length && next.every((length, index) => length === options[index])
     onWrite(isDefault
       ? [{ op: 'unset', path: ['modelContexts', key] }]
       : [{ op: 'set', path: ['modelContexts', key], value: next }])
@@ -432,7 +448,7 @@ function ModelRow({ model, group, family, hidden, recommended, contexts, vision,
       {shown
         ? (
           <span className="protocom-ctx" role="group" aria-label={t('contextTitle')}>
-            {ladder.map((length) => {
+            {options.map((length) => {
               const on = chosen.includes(length)
               const last = on && chosen.length === 1
               return (

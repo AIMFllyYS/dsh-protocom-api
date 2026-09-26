@@ -13,7 +13,7 @@ import { DEFAULT_BASE_URL, DEFAULT_BASE_URL_ORIGIN, defaultKeyRef, GROUP_DEFAULT
 import { GO_DEFAULT_RECOMMENDED, GO_REFUSED_MODEL_IDS, GO_REGISTRY, DEFAULT_RECOMMENDED, REFUSED_CHAT_MODEL_IDS, REGISTRY } from './model-registry.ts'
 import type { GroupReasoning, Protocol } from './groups.ts'
 import { COMMANDCODE } from './commandcode.ts'
-import type { RegistryEntry } from './model-registry.ts'
+import type { RegistryEntry, RegistryReasoning } from './model-registry.ts'
 
 /** Per-group shipped defaults of one family. */
 export interface FamilyGroupDefaults {
@@ -64,6 +64,23 @@ export interface ProviderFamily {
   recommended: readonly string[]
   /** This family's hand-maintained model registry. */
   registry: readonly RegistryEntry[]
+  /**
+   * Per-model reasoning vocabulary this family knows but its ENDPOINT does not
+   * publish.
+   *
+   * A family whose listing omits reasoning entirely still has an authoritative
+   * source for it elsewhere — Command Code ships per-model effort tiers in the
+   * vendor's own CLI catalog, while its endpoints listing carries routing facts
+   * only. Without this hook the adapter's chain ends at a group-wide default,
+   * and for Command Code that default is deliberately absent, so no model would
+   * offer an Effort control at all.
+   *
+   * Consulted after the registry entry and the endpoint's own disclosure, so a
+   * family that publishes nothing authoritative outranks nothing.
+   * @param upstreamId - the model id as the listing reports it.
+   * @returns its vocabulary, or undefined when this family knows none.
+   */
+  reasoningFor?: (upstreamId: string) => RegistryReasoning | undefined
   /** Ids this family's endpoint lists but cannot serve a chat turn for. */
   refused: readonly string[]
   /**
