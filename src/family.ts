@@ -85,8 +85,13 @@ export interface ProviderFamily {
    * than as "not supported here".
    */
   telemetryPath?: string
-  /** What that route answers: currency balance (Protocom) or quota windows (Go). */
-  telemetryKind?: 'balance' | 'quota'
+  /**
+   * What that route answers, which decides the parser and the strip the client
+   * renders: currency balance plus rate multiplier (Protocom), subscription
+   * quota windows (OpenCode Go), or credit balances and rolling dollar windows
+   * (Command Code).
+   */
+  telemetryKind?: 'balance' | 'quota' | 'account'
   /**
    * Page carrying this family's capability catalog, when the endpoints listing
    * discloses no capabilities of its own.

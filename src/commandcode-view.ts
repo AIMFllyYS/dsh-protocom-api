@@ -206,6 +206,61 @@ export function parseCommandCodeUsage(body: unknown): CommandCodeUsage | undefin
 }
 
 /**
+ * Re-validate the account route's reply on the browser side.
+ *
+ * The wire body is a trust boundary — it comes back through the Host, but the
+ * strip must not reach into a malformed shape and crash — so the client parses
+ * the same normalized view the Host produced rather than asserting it. Both
+ * halves are optional and their reachability is carried explicitly.
+ * @param body - the parsed route reply.
+ * @returns the view, or undefined when the body carries nothing renderable.
+ */
+export function parseCommandCodeAccountView(body: unknown): CommandCodeAccountView | undefined {
+  const source = rec(body)
+  if (source === undefined) return undefined
+  const half = (value: unknown): { reachable: boolean; error?: string } | undefined => {
+    const entry = rec(value)
+    if (entry === undefined) return undefined
+    const error = typeof entry['error'] === 'string' && entry['error'].length > 0 ? entry['error'] : undefined
+    return {
+      reachable: entry['reachable'] === true,
+      ...error === undefined ? {} : { error },
+    }
+  }
+  const credits = half(source['credits'])
+  const usage = half(source['usage'])
+  if (credits === undefined || usage === undefined) return undefined
+  const account = rec(source['account'])
+  const normalized = account === undefined
+    ? undefined
+    : parseCommandCodeAccount(
+      account['credits'] === undefined ? undefined : { credits: account['credits'], windowLimits: account['windowLimits'] },
+      account['usage'],
+    )
+  return {
+    ...normalized === undefined ? {} : { account: normalized },
+    credits,
+    usage,
+    ...source['credentialRejected'] === true ? { credentialRejected: true } : {},
+  }
+}
+
+/** One half's outcome, so a failure is reported per endpoint. */
+export interface CommandCodeHalf {
+  reachable: boolean
+  error?: string
+}
+
+/** One account read's answer, as the route and the strip both see it. */
+export interface CommandCodeAccountView {
+  account?: CommandCodeAccount
+  credits: CommandCodeHalf
+  usage: CommandCodeHalf
+  /** Whether the credential itself was refused, which is the actionable case. */
+  credentialRejected?: true
+}
+
+/**
  * Normalize the whole account surface from the two replies, either of which may
  * be missing. A read failure on one half never clears the other.
  * @param creditsBody - the parsed credits body, when the read succeeded.

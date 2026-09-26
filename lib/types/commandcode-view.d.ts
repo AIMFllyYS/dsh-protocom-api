@@ -119,6 +119,30 @@ export declare function parseCommandCodeCredits(body: unknown): CommandCodeCredi
  */
 export declare function parseCommandCodeUsage(body: unknown): CommandCodeUsage | undefined;
 /**
+ * Re-validate the account route's reply on the browser side.
+ *
+ * The wire body is a trust boundary — it comes back through the Host, but the
+ * strip must not reach into a malformed shape and crash — so the client parses
+ * the same normalized view the Host produced rather than asserting it. Both
+ * halves are optional and their reachability is carried explicitly.
+ * @param body - the parsed route reply.
+ * @returns the view, or undefined when the body carries nothing renderable.
+ */
+export declare function parseCommandCodeAccountView(body: unknown): CommandCodeAccountView | undefined;
+/** One half's outcome, so a failure is reported per endpoint. */
+export interface CommandCodeHalf {
+    reachable: boolean;
+    error?: string;
+}
+/** One account read's answer, as the route and the strip both see it. */
+export interface CommandCodeAccountView {
+    account?: CommandCodeAccount;
+    credits: CommandCodeHalf;
+    usage: CommandCodeHalf;
+    /** Whether the credential itself was refused, which is the actionable case. */
+    credentialRejected?: true;
+}
+/**
  * Normalize the whole account surface from the two replies, either of which may
  * be missing. A read failure on one half never clears the other.
  * @param creditsBody - the parsed credits body, when the read succeeded.

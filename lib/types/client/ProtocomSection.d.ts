@@ -14,6 +14,7 @@ import type { InjectFace } from '@deepseek-ai/dsh-client-ui-slots';
 import type { ProviderFamily } from '../family.ts';
 import type { GroupBalance } from '../balance-view.ts';
 import type { GoUsageView } from '../usage-view.ts';
+import type { CommandCodeAccountView } from '../commandcode-view.ts';
 import type { ProtocomOperations } from './operations.ts';
 import type { en } from './locale.ts';
 /** Injected dependencies of {`link ProviderSection} (slot `inject`). */
@@ -39,6 +40,21 @@ type Translator = (key: keyof typeof en) => string;
 /** The quota strip of a Go group card: the subscription's three rate windows. */
 export declare function QuotaView({ usage, phase, error, onRefresh, t }: {
     usage: GoUsageView | undefined;
+    phase: 'idle' | 'loading' | 'ready' | 'error';
+    error: string | undefined;
+    onRefresh: () => void;
+    t: Translator;
+}): ReactNode;
+/**
+ * The Command Code account strip: remaining credits, the two rolling dollar
+ * windows, and the period's usage totals.
+ *
+ * Every figure is a dollar amount or a count the endpoint actually stated. The
+ * monthly number is a BALANCE whose pool size is never published, so it renders
+ * as an amount rather than being forced into a percentage.
+ */
+export declare function AccountView({ view, phase, error, onRefresh, t }: {
+    view: CommandCodeAccountView | undefined;
     phase: 'idle' | 'loading' | 'ready' | 'error';
     error: string | undefined;
     onRefresh: () => void;

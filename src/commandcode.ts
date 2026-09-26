@@ -123,4 +123,9 @@ export const COMMANDCODE: ProviderFamily = {
   planIdPath: '/alpha/billing/subscriptions',
   creditsPath: '/alpha/billing/credits',
   usagePath: '/alpha/usage/summary',
+  // The fenced route the settings panel reads. Its kind is 'account' rather
+  // than 'balance': Command Code answers a different shape from Protocom's
+  // relay, and the client picks its parser and strip from this value.
+  telemetryPath: '/api/commandcode/account',
+  telemetryKind: 'account',
 } as ProviderFamily

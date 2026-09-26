@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
-import { ProtocomSection } from '../src/client/ProtocomSection.tsx'
+import { AccountView, ProtocomSection } from '../src/client/ProtocomSection.tsx'
 import { en } from '../src/client/locale.ts'
 import { PROTOCOM } from '../src/family.ts'
 import type { ProtocomOperations } from '../src/client/operations.ts'
@@ -153,6 +153,69 @@ describe('custom endpoint confirmation (F-2)', () => {
       { op: 'set', path: ['retryMaxAttempts'], value: 20 },
       { op: 'set', path: ['retryMaxDelayMs'], value: 3_600_000 },
     ])
+  })
+})
+
+describe('Command Code account strip (R2)', () => {
+  const LIVE_VIEW = {
+    credits: { reachable: true },
+    usage: { reachable: true },
+    account: {
+      credits: {
+        monthlyCredits: 19.8371169506,
+        purchasedCredits: 0,
+        freeCredits: 0,
+        fiveHour: { used: 2.6085937488, cap: 14, remaining: 11.39, percent: 19, exceeded: false, resetAt: 1790427300847 },
+        weekly: { used: 32.0923563887, cap: 35, remaining: 2.91, percent: 92, exceeded: false, resetAt: 1790452415913 },
+      },
+      usage: {
+        requests: 5197,
+        cost: 50.1628830494,
+        successRatePercent: 100,
+        tokensIn: 578644478,
+        tokensOut: 5416957,
+        tokens: 584061435,
+      },
+    },
+  }
+
+  it('renders credits, both windows, and the usage totals', () => {
+    const { container } = render(<AccountView view={LIVE_VIEW as never} phase="ready" error={undefined} onRefresh={() => {}} t={(key) => en[key]} />)
+    const text = container.textContent ?? ''
+    // The monthly figure is a BALANCE, so it renders as an amount.
+    expect(text).toContain('$19.84')
+    // Both rolling windows carry dollars, not percentages alone.
+    expect(text).toContain('$2.61')
+    expect(text).toContain('$14.00')
+    expect(text).toContain('$32.09')
+    expect(text).toContain('$35.00')
+    expect(text).toContain('5197')
+    expect(text).toContain('100%')
+    expect(text).toContain('$50.16')
+  })
+
+  it('warns when the credential itself was rejected', () => {
+    const { container } = render(<AccountView view={{ ...LIVE_VIEW, credentialRejected: true } as never} phase="ready" error={undefined} onRefresh={() => {}} t={(key) => en[key]} />)
+    // This is the one failure an operator can act on, so it is called out.
+    expect(container.textContent).toContain(en.accountCredential)
+  })
+
+  it('reports a half that could not be read without blanking the other', () => {
+    const { container } = render(<AccountView view={{ ...LIVE_VIEW, usage: { reachable: false, error: 'usage endpoint down' } } as never} phase="ready" error={undefined} onRefresh={() => {}} t={(key) => en[key]} />)
+    expect(container.textContent).toContain('usage endpoint down')
+    // The credits half still rendered.
+    expect(container.textContent).toContain('$19.84')
+  })
+
+  it('renders nothing numeric while the first read is in flight', () => {
+    const { container } = render(<AccountView view={undefined} phase="loading" error={undefined} onRefresh={() => {}} t={(key) => en[key]} />)
+    expect(container.textContent).toContain(en.refreshing)
+    expect(container.textContent).not.toContain('$')
+  })
+
+  it('surfaces a whole-read failure', () => {
+    const { container } = render(<AccountView view={undefined} phase="error" error="HTTP 502" onRefresh={() => {}} t={(key) => en[key]} />)
+    expect(container.textContent).toContain('HTTP 502')
   })
 })
 

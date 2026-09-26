@@ -28,6 +28,8 @@ import { parseBalanceView } from '../balance-view.ts'
 import type { GroupBalance } from '../balance-view.ts'
 import { parseGoUsage } from '../usage-view.ts'
 import type { GoQuotaWindow, GoUsageView } from '../usage-view.ts'
+import { parseCommandCodeAccountView } from '../commandcode-view.ts'
+import type { CommandCodeAccountView } from '../commandcode-view.ts'
 import {
   CONTEXT_LADDER,
   contextLabel,
@@ -167,6 +169,100 @@ export function QuotaView({ usage, phase, error, onRefresh, t }: {
           </div>
         )
       })}
+    </div>
+  )
+}
+
+/**
+ * The Command Code account strip: remaining credits, the two rolling dollar
+ * windows, and the period's usage totals.
+ *
+ * Every figure is a dollar amount or a count the endpoint actually stated. The
+ * monthly number is a BALANCE whose pool size is never published, so it renders
+ * as an amount rather than being forced into a percentage.
+ */
+export function AccountView({ view, phase, error, onRefresh, t }: {
+  view: CommandCodeAccountView | undefined
+  phase: 'idle' | 'loading' | 'ready' | 'error'
+  error: string | undefined
+  onRefresh: () => void
+  t: Translator
+}): ReactNode {
+  const credits = view?.account?.credits
+  const usage = view?.account?.usage
+  const money = (value: number | undefined): string => (value === undefined ? t('none') : '$' + value.toFixed(2))
+  const windowRow = (label: string, window: { used: number; cap: number; percent: number; exceeded: boolean; resetAt?: number } | undefined) => (
+    <div className="protocom-quota-row" key={label}>
+      <span className="protocom-quota-label">{label}</span>
+      <div className="protocom-quota-bar">
+        <div
+          className={window !== undefined && window.exceeded ? 'protocom-quota-fill is-warn' : 'protocom-quota-fill'}
+          style={{ width: (window?.percent ?? 0) + '%' }}
+        />
+      </div>
+      <span className="protocom-quota-num">
+        {window === undefined ? t('none') : money(window.used) + ' ' + t('accountUsedOfCap') + ' ' + money(window.cap)}
+        {window?.resetAt === undefined ? null : <small>{t('accountResets') + ' ' + new Date(window.resetAt).toLocaleString()}</small>}
+      </span>
+    </div>
+  )
+  return (
+    <div className="protocom-balance">
+      <div className="protocom-balance-head">
+        <span>{t('accountCredits')}</span>
+        <button type="button" className="protocom-button" disabled={phase === 'loading'} onClick={onRefresh}>
+          {phase === 'loading' ? t('refreshing') : t('refresh')}
+        </button>
+      </div>
+      {view?.credentialRejected === true ? <p className="protocom-error">{t('accountCredential')}</p> : null}
+      {phase === 'error' ? <p className="protocom-error">{error ?? t('loadFailed')}</p> : null}
+      {phase !== 'error' && view !== undefined && !view.credits.reachable
+        ? <p className="protocom-notice">{view.credits.error ?? t('accountUnavailable')}</p>
+        : null}
+      {credits === undefined
+        ? null
+        : (
+          <div className="protocom-quota">
+            <div className="protocom-balance-grid">
+              <span className="protocom-balance-item">
+                {t('accountMonthly') + ' '}
+                <b>{money(credits.monthlyCredits)}</b>
+              </span>
+              {credits.purchasedCredits === undefined || credits.purchasedCredits === 0
+                ? null
+                : (
+                  <span className="protocom-balance-item">
+                    {t('balance') + ' '}
+                    <b>{money(credits.purchasedCredits)}</b>
+                  </span>
+                )}
+            </div>
+            {windowRow(t('accountFiveHour'), credits.fiveHour)}
+            {windowRow(t('accountWeekly'), credits.weekly)}
+          </div>
+        )}
+      {view !== undefined && !view.usage.reachable
+        ? <p className="protocom-notice">{view.usage.error ?? t('accountUnavailable')}</p>
+        : null}
+      {usage === undefined
+        ? null
+        : (
+          <div className="protocom-quota">
+            <span className="protocom-balance-item">{t('accountUsage')}</span>
+            <div className="protocom-balance-grid">
+              <span className="protocom-balance-item">{t('accountRequests') + ' '}<b>{usage.requests ?? t('none')}</b></span>
+              <span className="protocom-balance-item">
+                {t('accountSuccessRate') + ' '}
+                <b>{usage.successRatePercent === undefined ? t('none') : usage.successRatePercent + '%'}</b>
+              </span>
+              <span className="protocom-balance-item">{t('accountCost') + ' '}<b>{money(usage.cost)}</b></span>
+              <span className="protocom-balance-item">
+                {t('accountTokens') + ' '}
+                <b>{usage.tokens ?? (usage.tokensIn ?? 0) + ' / ' + (usage.tokensOut ?? 0)}</b>
+              </span>
+            </div>
+          </div>
+        )}
     </div>
   )
 }
@@ -414,7 +510,7 @@ function GroupCard({ groupKey, group, family, credential, writable, revision, pr
   const [filter, setFilter] = useState('')
   const [balance, setBalance] = useState<{
     phase: 'idle' | 'loading' | 'ready' | 'error'
-    data: GroupBalance | GoUsageView | undefined
+    data: GroupBalance | GoUsageView | CommandCodeAccountView | undefined
     error: string | undefined
   }>({ phase: 'idle', data: undefined, error: undefined })
 
@@ -463,7 +559,11 @@ function GroupCard({ groupKey, group, family, credential, writable, revision, pr
       // The route is fenced by the Host carrier, so an unauthenticated request
       // or a profile without the connection service answers 401/403/404. That
       // is "no account surface here", not a failure worth a red message.
-      const unavailable = family.telemetryKind === 'quota' ? t('quotaUnavailable') : t('balanceUnavailable')
+      const unavailable = family.telemetryKind === 'quota'
+        ? t('quotaUnavailable')
+        : family.telemetryKind === 'account'
+          ? t('accountUnavailable')
+          : t('balanceUnavailable')
       if (response.status === 401 || response.status === 403 || response.status === 404) {
         setBalance({ phase: 'error', data: undefined, error: unavailable })
         return
@@ -475,7 +575,11 @@ function GroupCard({ groupKey, group, family, credential, writable, revision, pr
       // The body is a trust boundary: re-validate rather than asserting, so a
       // malformed reply cannot reach toFixed/slice and crash the strip.
       const raw: unknown = await response.json()
-      const data = family.telemetryKind === 'quota' ? parseGoUsage(raw) : parseBalanceView(raw)
+      const data = family.telemetryKind === 'quota'
+        ? parseGoUsage(raw)
+        : family.telemetryKind === 'account'
+          ? parseCommandCodeAccountView(raw)
+          : parseBalanceView(raw)
       if (data === undefined) throw new Error(unavailable)
       setBalance({ phase: 'ready', data, error: undefined })
     } catch (error: unknown) {
@@ -745,11 +849,20 @@ function GroupCard({ groupKey, group, family, credential, writable, revision, pr
               </div>
             </details>
             {balanceVisible
-              ? (
-                family.telemetryKind === 'quota'
+              ? family.telemetryKind === 'quota'
+                ? (
+                  <QuotaView
+                    usage={balance.data as GoUsageView | undefined}
+                    phase={balance.phase}
+                    error={balance.error}
+                    onRefresh={() => { void loadBalance() }}
+                    t={t}
+                  />
+                )
+                : family.telemetryKind === 'account'
                   ? (
-                    <QuotaView
-                      usage={balance.data as GoUsageView | undefined}
+                    <AccountView
+                      view={balance.data as CommandCodeAccountView | undefined}
                       phase={balance.phase}
                       error={balance.error}
                       onRefresh={() => { void loadBalance() }}
@@ -766,7 +879,6 @@ function GroupCard({ groupKey, group, family, credential, writable, revision, pr
                       t={t}
                     />
                   )
-              )
               : null}
           </div>
         )

@@ -64,12 +64,16 @@ describe('Command Code family descriptor', () => {
     expect(COMMANDCODE.recommended).toEqual([])
   })
 
-  it('ships no account surface until its response shape has been observed', () => {
-    // /alpha/whoami exists (it answers 401 to a bogus bearer) but no key for
-    // this service exists in this environment, so its response shape is
-    // unverified and this plugin renders only confirmed fields.
-    expect(COMMANDCODE.telemetryPath).toBeUndefined()
-    expect(COMMANDCODE.telemetryKind).toBeUndefined()
+  it('serves the account surface its live endpoints confirmed', () => {
+    // Every endpoint the panel reads was verified with a real key on
+    // 2026-09-23; the responses are recorded in src/commandcode-view.ts. The
+    // kind is 'account' rather than 'balance' because the reply shape differs
+    // from Protocom's relay -- the client picks its parser and strip from it.
+    expect(COMMANDCODE.telemetryPath).toBe('/api/commandcode/account')
+    expect(COMMANDCODE.telemetryKind).toBe('account')
+    expect(COMMANDCODE.planIdPath).toBe('/alpha/billing/subscriptions')
+    expect(COMMANDCODE.creditsPath).toBe('/alpha/billing/credits')
+    expect(COMMANDCODE.usagePath).toBe('/alpha/usage/summary')
   })
 
   it('offers a four-step context ladder from the nine lengths the listing used', () => {
