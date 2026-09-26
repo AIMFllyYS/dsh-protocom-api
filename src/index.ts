@@ -24,7 +24,8 @@ import type z from '@deepseek-ai/schemastery'
 import { ProtocomAdapter } from './adapter.ts'
 import { BalanceService, balanceFetchHandler } from './balance.ts'
 import { GoUsageService, goUsageFetchHandler } from './go-usage.ts'
-import { FusionSection, GoSection, OPENCODE_GO, PROTOCOM, ProtocomSection, resolveAdapterOptions } from './config.ts'
+import { CommandCodeSection, FusionSection, GoSection, OPENCODE_GO, PROTOCOM, ProtocomSection, resolveAdapterOptions } from './config.ts'
+import { COMMANDCODE } from './commandcode.ts'
 import type { Config, ResolvedGroup, ResolvedProtocomOptions, SectionConfig } from './config.ts'
 import { mountFusion } from './fusion-host.ts'
 import type { ProviderFamily } from './family.ts'
@@ -373,8 +374,10 @@ function protocomTelemetry(hooks: TelemetryHooks): FamilyTelemetry {
       ctx.inject(['connection'], (connectionCtx) => {
         const connection = Reflect.get(connectionCtx, 'connection') as HostConnection | undefined
         if (connection === undefined) return
+        const path = PROTOCOM.telemetryPath
+        if (path === undefined) return
         connectionCtx.effect(() => connection.fetch.register({
-          path: PROTOCOM.telemetryPath,
+          path,
           methods: ['GET'],
           requestBody: 'buffered',
           fetch: balanceFetchHandler(balance, {
@@ -397,8 +400,10 @@ function goTelemetry(hooks: TelemetryHooks): FamilyTelemetry {
       ctx.inject(['connection'], (connectionCtx) => {
         const connection = Reflect.get(connectionCtx, 'connection') as HostConnection | undefined
         if (connection === undefined) return
+        const path = OPENCODE_GO.telemetryPath
+        if (path === undefined) return
         connectionCtx.effect(() => connection.fetch.register({
-          path: OPENCODE_GO.telemetryPath,
+          path,
           methods: ['GET'],
           requestBody: 'buffered',
           fetch: goUsageFetchHandler(usage, {
@@ -412,12 +417,21 @@ function goTelemetry(hooks: TelemetryHooks): FamilyTelemetry {
   }
 }
 
+/** A family with no account surface: nothing to invalidate, nothing to mount. */
+function noTelemetry(): FamilyTelemetry {
+  return { invalidate: () => {}, mount: () => {} }
+}
+
 export function apply(ctx: Context, config: Config): void {
-  const { opencode, fusion, ...protocom } = config
+  const { opencode, commandcode, fusion, ...protocom } = config
   mountFamily(ctx, PROTOCOM, ProtocomSection, protocom, protocomTelemetry)
   // The Go section is optional in yml; absent it resolves to the family's own
   // defaults (all-disabled single group waiting on a key).
   mountFamily(ctx, OPENCODE_GO, GoSection, opencode ?? GoSection({}), goTelemetry)
+  // Command Code ships no account surface: its alpha endpoints exist but their
+  // response shape was never observed here, and this plugin renders only what a
+  // request confirmed.
+  mountFamily(ctx, COMMANDCODE, CommandCodeSection, commandcode ?? CommandCodeSection({}), noTelemetry)
   // Fusion is a routing layer over the routes the two families above register,
   // so it mounts last: with neither family active it simply pins nothing.
   mountFusion(ctx, fusion ?? FusionSection({}))

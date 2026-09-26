@@ -69,6 +69,13 @@ export declare class ProtocomAdapter extends LlmAdapter {
     private readonly config;
     private readonly listings;
     /**
+     * The last successfully resolved listing per group. Dispatch reads it to see
+     * which endpoints the gateway declared for a model, so protocol selection
+     * costs no network round trip; {@link invalidateListings} drops it with the
+     * promise cache so the two can never disagree.
+     */
+    private readonly resolved;
+    /**
      * Stable per-adapter session id for calls that arrive without
      * `GenerateOptions.sessionId`. The OpenCode Go endpoint answers 400
      * `MissingSessionID` without one, so non-conversational traffic (title
@@ -83,6 +90,13 @@ export declare class ProtocomAdapter extends LlmAdapter {
     providerRetryPolicy(_provider: string): ResolvedRetryPolicy;
     /** The enabled group behind one route; every dispatch path starts here. */
     private groupFor;
+    /**
+     * The endpoints the gateway itself declared for one model, when the last
+     * listing is still cached. Serving from the cache keeps dispatch free of a
+     * network round trip on the hot path; a cold cache simply falls back to the
+     * group's protocol, which is what every family did before this existed.
+     */
+    private declaredEndpoints;
     /** One group's live model listing, cached briefly; failures are not cached. */
     private upstreamModels;
     /** Forget cached listings so a configuration change re-interrogates. */

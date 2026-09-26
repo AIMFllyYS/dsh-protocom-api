@@ -29,6 +29,30 @@ export interface RegistryPricing {
     output: number;
     cacheRead?: number;
 }
+/**
+ * The wire protocol a gateway-declared endpoint list implies, or undefined when
+ * the list names none this plugin can speak.
+ *
+ * Preference order is chat-completions, then responses, then messages: a model
+ * offered on several surfaces is served on the first one this plugin has the
+ * richest, best-tested support for, and only a model that declares NO OpenAI
+ * surface falls through to the Anthropic wire.
+ * @param endpoints - the gateway's own `supported_endpoints` list.
+ * @returns the protocol to use, or undefined when nothing here can serve it.
+ */
+export declare function protocolForEndpoints(endpoints: readonly string[] | undefined): Protocol | undefined;
+/**
+ * Whether a model is servable at all on the endpoint's own declared surfaces.
+ *
+ * This is the honesty gate for a family whose gateway publishes
+ * `supported_endpoints`: a model advertising only a wire this plugin does not
+ * implement is EXCLUDED rather than listed. Listing it would be worse than
+ * useless — every call fails with a 400 that looks like a plugin bug rather
+ * than a missing capability.
+ * @param model - the upstream row, endpoints included.
+ * @returns whether at least one declared endpoint maps to a supported wire.
+ */
+export declare function servesDeclaredEndpoints(model: UpstreamModel): boolean;
 /** One known model: how to recognize it and what to say about it. */
 export interface RegistryEntry {
     /** Exact upstream model id. */
@@ -181,6 +205,15 @@ export interface UpstreamModel {
     /** Gateway capability flags some listings disclose. */
     supportsReasoningEffort?: boolean;
     reasoningEfforts?: string[];
+    /**
+     * Endpoint paths this model is served on, as the GATEWAY itself declares them
+     * (Command Code publishes this on every listing row). This is the routing
+     * truth rather than a hint: a model advertising only `/messages` answers 400
+     * on `/chat/completions`, so id-prefix guessing would produce a guaranteed
+     * failure for every call. Absent means the endpoint said nothing, and the
+     * group's own protocol stands.
+     */
+    endpoints?: readonly string[];
 }
 /** One catalog model after registry projection, before variant expansion. */
 export interface CatalogModel {

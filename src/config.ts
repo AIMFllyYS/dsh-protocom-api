@@ -14,6 +14,7 @@ import type { CredentialRef } from '@deepseek-ai/dsh-credentials'
 import { DEFAULT_BASE_URL } from './groups.ts'
 import { DEFAULT_RECOMMENDED, GO_DEFAULT_RECOMMENDED, identityKey } from './model-registry.ts'
 import { GO_DEFAULT_BASE_URL, PROTOCOM } from './family.ts'
+import { COMMANDCODE_BASE_URL, COMMANDCODE_RECOMMENDED } from './commandcode.ts'
 import { MAX_KEYS_PER_GROUP } from './key-pool.ts'
 import type { KeyPolicy } from './key-pool.ts'
 import type { FamilyGroupDefaults, ProviderFamily } from './family.ts'
@@ -201,6 +202,8 @@ export interface SectionConfig {
 export interface Config extends SectionConfig {
   /** OpenCode Go family profile; same section shape under its own namespace. */
   opencode?: SectionConfig
+  /** Command Code family profile; same section shape under its own namespace. */
+  commandcode?: SectionConfig
   /** Fusion dual-model routing profile; the same shape as its own settings section. */
   fusion?: FusionConfig
 }
@@ -208,7 +211,7 @@ export interface Config extends SectionConfig {
 const group: z<GroupConfig> = z.object({
   enabled: z.boolean().default(false),
   apiKey: z.string().role('credential-ref'),
-  protocol: z.union(['chat-completions', 'responses']),
+  protocol: z.union(['chat-completions', 'responses', 'messages']),
   contextLengths: z.array(z.number().step(1).min(1)),
   showBalance: z.boolean().default(true),
   replayReasoning: z.boolean().default(false),
@@ -245,6 +248,9 @@ export const ProtocomSection: z<SectionConfig> = sectionSchema(DEFAULT_BASE_URL,
 
 /** Settings-section schema for the `opencode-go` namespace. */
 export const GoSection: z<SectionConfig> = sectionSchema(GO_DEFAULT_BASE_URL, GO_DEFAULT_RECOMMENDED)
+
+/** Settings-section schema for the `commandcode` namespace. */
+export const CommandCodeSection: z<SectionConfig> = sectionSchema(COMMANDCODE_BASE_URL, COMMANDCODE_RECOMMENDED)
 
 /**
  * One Fusion seat. No field carries a schema default: Schemastery normalizes
@@ -283,6 +289,7 @@ export const Config: z<Config> = z.object({
   modelContexts: z.dict(z.array(z.number().step(1).min(1))).default({}),
   visionModels: z.dict(z.boolean()).default({}),
   opencode: GoSection,
+  commandcode: CommandCodeSection,
   fusion: FusionSection,
 })
 

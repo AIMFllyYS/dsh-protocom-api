@@ -165,6 +165,8 @@ export interface SectionConfig {
 export interface Config extends SectionConfig {
     /** OpenCode Go family profile; same section shape under its own namespace. */
     opencode?: SectionConfig;
+    /** Command Code family profile; same section shape under its own namespace. */
+    commandcode?: SectionConfig;
     /** Fusion dual-model routing profile; the same shape as its own settings section. */
     fusion?: FusionConfig;
 }
@@ -172,6 +174,8 @@ export interface Config extends SectionConfig {
 export declare const ProtocomSection: z<SectionConfig>;
 /** Settings-section schema for the `opencode-go` namespace. */
 export declare const GoSection: z<SectionConfig>;
+/** Settings-section schema for the `commandcode` namespace. */
+export declare const CommandCodeSection: z<SectionConfig>;
 /**
  * Settings-section schema for the `model-fusion` namespace, and the shape of
  * the plugin's own `fusion` config slice. Only `enabled` defaults here; the

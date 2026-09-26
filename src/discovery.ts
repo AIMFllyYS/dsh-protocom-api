@@ -40,6 +40,9 @@ interface ListingEntry {
   supports_reasoning_effort?: unknown
   reasoningEfforts?: unknown
   reasoning_efforts?: unknown
+  /** Command Code publishes this on every row; see {@link UpstreamModel.endpoints}. */
+  supported_endpoints?: unknown
+  supportedEndpoints?: unknown
 }
 
 /** One string bound to {@link MAX_TEXT_LENGTH}. */
@@ -103,6 +106,9 @@ export function parseModelsListing(body: unknown): UpstreamModel[] {
     const maxTokens = capacity(entry.max_output_tokens, entry.max_tokens)
     const reasoningEfforts = strings(entry.reasoningEfforts) ?? strings(entry.reasoning_efforts)
     const supports = entry.supportsReasoningEffort === true || entry.supports_reasoning_effort === true
+    // Only strings are kept, and each is bounded like every other upstream text:
+    // a hostile listing must not push a large payload into the catalog.
+    const endpoints = strings(entry.supported_endpoints) ?? strings(entry.supportedEndpoints)
     models.push({
       id,
       ...displayName === undefined ? {} : { displayName },
@@ -110,6 +116,7 @@ export function parseModelsListing(body: unknown): UpstreamModel[] {
       ...maxTokens === undefined ? {} : { maxTokens },
       ...supports ? { supportsReasoningEffort: true } : {},
       ...reasoningEfforts === undefined ? {} : { reasoningEfforts },
+      ...endpoints === undefined ? {} : { endpoints },
     })
   }
   return models

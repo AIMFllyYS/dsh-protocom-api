@@ -5,8 +5,15 @@
  *
  * @module dsh-protocom-api/groups
  */
-/** Wire protocol a group's models speak. */
-export type Protocol = 'chat-completions' | 'responses';
+/**
+ * Wire protocol a group's models speak.
+ *
+ * `messages` is the Anthropic Messages wire. It exists because some gateways
+ * serve a model on that surface ONLY — Command Code's Claude models declare
+ * `/messages` alone and answer 400 if asked on chat-completions — so a family
+ * whose registry cannot name this wire would be unable to serve them at all.
+ */
+export type Protocol = 'chat-completions' | 'responses' | 'messages';
 /** Protocom official API endpoint base. */
 export declare const DEFAULT_BASE_URL = "https://relay.protocom.org";
 /** 1M-token context, the ceiling most current flagships publish. */

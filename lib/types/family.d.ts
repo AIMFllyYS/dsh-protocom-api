@@ -8,12 +8,12 @@
  *
  * @module dsh-protocom-api/family
  */
-import type { GroupReasoning } from './groups.ts';
+import type { GroupReasoning, Protocol } from './groups.ts';
 import type { RegistryEntry } from './model-registry.ts';
 /** Per-group shipped defaults of one family. */
 export interface FamilyGroupDefaults {
     displayName: string;
-    protocol: 'chat-completions' | 'responses';
+    protocol: Protocol;
     reasoning?: GroupReasoning;
     contextLengths?: readonly number[];
 }
@@ -69,10 +69,18 @@ export interface ProviderFamily {
      * model routes.
      */
     chatThinking?: 'toggle' | 'effort-only';
-    /** The fenced Fetch route this family's account surface registers. */
-    telemetryPath: string;
+    /**
+     * The fenced Fetch route this family's account surface registers, or
+     * undefined when the family ships no account surface.
+     *
+     * Absent is the honest state for a family whose credential-less endpoints
+     * cannot be exercised: mounting a route would mean guessing a response shape
+     * no request confirmed, and a wrong guess renders as a broken panel rather
+     * than as "not supported here".
+     */
+    telemetryPath?: string;
     /** What that route answers: currency balance (Protocom) or quota windows (Go). */
-    telemetryKind: 'balance' | 'quota';
+    telemetryKind?: 'balance' | 'quota';
 }
 /** The Protocom official API family: the four original group routes. */
 export declare const PROTOCOM: ProviderFamily;

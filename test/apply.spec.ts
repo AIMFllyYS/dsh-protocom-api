@@ -94,11 +94,12 @@ describe('plugin assembly (P0-1)', () => {
     expect(webRoutes).toEqual([])
   })
 
-  it('mounts the Fusion section and its global request rule', () => {
+  it('mounts every family and the Fusion request rule', () => {
     const { ctx, sections, listeners } = fakeContext()
     apply(ctx, config)
-    // Both families plus Fusion install their own namespace.
-    expect(sections).toEqual(['protocom-api', 'opencode-go', 'model-fusion'])
+    // Each provider family installs its own namespace, then Fusion; the order
+    // is the mount order in apply().
+    expect(sections).toEqual(['protocom-api', 'opencode-go', 'commandcode', 'model-fusion'])
     // The rule only works from a global, outermost listener: a subagent's agent
     // scope is below whatever scope this plugin mounts in.
     expect(listeners).toEqual([{ name: 'agent/request', options: { global: true, prepend: true } }])

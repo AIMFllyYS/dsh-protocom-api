@@ -12,6 +12,7 @@ import type {} from '@deepseek-ai/dsh-client-ui-settings/client'
 import type {} from '@deepseek-ai/dsh-client-locale/client'
 import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
 import type {} from '@deepseek-ai/dsh-api-remotes/client'
+import { COMMANDCODE } from '../commandcode.ts'
 import { OPENCODE_GO, PROTOCOM } from '../family.ts'
 import { FUSION_NS } from '../fusion.ts'
 import { ProtocomSection } from './ProtocomSection.tsx'
@@ -57,7 +58,11 @@ export function apply(ctx: ClientContext): void {
   ctx.effect(() => ctx.locale.register(NS, { zh, en }))
 
   const t = ctx.locale.bind(NS)
-  const injectedFor = (family: ProtocomInjected['family'], titleKey: 'title' | 'titleGo', introKey: 'intro' | 'introGo') =>
+  const injectedFor = (
+    family: ProtocomInjected['family'],
+    titleKey: 'title' | 'titleGo' | 'titleCommandCode',
+    introKey: 'intro' | 'introGo' | 'introCommandCode',
+  ) =>
     (): ProtocomInjected => ({
       operations: createProtocomOperations(ctx, family.ns),
       t,
@@ -108,6 +113,13 @@ export function apply(ctx: ClientContext): void {
       label: () => t('navGo'),
       inject: injectedFor(OPENCODE_GO, 'titleGo', 'introGo'),
     }, ProtocomSection)
+    const commandcode = ctx.slots.register({
+      name: 'settings.section',
+      id: COMMANDCODE.ns,
+      order: 23,
+      label: () => t('navCommandCode'),
+      inject: injectedFor(COMMANDCODE, 'titleCommandCode', 'introCommandCode'),
+    }, ProtocomSection)
     // Fusion additionally needs the Host catalog and the settings scope. They
     // are probed rather than declared in the plugin's own `inject`, so their
     // absence removes only this one section instead of deactivating the client
@@ -121,6 +133,6 @@ export function apply(ctx: ClientContext): void {
         inject: fusionInjected,
       }, FusionSection)
       : () => {}
-    return () => { protocom(); go(); fusion() }
+    return () => { protocom(); go(); commandcode(); fusion() }
   })
 }

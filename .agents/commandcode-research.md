@@ -74,8 +74,43 @@ excluded by the reference as `unknown-tier`.
 3. Our discovery reads `id`/`display_name`; it must additionally read
    `context_length` and `supported_endpoints` for this family.
 
-## Open questions for live verification
+## LIVE VERIFICATION (2026-09-23, this machine, no valid key)
 
-- Exact spelling of the model rows (`context_length` vs `contextWindow`).
-- Whether `/alpha/*` needs any header beyond the bearer token.
-- Whether `supported_endpoints` is present on every row or only new ones.
+Probed directly with `curl`:
+
+| URL | Result |
+| --- | --- |
+| `GET /provider/v1/models` | **200** — public, no key required |
+| `GET /alpha/whoami` | **401** with a bogus bearer — route exists, key required |
+| `GET /provider/v1/nonexistent` | **404** |
+
+The live listing was downloaded (snapshot: `commandcode-models-2026-09-23.json`,
+82 rows, 16 KB). CONFIRMED facts, replacing the second-hand notes above:
+
+- Top level is `{ object, data: [...] }` — the same `data` array our discovery
+  already reads.
+- Row fields are exactly: `id`, `object`, `created`, `owned_by`, `name`,
+  `context_length`, `supported_endpoints`. Note `name` (not `display_name`)
+  and `context_length` — **both already handled** by our discovery parser.
+- `supported_endpoints` is present on EVERY row and takes exactly three shapes:
+
+  | Shape | Count | Meaning |
+  | --- | --- | --- |
+  | `["/chat/completions", "/responses"]` | 65 | either OpenAI wire works |
+  | `["/chat/completions"]` | 8 | chat-completions only |
+  | `["/messages"]` | 9 | **Anthropic wire only** (all 9 are Claude) |
+
+- Coverage with our current two wires: **73 of 82 models**, no protocol work
+  needed. The 9 unreachable ones are exactly `claude-*`:
+  sonnet-5, sonnet-4-6, fable-5-1, fable-5, opus-5-5, opus-5, opus-4-8,
+  opus-4-7, haiku-4-5-20251001.
+- `context_length` values seen: 200000, 256000, 262000, 262144, 400000,
+  500000, 1000000, 1048576, 1050000.
+
+### Decision this drives
+
+Ship the family now with the two existing wires plus **per-model routing driven
+by `supported_endpoints`**, so 73 models work immediately. The 9 Claude models
+are excluded by the endpoint filter until an Anthropic wire exists — excluding
+them is honest; advertising them on chat-completions would produce a guaranteed
+400 for every call.

@@ -39,6 +39,7 @@ import { retryPolicyFor } from './retry.ts'
 import {
   acceptsImages,
   displayNameWithContext,
+  protocolForEndpoints,
   FALLBACK_CONTEXT_WINDOW,
   groupCatalog,
   identityKey,
@@ -185,6 +186,13 @@ function reasoningInfo(reasoning: RegistryReasoning): LlmModelReasoningInfo {
 /** One adapter serving every enabled route of one provider family. */
 export class ProtocomAdapter extends LlmAdapter {
   private readonly listings = new Map<string, { at: number; value: Promise<UpstreamModel[]> }>()
+  /**
+   * The last successfully resolved listing per group. Dispatch reads it to see
+   * which endpoints the gateway declared for a model, so protocol selection
+   * costs no network round trip; {@link invalidateListings} drops it with the
+   * promise cache so the two can never disagree.
+   */
+  private readonly resolved = new Map<string, readonly UpstreamModel[]>()
 
   /**
    * Stable per-adapter session id for calls that arrive without
@@ -229,6 +237,18 @@ export class ProtocomAdapter extends LlmAdapter {
     return group
   }
 
+  /**
+   * The endpoints the gateway itself declared for one model, when the last
+   * listing is still cached. Serving from the cache keeps dispatch free of a
+   * network round trip on the hot path; a cold cache simply falls back to the
+   * group's protocol, which is what every family did before this existed.
+   */
+  private declaredEndpoints(group: ResolvedGroup, model: string): readonly string[] | undefined {
+    const cached = this.resolved.get(group.key)
+    if (cached === undefined) return undefined
+    return cached.find(row => row.id === model)?.endpoints
+  }
+
   /** One group's live model listing, cached briefly; failures are not cached. */
   private upstreamModels(group: ResolvedGroup, signal?: AbortSignal): Promise<UpstreamModel[]> {
     const hit = this.listings.get(group.key)
@@ -238,8 +258,15 @@ export class ProtocomAdapter extends LlmAdapter {
     // key; nothing here is cacheable against a Session.
     const value = this.config.resolveApiKey(group)
       .then(apiKey => fetchUpstreamModels(baseURL, apiKey, signal))
-    value.catch(() => {
-      if (this.listings.get(group.key)?.value === value) this.listings.delete(group.key)
+    value.then((rows) => {
+      // A resolved listing also feeds the dispatch hot path, which must pick a
+      // wire protocol without a network round trip.
+      if (this.listings.get(group.key)?.value === value) this.resolved.set(group.key, rows)
+    }).catch(() => {
+      if (this.listings.get(group.key)?.value === value) {
+        this.listings.delete(group.key)
+        this.resolved.delete(group.key)
+      }
     })
     this.listings.set(group.key, { at: Date.now(), value })
     return value
@@ -248,6 +275,7 @@ export class ProtocomAdapter extends LlmAdapter {
   /** Forget cached listings so a configuration change re-interrogates. */
   invalidateListings(): void {
     this.listings.clear()
+    this.resolved.clear()
   }
 
   /**
@@ -506,7 +534,25 @@ export class ProtocomAdapter extends LlmAdapter {
     // gpt-5.6-luna answer only on /responses).
     const family = this.family()
     const entry = matchRegistry(model, family.registry)
-    const protocol = entry?.protocol ?? group.protocol
+    // Precedence: a registry-declared protocol (hand-verified per model), then
+    // the GATEWAY's own endpoint declaration (authoritative for a family whose
+    // listing publishes it), then the group's configured default.
+    const protocol = entry?.protocol
+      ?? protocolForEndpoints(this.declaredEndpoints(group, model))
+      ?? group.protocol
+    if (protocol === 'messages') {
+      // Refused loudly rather than silently rerouted. A model that declares
+      // ONLY /messages cannot be served on the OpenAI wire — the gateway
+      // answers 400 — so falling back would replace a clear diagnosis with an
+      // upstream error that looks like a plugin defect. The catalog filter
+      // already hides these models, so reaching here means a request named one
+      // directly.
+      throw new LlmError(
+        `${family.label} model "${model}" is served only on the Anthropic Messages wire, which this plugin does not implement yet;`
+        + ' pick a model served on chat-completions or responses',
+        'NO_ADAPTER',
+      )
+    }
     return protocol === 'responses'
       ? streamResponses(connection, projected, model, images)
       : streamChatCompletions(connection, projected, model, images, {

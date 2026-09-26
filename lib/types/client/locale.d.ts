@@ -35,6 +35,7 @@ export declare const en: {
     groupStepfun: string;
     groupGrok: string;
     groupGo: string;
+    groupCc: string;
     enabled: string;
     protocol: string;
     apiKey: string;
@@ -103,6 +104,9 @@ export declare const en: {
     quotaResets: string;
     quotaRateLimited: string;
     none: string;
+    navCommandCode: string;
+    titleCommandCode: string;
+    introCommandCode: string;
     navFusion: string;
     titleFusion: string;
     introFusion: string;

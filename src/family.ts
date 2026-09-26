@@ -11,13 +11,14 @@
 
 import { DEFAULT_BASE_URL, DEFAULT_BASE_URL_ORIGIN, defaultKeyRef, GROUP_DEFAULTS, GROUP_KEYS, groupOf, providerOf } from './groups.ts'
 import { GO_DEFAULT_RECOMMENDED, GO_REFUSED_MODEL_IDS, GO_REGISTRY, DEFAULT_RECOMMENDED, REFUSED_CHAT_MODEL_IDS, REGISTRY } from './model-registry.ts'
-import type { GroupReasoning } from './groups.ts'
+import type { GroupReasoning, Protocol } from './groups.ts'
+import { COMMANDCODE } from './commandcode.ts'
 import type { RegistryEntry } from './model-registry.ts'
 
 /** Per-group shipped defaults of one family. */
 export interface FamilyGroupDefaults {
   displayName: string
-  protocol: 'chat-completions' | 'responses'
+  protocol: Protocol
   reasoning?: GroupReasoning
   contextLengths?: readonly number[]
 }
@@ -74,10 +75,18 @@ export interface ProviderFamily {
    * model routes.
    */
   chatThinking?: 'toggle' | 'effort-only'
-  /** The fenced Fetch route this family's account surface registers. */
-  telemetryPath: string
+  /**
+   * The fenced Fetch route this family's account surface registers, or
+   * undefined when the family ships no account surface.
+   *
+   * Absent is the honest state for a family whose credential-less endpoints
+   * cannot be exercised: mounting a route would mean guessing a response shape
+   * no request confirmed, and a wrong guess renders as a broken panel rather
+   * than as "not supported here".
+   */
+  telemetryPath?: string
   /** What that route answers: currency balance (Protocom) or quota windows (Go). */
-  telemetryKind: 'balance' | 'quota'
+  telemetryKind?: 'balance' | 'quota'
 }
 
 /** The Protocom official API family: the four original group routes. */
@@ -154,4 +163,4 @@ export const OPENCODE_GO: ProviderFamily = {
 }
 
 /** Every family this plugin mounts. */
-export const FAMILIES: readonly ProviderFamily[] = [PROTOCOM, OPENCODE_GO]
+export const FAMILIES: readonly ProviderFamily[] = [PROTOCOM, OPENCODE_GO, COMMANDCODE]

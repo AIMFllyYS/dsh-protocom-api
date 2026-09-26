@@ -59,11 +59,14 @@ function fakeClientContext(hasFusionServices = true): {
 }
 
 describe('client assembly (T5)', () => {
-  it('registers all three settings sections in order', () => {
+  it('registers every settings section in order', () => {
     const { ctx, sections } = fakeClientContext()
     apply(ctx)
-    expect(sections.map(section => section.id)).toEqual(['protocom-api', 'opencode-go', 'model-fusion'])
-    expect(sections.map(section => section.order)).toEqual([20, 21, 22])
+    expect(sections.map(section => section.id))
+      .toEqual(['protocom-api', 'opencode-go', 'commandcode', 'model-fusion'])
+    // Command Code sits after the two original panels and before Fusion, which
+    // keeps the routing feature last on the page.
+    expect(sections.map(section => section.order)).toEqual([20, 21, 23, 22])
     expect(ctx.effect).toBeTypeOf('function')
   })
 
@@ -78,6 +81,6 @@ describe('client assembly (T5)', () => {
     // the provider panels do not depend on it.
     const { ctx, sections } = fakeClientContext(false)
     expect(() => apply(ctx)).not.toThrow()
-    expect(sections.map(section => section.id)).toEqual(['protocom-api', 'opencode-go'])
+    expect(sections.map(section => section.id)).toEqual(['protocom-api', 'opencode-go', 'commandcode'])
   })
 })
