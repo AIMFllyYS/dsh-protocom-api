@@ -82,6 +82,7 @@ export const COMMANDCODE_RECOMMENDED: readonly string[] = []
  */
 export const COMMANDCODE: ProviderFamily = {
   ns: 'commandcode',
+  sectionKey: 'commandcode',
   label: 'Command Code',
   baseURL: COMMANDCODE_BASE_URL,
   origin: COMMANDCODE_BASE_URL_ORIGIN,

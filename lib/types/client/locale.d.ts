@@ -96,6 +96,7 @@ export declare const en: {
     refreshing: string;
     loading: string;
     loadFailed: string;
+    entryUnavailable: string;
     balanceUnavailable: string;
     retry: string;
     remaining: string;

@@ -2,6 +2,39 @@
 
 All notable changes to `dsh-protocom-api` are documented here.
 
+## [1.0.1] — 修复：设置面板读错了配置根
+
+1.0.0 把 Host 侧迁到了 1.7 的单 `Config`，但**客户端只有 Fusion 那一块跟着改了**。三个供应商面板仍在按旧模型寻址，于是四种功能全坏——只是坏得不一样：
+
+| 面板 | 症状 | 原因 |
+| --- | --- | --- |
+| OpenCode Go / Command Code | **加载失败：settings namespace unavailable** | 它们的命名空间（`opencode-go` / `commandcode`）在 1.7 下**不再是 entry**，只有插件行 id `protocom-api` 是 |
+| Protocom | 看起来正常，但**已配置且已启用的分组显示为关闭** | 读到了整个 Config 根，`value.groups` 不存在，于是所有字段落到默认值 |
+| （写入） | 勾选开关无反应 | 未加前缀的路径（`groups.…`）在共享 entry 里**不是 volatile 字段**，被宿主拒绝 |
+
+Fusion 当时改对了，所以那一个面板是好的——这也正是这个 bug 容易被漏掉的原因：**没有任何一处报错，只是「看起来装好了却没生效」**。
+
+### 改法
+
+读写全部收敛到 `operations.ts` 这一个边界：
+
+- 三个面板与 Fusion 一样寻址同**一个 entry**（`protocom-api`），以各自的分节名作为路径根；
+- `describeSettings` 把整个 Config **投影出本分节**再交给面板，所以面板契约（`value` 就是自己那一节）不变；
+- 面板内部仍用**分节相对路径**，1.7 的嵌套只存在于这一个地方；
+- **模型发现保持用 family key**（`opencode-go` 等）——发现键在宿主上是独立的一张表，四个族若都改用 entry id 会撞成 `DUPLICATE_DISCOVERY`。
+
+### 诊断信息
+
+「settings namespace unavailable」是硬编码英文，且没说清缺的是什么。现在改为本地化，并**点名缺失的 entry**：
+
+> 加载失败：宿主没有提供本插件的设置项 (protocom-api)
+
+### 回归防护
+
+新增 5 个用例钉住这个边界，两种失败模式各覆盖一次：投影出分节、路径加前缀、凭证写入也加前缀、发现仍用 family key、Protocom 与 Go 共用同一 entry 各自取到自己的分节。
+
+**427 个测试通过。**
+
 ## [1.0.0] — DSH 1.7 兼容（破坏性）
 
 **本版本要求 DSH ≥ 0.1.7-rc.2，不再支持 0.1.6 及以前。** 1.7 重写了设置子系统，旧接口已被删除，因此不存在同时兼容两代的写法。

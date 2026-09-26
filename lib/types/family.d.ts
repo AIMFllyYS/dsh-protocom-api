@@ -28,6 +28,15 @@ export interface ProviderFamily {
      * error-message prefix, matching the plugin's existing `protocom-api:` style.
      */
     ns: string;
+    /**
+     * Which field of the plugin's single Config this family lives in.
+     *
+     * DSH 1.7 gives a plugin one Config keyed by its Loader entry, so the four
+     * families cannot each own a settings namespace any more. `ns` stays as the
+     * family's own key — it names the model-discovery registration and the log
+     * lines — while this names the section a settings read or write must address.
+     */
+    sectionKey: string;
     /** Human-readable family name for transport error messages. */
     label: string;
     /** Endpoint root this family ships with. */

@@ -64,7 +64,7 @@ export function apply(ctx: ClientContext): void {
     introKey: 'intro' | 'introGo' | 'introCommandCode',
   ) =>
     (): ProtocomInjected => ({
-      operations: createProtocomOperations(ctx, family.ns),
+      operations: createProtocomOperations(ctx, family),
       t,
       family,
       copy: { title: t(titleKey), intro: t(introKey) },

@@ -39,6 +39,7 @@ import {
   servesChat,
 } from '../model-registry.ts'
 import type { GroupCatalogModel, UpstreamModel } from '../model-registry.ts'
+import { PROTOCOM_ENTRY_ID } from './operations.ts'
 import type { ProtocomOperations } from './operations.ts'
 import type { en } from './locale.ts'
 
@@ -916,7 +917,14 @@ function Loaded({ operations, t, family, copy }: {
   const load = async (): Promise<void> => {
     const view = await operations.describeSettings()
     if (view === undefined) {
-      setState({ phase: 'error', credentials: {}, error: 'settings namespace unavailable' })
+      // Name the entry: the actionable fact is WHICH row is missing, because a
+      // row that is not being served is a deployment problem the operator can
+      // see and fix, not a transient load failure to retry blindly.
+      setState({
+        phase: 'error',
+        credentials: {},
+        error: `${t('entryUnavailable')} (${PROTOCOM_ENTRY_ID})`,
+      })
       return
     }
     const credentials = await operations.describeCredentials(family.keys.map(key => family.keyRef(key)))

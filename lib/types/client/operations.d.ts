@@ -44,14 +44,35 @@ export interface ProtocomOperations {
     /** Ask one group's endpoint what models it serves. */
     discoverModels(request: LlmModelDiscoveryRequest): Promise<ModelDiscoveryOutcome>;
 }
-/** The settings namespace the Protocom family owns (`'opencode-go'` is the Go family's). */
-export declare const SETTINGS_NS = "protocom-api";
 /**
- * Bind one section's Host operations to the plugin's own Remote namespaces.
+ * The Loader entry id this plugin's settings form is keyed by; mirrors
+ * `PROTOCOM_NS` on the Host and the `id` in `cordis.patch.yml`.
+ *
+ * Every family addresses this ONE entry. 1.7 keys a form by profile row, and a
+ * plugin has exactly one Config, so the four sections cannot each own a
+ * namespace — a family that still asked for `'opencode-go'` would be told
+ * `settings namespace unavailable`, and one that wrote an unrooted path into
+ * the shared entry would be refused for addressing a non-volatile field.
+ */
+export declare const PROTOCOM_ENTRY_ID = "protocom-api";
+/** The family facts a settings read or write needs. */
+export interface OperationsScope {
+    /** Model-discovery registration key; the family's own key space. */
+    readonly ns: string;
+    /** Field of the shared Config this family occupies. */
+    readonly sectionKey: string;
+}
+/**
+ * Bind one section's Host operations to the plugin's Remote surface.
+ *
+ * Reads and writes go to the single Loader entry, with the family's
+ * `sectionKey` as the path root; model discovery keeps using `ns`, because
+ * discovery keys live in their own map and are registered per family. The
+ * section component above this boundary keeps working in section-relative
+ * paths, so the 1.7 nesting stays in exactly one place.
  * @param ctx - the plugin's context, which declares `remote.credentials`,
  * `remote.llm`, and `remote.settings` in its own `inject`.
- * @param settingsNs - the family's settings namespace: every read, write, and
- * discovery request is scoped to it, so the two families' sections never
- * share state.
+ * @param scope - the family's discovery key and Config section.
+ * @returns the operations one provider section invokes.
  */
-export declare function createProtocomOperations(ctx: ClientContext, settingsNs?: string): ProtocomOperations;
+export declare function createProtocomOperations(ctx: ClientContext, scope?: OperationsScope): ProtocomOperations;
