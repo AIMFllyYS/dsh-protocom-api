@@ -32,6 +32,12 @@ export interface ProtocolConnection {
    * session scoping.
    */
   headers?: Record<string, string>
+  /**
+   * Largest `Retry-After` this request may forward, in milliseconds. The caller
+   * passes the consuming retry policy's own `maxDelayMs`; absent means the
+   * shipped default, which keeps hand-built connections honest.
+   */
+  retryAfterCeilingMs?: number
 }
 
 /** One parsed provider error body. */
@@ -54,23 +60,31 @@ export function httpErrorCode(status: number): string {
 }
 
 /**
- * Largest provider-supplied `Retry-After` this adapter forwards. The harness
- * retry layer treats `providerRetryAfterMs > maxDelayMs` (default 10s) as
- * "cancel this retry" in normal mode, so an unbounded upstream value silently
- * removed the client's retry chance; a large one under a raised `maxDelayMs`
- * would instead park the request for days. Capping at that same default keeps
- * the value inside the policy that consumes it and bounds the wait.
+ * Retry-After ceiling a connection that names none falls back to. Chosen to
+ * match the retry policy's own shipped default so a hand-built connection (the
+ * tests, a probe) behaves exactly like a configured deployment at its defaults.
  */
-export const MAX_PROVIDER_RETRY_AFTER_MS = 10_000
+export const DEFAULT_RETRY_AFTER_CEILING_MS = 10_000
 
-function providerRetryAfterMs(value: string | null): number | undefined {
+/**
+ * Clamp one provider-supplied `Retry-After` into the policy that will consume
+ * it.
+ *
+ * The harness retry layer treats `providerRetryAfterMs > maxDelayMs` as
+ * "cancel this retry" in normal mode, so an unbounded upstream value silently
+ * removes the client's retry chance. The ceiling is therefore the SAME number
+ * the declared policy uses as its own `maxDelayMs`: forwarding the provider's
+ * instruction up to the deployment's configured ceiling respects it, and
+ * clamping at that ceiling keeps the executor's comparison unable to cancel.
+ * @param value - the raw `Retry-After` header, or null when absent.
+ * @param ceilingMs - the consuming policy's `maxDelayMs`.
+ * @returns the delay to forward, or undefined when there is nothing usable.
+ */
+function providerRetryAfterMs(value: string | null, ceilingMs: number): number | undefined {
   if (value === null) return undefined
-  if (/^\d+$/.test(value)) {
-    const delay = Number(value) * 1_000
-    return Number.isFinite(delay) && delay > 0 ? Math.min(delay, MAX_PROVIDER_RETRY_AFTER_MS) : undefined
-  }
-  const delay = Date.parse(value) - Date.now()
-  return Number.isFinite(delay) && delay > 0 ? Math.min(delay, MAX_PROVIDER_RETRY_AFTER_MS) : undefined
+  const seconds = /^\d+$/.test(value) ? Number(value) * 1_000 : Number.NaN
+  const delay = Number.isFinite(seconds) ? seconds : Date.parse(value) - Date.now()
+  return Number.isFinite(delay) && delay > 0 ? Math.min(delay, ceilingMs) : undefined
 }
 
 /**
@@ -121,7 +135,10 @@ export async function postSse(
   // Opt-in only (see src/capture.ts): the exact request and the upstream's own
   // explanation are what make a provider-specific rejection diagnosable.
   await captureWire({ url, status: response.status, request: serialized, response: rawResponse })
-  const delay = providerRetryAfterMs(response.headers.get('retry-after'))
+  const delay = providerRetryAfterMs(
+    response.headers.get('retry-after'),
+    connection.retryAfterCeilingMs ?? DEFAULT_RETRY_AFTER_CEILING_MS,
+  )
   const id = response.headers.get('x-request-id')
   throw new LlmError(message, httpErrorCode(response.status), {
     cause: new Error(rawResponse.length > 0 ? rawResponse : `${label} HTTP ${response.status}`),

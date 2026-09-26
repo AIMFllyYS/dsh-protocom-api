@@ -56,11 +56,18 @@ export {
   OPENCODE_GO,
   PROTOCOM,
   PROTOCOM_CREDENTIAL_REF,
+  MAX_RETRY_ATTEMPTS,
+  MAX_RETRY_DELAY_MS,
   ProtocomSection,
   providerOf,
   resolveAdapterOptions,
   resolveBaseURL,
+  RETRY_INITIAL_DELAY_MS,
+  RETRY_JITTER_RATIO,
+  RETRYABLE_FAILURE_CODES,
 } from './config.ts'
+export { retryBudgetSpanMs, retryPolicyFor } from './retry.ts'
+export type { RetryBudget, RouteRetryPolicy } from './retry.ts'
 export type {
   FamilyGroupDefaults,
   GroupConfig,

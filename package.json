@@ -1,7 +1,7 @@
 {
   "name": "dsh-protocom-api",
   "description": "Protocom official API + OpenCode Go subscription adapter for the DeepSeek Harness LLM seam",
-  "version": "0.7.0",
+  "version": "0.7.1",
   "type": "module",
   "main": "lib/index.js",
   "types": "lib/types/index.d.ts",

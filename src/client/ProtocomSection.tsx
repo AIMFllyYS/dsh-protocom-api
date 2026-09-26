@@ -16,6 +16,13 @@ import type { InjectFace } from '@deepseek-ai/dsh-client-ui-slots'
 import type { CredentialInfo, LlmDiscoveredModel, SettingsNamespaceView } from '@deepseek-ai/dsh-api-remotes/client'
 import type { ProviderFamily } from '../family.ts'
 import type { Protocol } from '../groups.ts'
+import {
+  DEFAULT_RETRY_MAX_ATTEMPTS,
+  DEFAULT_RETRY_MAX_DELAY_MS,
+  MAX_RETRY_ATTEMPTS,
+  MAX_RETRY_DELAY_MS,
+  RETRY_INITIAL_DELAY_MS,
+} from '../retry.ts'
 import { variantLengths } from '../context-variants.ts'
 import { parseBalanceView } from '../balance-view.ts'
 import type { GroupBalance } from '../balance-view.ts'
@@ -65,6 +72,8 @@ interface GroupSectionValue {
 interface SectionValue {
   baseURL?: string
   allowCustomBaseURL?: boolean
+  retryMaxAttempts?: number
+  retryMaxDelayMs?: number
   groups?: Record<string, GroupSectionValue>
   hiddenModels?: string[]
   recommendedModels?: string[]
@@ -713,6 +722,8 @@ function Loaded({ operations, t, family, copy }: {
   const [allowCustomDraft, setAllowCustomDraft] = useState<boolean | undefined>(undefined)
   const [baseBusy, setBaseBusy] = useState(false)
   const [baseNotice, setBaseNotice] = useState<{ kind: 'ok' | 'error'; text: string } | undefined>(undefined)
+  const [retryAttemptsDraft, setRetryAttemptsDraft] = useState<string | undefined>(undefined)
+  const [retryDelayDraft, setRetryDelayDraft] = useState<string | undefined>(undefined)
   const [probes, setProbes] = useState<Record<string, ProbeState>>({})
 
   const load = async (): Promise<void> => {
@@ -779,11 +790,18 @@ function Loaded({ operations, t, family, copy }: {
   const writable = revision !== undefined
   const allowCustom = allowCustomDraft ?? section.allowCustomBaseURL ?? false
 
+  /**
+   * Apply the advanced block. The retry budget shares this control, so it must
+   * work when the operator changed only a number and never touched the endpoint:
+   * the effective base URL is the draft when there is one, the stored value
+   * otherwise, and the shipped default as the last resort.
+   */
   const applyBaseURL = (): void => {
-    if (baseDraft === undefined || baseBusy) return
+    if (baseBusy) return
+    const nextBaseURL = baseDraft ?? baseURL ?? family.baseURL
     let origin: string | undefined
     try {
-      origin = new URL(baseDraft).origin
+      origin = new URL(nextBaseURL).origin
     } catch {
       origin = undefined
     }
@@ -792,20 +810,37 @@ function Loaded({ operations, t, family, copy }: {
       setBaseNotice({ kind: 'error', text: t('allowCustomRequired') })
       return
     }
+    // The retry budget shares this button, so both numbers are validated before
+    // anything is written: a rejected attempt count must not leave a new base
+    // URL — or a new wait — half-applied.
+    const attempts = Number(retryAttemptsDraft ?? retryMaxAttempts)
+    const delay = Number(retryDelayDraft ?? retryMaxDelayMs)
+    if (!Number.isSafeInteger(attempts) || attempts < 0 || attempts > MAX_RETRY_ATTEMPTS) {
+      setBaseNotice({ kind: 'error', text: t('retryInvalidAttempts') })
+      return
+    }
+    if (!Number.isFinite(delay) || delay < RETRY_INITIAL_DELAY_MS || delay > MAX_RETRY_DELAY_MS) {
+      setBaseNotice({ kind: 'error', text: t('retryInvalidDelay') })
+      return
+    }
     setBaseBusy(true)
     setBaseNotice(undefined)
-    // Both fields ride one atomic write so they can never diverge, and applying
-    // the shipped endpoint *clears* the confirmation instead of leaving a
-    // sticky opt-in that a later single-field write could ride on.
-    void operations.writeSettings(needsCustom
-      ? [
-        { op: 'set', path: ['allowCustomBaseURL'], value: true },
-        { op: 'set', path: ['baseURL'], value: baseDraft },
-      ]
-      : [
-        { op: 'unset', path: ['allowCustomBaseURL'] },
-        { op: 'set', path: ['baseURL'], value: baseDraft },
-      ], revision)
+    // Every field rides one atomic write so none can diverge, and applying the
+    // shipped endpoint *clears* the confirmation instead of leaving a sticky
+    // opt-in that a later single-field write could ride on.
+    void operations.writeSettings([
+      ...needsCustom
+        ? [
+          { op: 'set' as const, path: ['allowCustomBaseURL'], value: true },
+          { op: 'set' as const, path: ['baseURL'], value: nextBaseURL },
+        ]
+        : [
+          { op: 'unset' as const, path: ['allowCustomBaseURL'] },
+          { op: 'set' as const, path: ['baseURL'], value: nextBaseURL },
+        ],
+      { op: 'set' as const, path: ['retryMaxAttempts'], value: attempts },
+      { op: 'set' as const, path: ['retryMaxDelayMs'], value: delay },
+    ], revision)
       .then(async (outcome) => {
         if (outcome.kind !== 'written') {
           setBaseNotice({ kind: 'error', text: outcome.message })
@@ -817,6 +852,9 @@ function Loaded({ operations, t, family, copy }: {
       })
       .finally(() => { setBaseBusy(false) })
   }
+
+  const retryMaxAttempts = section.retryMaxAttempts ?? DEFAULT_RETRY_MAX_ATTEMPTS
+  const retryMaxDelayMs = section.retryMaxDelayMs ?? DEFAULT_RETRY_MAX_DELAY_MS
 
   return (
     <div className="protocom-section">
@@ -875,6 +913,33 @@ function Loaded({ operations, t, family, copy }: {
         {baseNotice === undefined ? null : (
           <p className={baseNotice.kind === 'ok' ? 'protocom-status' : 'protocom-error'}>{baseNotice.text}</p>
         )}
+        <div className="protocom-advanced-body">
+          <span className="protocom-field-label">{t('retryMaxAttempts')}</span>
+          <input
+            type="number"
+            className="protocom-input"
+            min={0}
+            max={MAX_RETRY_ATTEMPTS}
+            value={retryAttemptsDraft ?? String(retryMaxAttempts)}
+            aria-label={t('retryMaxAttempts')}
+            disabled={!writable}
+            onChange={event => { setRetryAttemptsDraft(event.target.value) }}
+          />
+        </div>
+        <p className="protocom-notice">{t('retryMaxAttemptsHint')}</p>
+        <div className="protocom-advanced-body">
+          <span className="protocom-field-label">{t('retryMaxDelayMs')}</span>
+          <input
+            type="number"
+            className="protocom-input"
+            min={RETRY_INITIAL_DELAY_MS}
+            value={retryDelayDraft ?? String(retryMaxDelayMs)}
+            aria-label={t('retryMaxDelayMs')}
+            disabled={!writable}
+            onChange={event => { setRetryDelayDraft(event.target.value) }}
+          />
+        </div>
+        <p className="protocom-notice">{t('retryMaxDelayMsHint')}</p>
       </details>
     </div>
   )

@@ -3,7 +3,8 @@ import type { GenerateOptions } from '@deepseek-ai/dsh-llm'
 import { ProtocomAdapter } from '../src/adapter.ts'
 import { resolveAdapterOptions } from '../src/config.ts'
 import type { Config } from '../src/config.ts'
-import { MAX_PROVIDER_RETRY_AFTER_MS, postSse } from '../src/protocol/http.ts'
+import { postSse } from '../src/protocol/http.ts'
+import { DEFAULT_RETRY_MAX_ATTEMPTS, DEFAULT_RETRY_MAX_DELAY_MS, RETRY_INITIAL_DELAY_MS } from '../src/config.ts'
 
 afterEach(() => {
   vi.unstubAllGlobals()
@@ -156,20 +157,48 @@ describe('whole-request image budget (P2-2)', () => {
 })
 
 describe('declared retry policy (F-3)', () => {
-  it('pins a forwarded Retry-After inside the policy the retry layer consumes', async () => {
+  it('declares an overnight-shaped policy by default', () => {
     const policy = adapterFor(CODEX).providerRetryPolicy('protocom-codex')
-    expect(policy?.mode).toBe('normal')
+    expect(policy).toMatchObject({
+      mode: 'normal',
+      maxRetries: DEFAULT_RETRY_MAX_ATTEMPTS,
+      initialDelayMs: RETRY_INITIAL_DELAY_MS,
+      maxDelayMs: DEFAULT_RETRY_MAX_DELAY_MS,
+    })
+    // A permanent refusal must fail at once rather than wait out the budget.
+    expect(policy?.mode === 'normal' ? policy.retryableCodes : []).not.toContain('AUTH')
+    expect(policy?.mode === 'normal' ? policy.retryableCodes : []).not.toContain('INVALID_REQUEST')
+  })
+
+  it('pins a forwarded Retry-After inside the policy the retry layer consumes', async () => {
+    const adapter = adapterFor(CODEX)
+    const policy = adapter.providerRetryPolicy('protocom-codex')
     vi.stubGlobal('fetch', vi.fn(async () => new Response(
       JSON.stringify({ error: { message: 'slow down' } }),
       { status: 429, headers: { 'retry-after': '86400' } },
     )))
-    const error = await postSse({ baseURL: 'https://relay.test', apiKey: 'k' }, 'chat/completions', {})
-      .catch((caught: unknown) => caught)
+    // The adapter passes its own live ceiling into the transport, which is the
+    // production path; the assertion below is the invariant that must hold.
+    const error = await postSse({
+      baseURL: 'https://relay.test',
+      apiKey: 'k',
+      retryAfterCeilingMs: policy?.maxDelayMs,
+    }, 'chat/completions', {}).catch((caught: unknown) => caught)
     const delay = (error as { failure: { providerRetryAfterMs: number } }).failure.providerRetryAfterMs
     // llm-retry cancels a retry when providerRetryAfterMs > policy.maxDelayMs in
     // normal mode; the clamp and the declared policy must make that unreachable.
     expect(delay).toBeLessThanOrEqual(policy?.maxDelayMs as number)
-    expect(policy?.maxDelayMs).toBe(MAX_PROVIDER_RETRY_AFTER_MS)
+  })
+
+  it('follows a raised ceiling from the settings instead of a pinned constant', () => {
+    const adapter = adapterFor({
+      baseURL: 'https://relay.test',
+      allowCustomBaseURL: true,
+      retryMaxAttempts: 40,
+      retryMaxDelayMs: 7_200_000,
+    })
+    const policy = adapter.providerRetryPolicy('protocom-codex')
+    expect(policy).toMatchObject({ maxRetries: 40, maxDelayMs: 7_200_000 })
   })
 })
 

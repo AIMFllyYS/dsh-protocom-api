@@ -11,7 +11,6 @@
  */
 
 import {
-  EMPTY_RESPONSE_CODE,
   LlmAdapter,
   LlmError,
   offloadedImageText,
@@ -36,6 +35,7 @@ import type { AttachmentStore, ImageAttachmentRef, ImageRequestPolicy } from '@d
 import { PROTOCOM } from './family.ts'
 import type { ProviderFamily } from './family.ts'
 import type { ResolvedGroup, ResolvedProtocomOptions } from './config.ts'
+import { retryPolicyFor } from './retry.ts'
 import {
   acceptsImages,
   displayNameWithContext,
@@ -48,7 +48,6 @@ import type { GroupCatalogModel, RegistryReasoning, UpstreamModel } from './mode
 import { decodeVariantId, encodeVariantId, stripVariantId, variantLengths } from './context-variants.ts'
 import { fetchUpstreamModels } from './discovery.ts'
 import { streamChatCompletions } from './protocol/chat-completions.ts'
-import { MAX_PROVIDER_RETRY_AFTER_MS } from './protocol/http.ts'
 import type { ProtocolConnection, RequestImageUrls } from './protocol/http.ts'
 import { streamResponses } from './protocol/responses.ts'
 
@@ -121,24 +120,7 @@ function teardownGrace(): Promise<void> {
   })
 }
 
-/**
- * The retry policy this adapter declares for its routes. It is pinned here so
- * the clamp this adapter applies to a provider's `Retry-After`
- * ({@link MAX_PROVIDER_RETRY_AFTER_MS}) can never exceed the `maxDelayMs` the
- * retry layer compares it against: `llm-retry` treats
- * `providerRetryAfterMs > policy.maxDelayMs` in normal mode as "cancel this
- * retry", so a larger provider delay would silently remove the retry instead of
- * waiting. Declaring the policy keeps the two values consistent regardless of
- * any deployment-level default. `retryableCodes` mirrors the harness default.
- */
-const RETRY_POLICY: ResolvedRetryPolicy = Object.freeze({
-  mode: 'normal',
-  maxRetries: 5,
-  retryableCodes: Object.freeze([EMPTY_RESPONSE_CODE, 'RATE_LIMIT', 'SERVER', 'TIMEOUT', 'TRANSPORT']),
-  initialDelayMs: 500,
-  maxDelayMs: MAX_PROVIDER_RETRY_AFTER_MS,
-  jitterRatio: 0.1,
-})
+
 
 /** Collect every image reference a message tree carries, including tool results. */
 function collectImageRefs(
@@ -214,7 +196,11 @@ export class ProtocomAdapter extends LlmAdapter {
   }
 
   override providerRetryPolicy(_provider: string): ResolvedRetryPolicy {
-    return RETRY_POLICY
+    // Built from the CURRENT facts, not a value frozen at construction: the
+    // harness captures a route's policy when that route is registered, and this
+    // plugin re-registers on every committed settings change, so reading live
+    // here is what makes a new budget reach the very next request.
+    return retryPolicyFor(this.config.options())
   }
 
   /** The enabled group behind one route; every dispatch path starts here. */
@@ -404,7 +390,16 @@ export class ProtocomAdapter extends LlmAdapter {
         const session = options.sessionId === undefined ? this.fallbackSession : String(options.sessionId)
         return { [family.sessionHeader]: session, 'x-deepseek-harness-session-id': session }
       })()
-    const connection: ProtocolConnection = { baseURL, apiKey, label: family.label, ...headers === undefined ? {} : { headers } }
+    const connection: ProtocolConnection = {
+      baseURL,
+      apiKey,
+      label: family.label,
+      // The clamp and the declared policy are the same number, so a provider's
+      // own Retry-After is honoured up to the configured ceiling and can never
+      // exceed the policy that compares against it.
+      retryAfterCeilingMs: this.config.options().retryMaxDelayMs,
+      ...headers === undefined ? {} : { headers },
+    }
     const model = stripVariantId(options.model)
     // A provider that simply stops sending must not hold the request, its
     // socket, and the agent step open forever. The watchdog only *notifies*

@@ -22,6 +22,13 @@ import type { Protocol } from './groups.ts';
  */
 export declare const DEFAULT_STREAM_IDLE_TIMEOUT_MS = 300000;
 /**
+ * Retry semantics live in their own import-free module because the browser
+ * client edits the same numbers: re-exported here so a Host consumer names one
+ * module, and asserted below so the browser's own copy of the timer bound cannot
+ * drift from the authority.
+ */
+export { DEFAULT_RETRY_MAX_ATTEMPTS, DEFAULT_RETRY_MAX_DELAY_MS, MAX_RETRY_ATTEMPTS, MAX_RETRY_DELAY_MS, RETRY_INITIAL_DELAY_MS, RETRY_JITTER_RATIO, RETRYABLE_FAILURE_CODES, } from './retry.ts';
+/**
  * The only credential references the Protocom family resolves: its own
  * namespaced environment-variable names. An open shape let a rewritten
  * `baseURL` pair any `process.env` name with an arbitrary endpoint, turning
@@ -84,6 +91,20 @@ export interface SectionConfig {
     allowCustomBaseURL?: boolean;
     /** Idle interval, in milliseconds, after which one provider stream is aborted (default 300000). */
     streamIdleTimeoutMs?: number;
+    /**
+     * Transient request failures retried after the first attempt before the step
+     * closes (default 20). Only the retryable failure codes qualify, so a
+     * permanent refusal — a bad key, a malformed request — still fails at once
+     * instead of waiting out the whole budget.
+     */
+    retryMaxAttempts?: number;
+    /**
+     * Ceiling for one locally scheduled backoff delay, in milliseconds (default
+     * one hour). Raising it stretches an outage's ladder; it is also the largest
+     * upstream Retry-After this adapter forwards, so the clamp and the policy
+     * can never disagree.
+     */
+    retryMaxDelayMs?: number;
     /** Group profiles keyed by group key; unknown keys are refused. */
     groups?: Record<string, GroupConfig>;
     /**
@@ -173,6 +194,10 @@ export interface ResolvedProtocomOptions {
     baseURL: string;
     /** Resolved idle watchdog interval for one provider stream, in milliseconds. */
     streamIdleTimeoutMs: number;
+    /** Resolved count of retries after the first attempt for a transient failure. */
+    retryMaxAttempts: number;
+    /** Resolved ceiling for one locally scheduled backoff delay, in milliseconds. */
+    retryMaxDelayMs: number;
     /** The family's groups in fixed order; `enabled` gates route registration. */
     groups: ReadonlyMap<string, ResolvedGroup>;
     /** Upstream ids the model menu must not offer. Empty means the whole catalog. */

@@ -31,6 +31,36 @@ import type { Protocol } from './groups.ts'
 export const DEFAULT_STREAM_IDLE_TIMEOUT_MS = 300_000
 
 /**
+ * Retry semantics live in their own import-free module because the browser
+ * client edits the same numbers: re-exported here so a Host consumer names one
+ * module, and asserted below so the browser's own copy of the timer bound cannot
+ * drift from the authority.
+ */
+export {
+  DEFAULT_RETRY_MAX_ATTEMPTS,
+  DEFAULT_RETRY_MAX_DELAY_MS,
+  MAX_RETRY_ATTEMPTS,
+  MAX_RETRY_DELAY_MS,
+  RETRY_INITIAL_DELAY_MS,
+  RETRY_JITTER_RATIO,
+  RETRYABLE_FAILURE_CODES,
+} from './retry.ts'
+import {
+  DEFAULT_RETRY_MAX_ATTEMPTS,
+  DEFAULT_RETRY_MAX_DELAY_MS,
+  MAX_RETRY_ATTEMPTS,
+  MAX_RETRY_DELAY_MS,
+  RETRY_INITIAL_DELAY_MS,
+} from './retry.ts'
+
+// The browser bundle cannot import the timeout package, so `retry.ts` carries
+// its own copy of the timer bound. This is the one place both are visible, so
+// the copy is proven equal to the authority at module load rather than trusted.
+if (MAX_RETRY_DELAY_MS !== MAX_TIMER_DELAY_MS) {
+  throw new Error('dsh-protocom-api: retry.ts MAX_RETRY_DELAY_MS must equal the harness MAX_TIMER_DELAY_MS')
+}
+
+/**
  * The only credential references the Protocom family resolves: its own
  * namespaced environment-variable names. An open shape let a rewritten
  * `baseURL` pair any `process.env` name with an arbitrary endpoint, turning
@@ -95,6 +125,20 @@ export interface SectionConfig {
   allowCustomBaseURL?: boolean
   /** Idle interval, in milliseconds, after which one provider stream is aborted (default 300000). */
   streamIdleTimeoutMs?: number
+  /**
+   * Transient request failures retried after the first attempt before the step
+   * closes (default 20). Only the retryable failure codes qualify, so a
+   * permanent refusal — a bad key, a malformed request — still fails at once
+   * instead of waiting out the whole budget.
+   */
+  retryMaxAttempts?: number
+  /**
+   * Ceiling for one locally scheduled backoff delay, in milliseconds (default
+   * one hour). Raising it stretches an outage's ladder; it is also the largest
+   * upstream Retry-After this adapter forwards, so the clamp and the policy
+   * can never disagree.
+   */
+  retryMaxDelayMs?: number
   /** Group profiles keyed by group key; unknown keys are refused. */
   groups?: Record<string, GroupConfig>
   /**
@@ -161,6 +205,8 @@ function sectionSchema(baseURL: string, recommended: readonly string[]): z<Secti
     baseURL: z.string().default(baseURL),
     allowCustomBaseURL: z.boolean(),
     streamIdleTimeoutMs: z.number().min(Number.MIN_VALUE).max(MAX_TIMER_DELAY_MS).default(DEFAULT_STREAM_IDLE_TIMEOUT_MS),
+    retryMaxAttempts: z.number().step(1).min(0).max(MAX_RETRY_ATTEMPTS).default(DEFAULT_RETRY_MAX_ATTEMPTS),
+    retryMaxDelayMs: z.number().min(Number.MIN_VALUE).max(MAX_TIMER_DELAY_MS).default(DEFAULT_RETRY_MAX_DELAY_MS),
     groups: z.dict(group).default({}),
     hiddenModels: z.array(z.string()).default([]),
     recommendedModels: z.array(z.string()).default([...recommended]),
@@ -248,6 +294,10 @@ export interface ResolvedProtocomOptions {
   baseURL: string
   /** Resolved idle watchdog interval for one provider stream, in milliseconds. */
   streamIdleTimeoutMs: number
+  /** Resolved count of retries after the first attempt for a transient failure. */
+  retryMaxAttempts: number
+  /** Resolved ceiling for one locally scheduled backoff delay, in milliseconds. */
+  retryMaxDelayMs: number
   /** The family's groups in fixed order; `enabled` gates route registration. */
   groups: ReadonlyMap<string, ResolvedGroup>
   /** Upstream ids the model menu must not offer. Empty means the whole catalog. */
@@ -282,6 +332,21 @@ export function resolveAdapterOptions(config: SectionConfig, family: ProviderFam
   const streamIdleTimeoutMs = config.streamIdleTimeoutMs ?? DEFAULT_STREAM_IDLE_TIMEOUT_MS
   if (!Number.isFinite(streamIdleTimeoutMs) || streamIdleTimeoutMs <= 0 || streamIdleTimeoutMs > MAX_TIMER_DELAY_MS) {
     throw new Error(`${family.ns}: streamIdleTimeoutMs must be a positive finite number no greater than ${MAX_TIMER_DELAY_MS}`)
+  }
+  // Programmatic construction may bypass Schemastery, so every bound is
+  // re-judged here exactly as the watchdog's is above.
+  const retryMaxAttempts = config.retryMaxAttempts ?? DEFAULT_RETRY_MAX_ATTEMPTS
+  if (!Number.isSafeInteger(retryMaxAttempts) || retryMaxAttempts < 0 || retryMaxAttempts > MAX_RETRY_ATTEMPTS) {
+    throw new Error(`${family.ns}: retryMaxAttempts must be an integer between 0 and ${MAX_RETRY_ATTEMPTS}`)
+  }
+  const retryMaxDelayMs = config.retryMaxDelayMs ?? DEFAULT_RETRY_MAX_DELAY_MS
+  if (!Number.isFinite(retryMaxDelayMs) || retryMaxDelayMs < RETRY_INITIAL_DELAY_MS || retryMaxDelayMs > MAX_TIMER_DELAY_MS) {
+    // Below the first rung the ladder would have to shrink, which the
+    // harness policy refuses (`initialDelayMs <= maxDelayMs`); rejecting it
+    // here names this plugin's setting instead of failing in the executor.
+    throw new Error(
+      `${family.ns}: retryMaxDelayMs must be at least ${RETRY_INITIAL_DELAY_MS} and no greater than ${MAX_TIMER_DELAY_MS}`,
+    )
   }
   const supplied = config.groups ?? {}
   for (const key of Object.keys(supplied)) {
@@ -378,6 +443,8 @@ export function resolveAdapterOptions(config: SectionConfig, family: ProviderFam
     family,
     baseURL,
     streamIdleTimeoutMs,
+    retryMaxAttempts,
+    retryMaxDelayMs,
     groups,
     modelContexts: contexts,
     visionModels: vision,

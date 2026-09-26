@@ -2,6 +2,43 @@
 
 All notable changes to `dsh-protocom-api` are documented here.
 
+## [0.7.1] — 断线自动重试：可调重试预算，夜间任务不再静默中断
+
+### 问题
+
+本插件的 adapter 把重试策略**硬编码**为 `maxRetries: 5` + `maxDelayMs: 10s`，没有任何配置入口。
+配合 DSH 的 `llm-retry`（已挂在 base bundle 里）实际存活时间只有约 **50 秒**：中转站抖一下，重试就耗尽，
+错误传播到 agent-loop 的 driver 边界被吞掉，会话回到 idle —— **没有任何东西再唤醒它**。
+若任务挂在 goal 循环上，`goal-round-driver` 还会在 `agent/error` 时主动 `disarm`（它把「不自动重试异常」写成了明确的设计决定）。
+这就是「夜间任务莫名其妙断开」的完整链条。
+
+### 修复
+
+新增两个设置项（设置 → provider 页 → 高级）：
+
+| 设置 | 默认 | 含义 |
+| --- | --- | --- |
+| `retryMaxAttempts` | 20 | 瞬时故障后最多重试次数（0 = 关闭） |
+| `retryMaxDelayMs` | 3600000（1h） | 单次退避等待上限 |
+
+退避从 0.5 秒起逐次翻倍至上限，默认组合累计约 **8 小时**，足以撑过一夜。
+
+**只重试瞬时故障**：`TRANSPORT` / `TIMEOUT` / `SERVER` / `RATE_LIMIT` / `EMPTY_RESPONSE`。
+`AUTH`、`INVALID_REQUEST` 等永久故障**立即失败**，避免空烧预算、推迟诊断。
+
+### 实现要点
+
+- 重试语义抽到新的 **import-free** `src/retry.ts`：浏览器端要编辑同一组数字，若直接 import `config.ts` 会把 schemastery / dsh-timeout / credentials 拖进 client bundle（实测 125KB → 167KB）。抽离后回到 131KB。
+- `retry.ts` 自带一份 `MAX_RETRY_DELAY_MS` 副本（浏览器不能 import timeout 包），`config.ts` 在模块加载时**断言**它与 `MAX_TIMER_DELAY_MS` 相等，杜绝静默漂移。
+- `providerRetryPolicy()` 改为**每次调用**从 live 配置构造。DSH 在注册路由时捕获策略，而本插件每次设置变更都会 `replace()` 重新注册 —— 两者配合使新预算**无需重启**即生效。
+- `Retry-After` 的 clamp 从固定 10s 改为**跟随本次策略的 `maxDelayMs`**：执行器在 `providerRetryAfterMs > maxDelayMs` 时会取消重试，两者取同一个值才不可能失配。
+- 修掉合并写入时引入的真实缺陷：重试设置与 base URL 共用一个「应用」按钮，但原先的 `baseDraft === undefined` 守卫会让**只改重试数字时完全无法保存**。
+
+### 测试
+
+新增 `test/retry-settings.spec.ts`（10 项）与 client 渲染用例（3 项）；全套 **316 项通过**。
+关键断言：默认预算累计等待 > 6 小时；永久故障码不在重试集合；live 配置变更即时反映到策略。
+
 ## [0.7.0] — Fusion 双模型：主线走指挥位，子智能体固定走执行位
 
 新增设置段 `model-fusion`，与既有两个 provider 段并列。主线对话用强模型（指挥位），所有委派出去的子智能体请求固定用性价比模型（执行位）。

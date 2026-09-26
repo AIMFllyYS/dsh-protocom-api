@@ -117,9 +117,13 @@ describe('custom endpoint confirmation (F-2)', () => {
     fireEvent.click(screen.getByRole('button', { name: en.apply }))
     await waitFor(() => expect(writeSettings).toHaveBeenCalledOnce())
     const [ops] = writeSettings.mock.calls[0] as [{ op: string; path: string[]; value: unknown }[]]
+    // The endpoint confirmation and the retry budget share this button and one
+    // atomic write, so a rejected number cannot leave a new base URL applied.
     expect(ops).toEqual([
       { op: 'set', path: ['allowCustomBaseURL'], value: true },
       { op: 'set', path: ['baseURL'], value: 'https://evil.example' },
+      { op: 'set', path: ['retryMaxAttempts'], value: 20 },
+      { op: 'set', path: ['retryMaxDelayMs'], value: 3_600_000 },
     ])
   })
 
@@ -146,7 +150,64 @@ describe('custom endpoint confirmation (F-2)', () => {
     expect(ops).toEqual([
       { op: 'unset', path: ['allowCustomBaseURL'] },
       { op: 'set', path: ['baseURL'], value: 'https://relay.protocom.org/v1' },
+      { op: 'set', path: ['retryMaxAttempts'], value: 20 },
+      { op: 'set', path: ['retryMaxDelayMs'], value: 3_600_000 },
     ])
+  })
+})
+
+describe('retry budget editing (R1)', () => {
+  /** Open the advanced block, where the retry fields live. */
+  function openAdvanced(): void {
+    for (const details of document.querySelectorAll('details.protocom-advanced')) {
+      ;(details as HTMLDetailsElement).open = true
+    }
+  }
+
+  it('writes a changed attempt count and wait in the same atomic write', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse({})))
+    const writeSettings = vi.fn(async () => ({ kind: 'written', view: VIEW }) as never)
+    renderSection(makeOperations({ writeSettings }))
+    openAdvanced()
+    const attempts = await screen.findByLabelText(en.retryMaxAttempts) as HTMLInputElement
+    const delay = await screen.findByLabelText(en.retryMaxDelayMs) as HTMLInputElement
+    // The stored section names no retry fields, so the inputs show the defaults
+    // the resolver applies rather than an empty box.
+    expect(attempts.value).toBe('20')
+    expect(delay.value).toBe('3600000')
+    fireEvent.change(attempts, { target: { value: '40' } })
+    fireEvent.change(delay, { target: { value: '7200000' } })
+    fireEvent.click(screen.getByRole('button', { name: en.apply }))
+    await waitFor(() => expect(writeSettings).toHaveBeenCalledOnce())
+    const [ops] = writeSettings.mock.calls[0] as [{ op: string; path: string[]; value: unknown }[]]
+    expect(ops).toEqual(expect.arrayContaining([
+      { op: 'set', path: ['retryMaxAttempts'], value: 40 },
+      { op: 'set', path: ['retryMaxDelayMs'], value: 7_200_000 },
+    ]))
+  })
+
+  it('refuses a non-integer attempt count instead of writing anything', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse({})))
+    const writeSettings = vi.fn(async () => ({ kind: 'written', view: VIEW }) as never)
+    renderSection(makeOperations({ writeSettings }))
+    openAdvanced()
+    const attempts = await screen.findByLabelText(en.retryMaxAttempts) as HTMLInputElement
+    fireEvent.change(attempts, { target: { value: '2.5' } })
+    fireEvent.click(screen.getByRole('button', { name: en.apply }))
+    await waitFor(() => expect(screen.getAllByText(en.retryInvalidAttempts).length).toBeGreaterThan(0))
+    expect(writeSettings).not.toHaveBeenCalled()
+  })
+
+  it('refuses a wait below the first backoff rung', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse({})))
+    const writeSettings = vi.fn(async () => ({ kind: 'written', view: VIEW }) as never)
+    renderSection(makeOperations({ writeSettings }))
+    openAdvanced()
+    const delay = await screen.findByLabelText(en.retryMaxDelayMs) as HTMLInputElement
+    fireEvent.change(delay, { target: { value: '100' } })
+    fireEvent.click(screen.getByRole('button', { name: en.apply }))
+    await waitFor(() => expect(screen.getAllByText(en.retryInvalidDelay).length).toBeGreaterThan(0))
+    expect(writeSettings).not.toHaveBeenCalled()
   })
 })
 

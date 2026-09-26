@@ -13,6 +13,12 @@ export declare const en: {
     allowCustom: string;
     allowCustomHint: string;
     allowCustomRequired: string;
+    retryMaxAttempts: string;
+    retryMaxAttemptsHint: string;
+    retryMaxDelayMs: string;
+    retryMaxDelayMsHint: string;
+    retryInvalidAttempts: string;
+    retryInvalidDelay: string;
     apply: string;
     applying: string;
     saved: string;

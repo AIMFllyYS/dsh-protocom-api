@@ -27,18 +27,21 @@ export interface ProtocolConnection {
      * session scoping.
      */
     headers?: Record<string, string>;
+    /**
+     * Largest `Retry-After` this request may forward, in milliseconds. The caller
+     * passes the consuming retry policy's own `maxDelayMs`; absent means the
+     * shipped default, which keeps hand-built connections honest.
+     */
+    retryAfterCeilingMs?: number;
 }
 /** Map an HTTP status to a stable LlmError code. */
 export declare function httpErrorCode(status: number): string;
 /**
- * Largest provider-supplied `Retry-After` this adapter forwards. The harness
- * retry layer treats `providerRetryAfterMs > maxDelayMs` (default 10s) as
- * "cancel this retry" in normal mode, so an unbounded upstream value silently
- * removed the client's retry chance; a large one under a raised `maxDelayMs`
- * would instead park the request for days. Capping at that same default keeps
- * the value inside the policy that consumes it and bounds the wait.
+ * Retry-After ceiling a connection that names none falls back to. Chosen to
+ * match the retry policy's own shipped default so a hand-built connection (the
+ * tests, a probe) behaves exactly like a configured deployment at its defaults.
  */
-export declare const MAX_PROVIDER_RETRY_AFTER_MS = 10000;
+export declare const DEFAULT_RETRY_AFTER_CEILING_MS = 10000;
 /**
  * POST one JSON body and return the SSE response. Transport and HTTP
  * failures throw coded LlmErrors; the caller owns stream decoding.
