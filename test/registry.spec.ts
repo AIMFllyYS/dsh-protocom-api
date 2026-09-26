@@ -125,6 +125,9 @@ describe('model-registry', () => {
       'google/gemini-3.7-flash',
       'tencent/hy4-preview',
       'inclusionai/ling-3.0-flash-sante:free',
+      // Re-verified 2026-09-27: the bare id answers "not available on this
+      // endpoint" while the `:free` variant is simply not listed.
+      'meituan/LongCat-2.0',
     ])
     expect(servesChat('step-5-preview')).toBe(true)
     expect(servesChat('stepaudio-2.5-tts')).toBe(false)

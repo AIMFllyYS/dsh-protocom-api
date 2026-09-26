@@ -146,6 +146,19 @@ const GPT_REASONING: RegistryReasoning = {
 }
 
 /**
+ * The full vocabulary this relay accepts, for a model verified against all of
+ * it. Live-verified 2026-09-27: every level answers 200.
+ *
+ * Relay-scoped, like GLM_REASONING and GPT_REASONING above, and deliberately
+ * not shared with GO_FULL_REASONING: the relay spells the disabling word
+ * `none` and answers 400 to `off`, while the Go gateway is the exact reverse.
+ */
+const FULL_REASONING: RegistryReasoning = {
+  efforts: ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'],
+  defaultEffort: 'high',
+}
+
+/**
  * The ladder steps one model can offer. A window below the whole ladder still
  * offers itself, so no model is left without a choice.
  * @param contextWindow - the model's declared capacity.
@@ -333,6 +346,59 @@ export const REGISTRY: readonly RegistryEntry[] = [
   { id: 'meituan/LongCat-2.0:free', displayName: 'LongCat 2.0', family: 'longcat', contextWindow: CONTEXT_256K },
   { id: 'poolside/laguna-s-2.1-free', displayName: 'Laguna S 2.1 Free', family: 'poolside', contextWindow: CONTEXT_256K },
   { id: 'meta/muse-spark-1.3-contributor', displayName: 'Muse Spark 1.3 Contributor', family: 'meta', contextWindow: CONTEXT_1M, vision: true },
+  /* ---------------------------------------------------------------------
+   * Added 2026-09-27 after a live listing sweep. These were served but absent
+   * here, which does not hide them -- the listing is the membership source --
+   * but leaves them sized by the family floor, offering no Effort control, and
+   * relying on the permissive vision default.
+   *
+   * Every field is live-verified against the relay itself, not taken from a
+   * third party: all seven effort levels answered 200 on each id below, and an
+   * inline image answered 200 on all five. The window is the consensus of the
+   * independent providers models.dev reports, which is the same source this
+   * registry already cites for windows it cannot probe.
+   * ------------------------------------------------------------------- */
+  {
+    id: 'mimo-v2.6-flash',
+    displayName: 'MiMo V2.6 Flash',
+    family: 'mimo',
+    contextWindow: CONTEXT_1M,
+    reasoning: FULL_REASONING,
+    vision: true,
+  },
+  {
+    id: 'mimo-v2.6-pro',
+    displayName: 'MiMo V2.6 Pro',
+    family: 'mimo',
+    contextWindow: CONTEXT_1M,
+    reasoning: FULL_REASONING,
+    vision: true,
+  },
+  {
+    id: 'xiaomi/mimo-v2.6-flash',
+    displayName: 'MiMo V2.6 Flash',
+    family: 'mimo',
+    contextWindow: CONTEXT_1M,
+    reasoning: FULL_REASONING,
+    vision: true,
+  },
+  {
+    id: 'xiaomi/mimo-v2.6-pro-ultraspeed',
+    displayName: 'MiMo V2.6 Pro Ultraspeed',
+    family: 'mimo',
+    contextWindow: CONTEXT_1M,
+    reasoning: FULL_REASONING,
+    vision: true,
+  },
+  {
+    id: 'gpt-6-luna',
+    displayName: 'GPT-6 Luna',
+    family: 'gpt',
+    contextWindow: 1_050_000,
+    reasoning: FULL_REASONING,
+    vision: true,
+    protocol: 'responses',
+  },
 ]
 
 /** Find the registry entry for one upstream id. */
@@ -387,6 +453,9 @@ export const REFUSED_CHAT_MODEL_IDS: readonly string[] = [
   'google/gemini-3.7-flash',
   'tencent/hy4-preview',
   'inclusionai/ling-3.0-flash-sante:free',
+  // The bare id is listed and refused; the `:free` suffix variant is a
+  // different id the relay does not list at all. Re-verified 2026-09-27.
+  'meituan/LongCat-2.0',
 ]
 
 /** Whether the endpoint's chat route answers for one upstream id. */
