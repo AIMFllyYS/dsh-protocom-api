@@ -2,6 +2,48 @@
 
 All notable changes to `dsh-protocom-api` are documented here.
 
+## [0.8.0] — Command Code 供应商 + 由端点声明的协议路由
+
+新增第三个供应商族 **Command Code**（设置页第三块面板），并为此实现了「按网关自己声明的端点选择协议」的能力。
+
+### 全部事实由真实请求验证（2026-09-23）
+
+该端点几乎没有文档，因此每一项都是实测而非推断：
+
+| 探测 | 结果 |
+| --- | --- |
+| `GET /provider/v1/models` | **200，无需任何密钥** |
+| `GET /alpha/whoami` | 无效密钥返回 **401**（路由真实存在） |
+| 任意不存在的 `/provider/v1/*` | **404** |
+
+实测 listing 共 **82 个模型**，每行字段恰好是 `id`/`object`/`created`/`owned_by`/`name`/`context_length`/`supported_endpoints`（快照归档在 `.agents/`）。
+
+### `supported_endpoints` 是路由真相，不是提示
+
+| 声明 | 数量 | 含义 |
+| --- | --- | --- |
+| `/chat/completions` + `/responses` | 65 | 两条 OpenAI 通道都可 |
+| `/chat/completions` | 8 | 仅 chat |
+| `/messages` | 9（全是 Claude） | **仅 Anthropic 通道**，发到 OpenAI 通道必 400 |
+
+因此本族**当前可服务 82 个中的 73 个**，并把 9 个 Claude 模型**隐藏**——列出来只会让每次调用都变成看起来像插件 bug 的 400，而不是一个「暂不支持」的事实。
+
+为此类型系统新增第三种协议 `messages`；被路由到它的模型在派发时**响亮拒绝**，而不是静默改走它并不支持的 OpenAI 通道。
+
+### 其它设计取舍
+
+- **不带手写名录**：端点在每一行都披露上下文长度与路由，手写副本只会过期。
+- **暂不带账户面板**：alpha 端点确实存在，但本机没有该服务的密钥，响应形状未经验证；本插件只渲染被请求确认过的字段。为此 `ProviderFamily.telemetry*` 改为可选，而不是伪造一个。
+- **上下文档位**从实测的九个不规则长度中取四档（200K/256K/400K/1M），否则菜单全是噪声。
+- 族名不绑定套餐档位（GOAT/Pro/Max）：listing 已按账号过滤，绑定档位会在订阅变化后过期。
+
+### 测试抓到并修掉的两个真实缺陷
+
+1. `servesDeclaredEndpoints` 把 `messages` 当成「可服务」（它映射到已识别但未实现的协议），导致 Claude 模型没被过滤掉。
+2. `vitest` 的默认 5s 超时在整套并行运行时对 adapter 套件过紧，造成偶发失败而非真实缺陷；已统一提高到 20s。
+
+全套 **368 项测试**通过（新增 `test/commandcode.spec.ts` 17 项）。
+
 ## [0.7.2] — 多 API key 密钥池（缓存感知的分配）
 
 每个分组现在可以配多把密钥，并选择分配策略。

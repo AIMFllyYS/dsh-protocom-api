@@ -22,6 +22,22 @@ OpenCode Go 一个分组一条 route（`opencode-go-sub`），承载端点目前
 
 ### OpenCode Go 接入要点
 
+### Command Code 接入要点
+
+Command Code 一个分组一条 route（`commandcode`），实测 listing 共 **82 个模型**（2026-09-23，无需密钥即可拉取）：
+
+| 分组 | provider route | 默认协议 | 说明 |
+| --- | --- | --- | --- |
+| `cc` | `commandcode` | chat-completions | 端点在自己的 listing 里声明每个模型走哪条通道；**73 个模型可服务** |
+
+- **按端点声明路由**：`supported_endpoints` 是路由真相——82 个中 65 个声明两条 OpenAI 通道都可、8 个仅 chat、**9 个（全是 Claude）仅 `/messages`**。仅 Anthropic 通道的模型发到 OpenAI 通道必 400，因此这 9 个**暂时隐藏**，而不是列出来每次调用都失败。
+- **不带手写名录**：行内已披露 `context_length` 与 `supported_endpoints`，手写副本只会过期。
+- **上下文档位**：从实测的九个不规则长度（200000/256000/262000/262144/400000/500000/1000000/1048576/1050000）取四档 200K/256K/400K/1M。
+- **账户面板**：暂未提供。`/alpha/whoami` 等端点确实存在（无效密钥返回 401 而非 404），但响应形状本机未验证，而本插件只渲染被请求确认过的字段。
+- **密钥引用**：`COMMANDCODE_*` 命名空间，默认 `COMMANDCODE_API_KEY`。
+
+### OpenCode Go 接入要点
+
 - **会话头**：每个请求同时携带 `x-opencode-session` 与 `x-deepseek-harness-session-id`（同一个 harness session 值）——Go 网关只有部分路径认原生头，缺了返回 400 MissingSessionID。
 - **思考强度**：Go 接受裸 `reasoning_effort` 字段、拒绝 `thinking:{type:'disabled'}`，因此该族全部走 effort-only 写法，关闭词按模型实测词表下发（`none`/`off`）。
 - **思考回传**：`reasoning_content`（多数模型）、`reasoning` + `reasoning_details`（minimax-m2.5，OpenRouter 风格）、内联 `<think>…</think>`（minimax-m3，自动从正文剥出）三种形态都已接入，统一流入 DSH 的 reasoning-delta 折叠显示。
