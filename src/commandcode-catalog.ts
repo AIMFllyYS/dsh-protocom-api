@@ -145,13 +145,22 @@ export function modelsArrays(payload: string): string[] {
   const marker = '"models":['
   const found: string[] = []
   let at = payload.indexOf(marker)
+  // How far a scan has already looked without finding a close. A payload whose
+  // arrays never close -- all an attacker needs to arrange -- made every scan
+  // run to end-of-input, so N markers cost N full passes: measured 31ms at
+  // 16KiB, 472ms at 64KiB, 1.9s at 128KiB, and the 8MiB cap allowed roughly
+  // sixteen minutes of a frozen event loop from one page that needs neither
+  // authentication nor a key. Carrying the frontier forward bounds the whole
+  // walk to a single pass, because a scan that found no close before P cannot
+  // find one for a marker that starts after P either.
+  let scanned = 0
   while (at !== -1) {
     const start = at + marker.length - 1
     let depth = 0
     let end = -1
     let inString = false
     let escaped = false
-    for (let index = start; index < payload.length; index += 1) {
+    for (let index = Math.max(start, scanned); index < payload.length; index += 1) {
       const char = payload[index] as string
       if (inString) {
         if (escaped) escaped = false
@@ -169,7 +178,13 @@ export function modelsArrays(payload: string): string[] {
         }
       }
     }
-    if (end !== -1) found.push(payload.slice(start, end + 1))
+    if (end !== -1) {
+      found.push(payload.slice(start, end + 1))
+      scanned = end + 1
+    } else {
+      // Nothing closes from here on, so no later marker can close either.
+      scanned = payload.length
+    }
     at = payload.indexOf(marker, at + 1)
   }
   return found.sort((left, right) => right.length - left.length)

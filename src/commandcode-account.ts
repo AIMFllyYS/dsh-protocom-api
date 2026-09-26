@@ -202,6 +202,14 @@ export function commandCodeAccountFetchHandler(
   hooks: CommandCodeAccountHooks,
 ): (request: Request) => Promise<Response> {
   return async (request: Request): Promise<Response> => {
+    // Guarded here rather than relying on the route declaration. A carrier that
+    // dispatches /api/* over IPC never consults the registered method list, so
+    // without this every verb reaches the service: an unauthenticated-in-method
+    // POST flood would be one upstream request per five-second backoff window,
+    // forever, carrying the operator's key. The two sibling handlers do the same.
+    if (request.method !== 'GET') {
+      return new Response(null, { status: 405, headers: { ...JSON_HEADERS, allow: 'GET' } })
+    }
     const url = new URL(request.url)
     const only = url.searchParams.get('group')
     const groups = [...hooks.options().groups.values()].filter(group => group.enabled)

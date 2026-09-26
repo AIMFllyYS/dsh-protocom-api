@@ -286,6 +286,19 @@ export interface ResolvedProtocomOptions {
  */
 export declare function resolveAdapterOptions(config: SectionConfig, family?: ProviderFamily): ResolvedProtocomOptions;
 /**
+ * Name a rejected value without echoing the whole thing.
+ *
+ * These messages exist to tell an operator WHICH value is wrong, and the value
+ * is normally a credential reference like `PROTOCOM_AGGREGATE_API_KEY`. The case
+ * this bound exists for is a literal API key pasted into the reference field: it
+ * fails the same test, and an unbounded echo then carries the secret into the
+ * error, the log line, and any screenshot of the settings page. A short prefix
+ * still identifies which field to fix.
+ * @param value - the rejected value as configured.
+ * @returns a bounded excerpt, marked when it was cut.
+ */
+export declare function describeRejectedRef(value: string): string;
+/**
  * Validate one endpoint root. Plain http is allowed only for a loopback host,
  * so the stored bearer token can never be sent in the clear to a remote
  * endpoint; userinfo, query strings, and fragments are refused because they

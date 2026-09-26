@@ -144,6 +144,8 @@ export declare const en: {
     contextLabel: string;
     includeForks: string;
     applyLeader: string;
+    applyLeaderNoSession: string;
+    applyLeaderSubagent: string;
     costTitle: string;
     costInput: string;
     costCache: string;

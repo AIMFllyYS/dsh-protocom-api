@@ -90,7 +90,7 @@ export function apply(ctx: ClientContext): void {
 
   let fusionOperations: FusionOperations | undefined
   const fusionInjected = (): FusionInjected => {
-    fusionOperations ??= createFusionOperations(ctx)
+    fusionOperations ??= createFusionOperations(ctx, t)
     return {
       operations: fusionOperations,
       t,

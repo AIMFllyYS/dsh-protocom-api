@@ -92,6 +92,18 @@ export declare class KeyPool {
      */
     private readonly lastPicked;
     /**
+     * Record which key a stream received, evicting the oldest past the cap.
+     *
+     * Insertion order is the recency order, so re-inserting refreshes a stream's
+     * position exactly as the affinity map already does. Without the cap this grew
+     * once per (session, group) for the life of the Host: measured 5000 distinct
+     * session ids leaving 5000 entries, against an affinity map correctly held at
+     * 512. A long-lived process would leak one small entry per conversation.
+     * @param stream - the Session id, or the non-session sentinel.
+     * @param index - the key it was served.
+     */
+    private remember;
+    /**
      * @param keyCount - how many keys this pool holds.
      * @param policy - how to choose among them.
      * @param now - clock, injectable so cooldown behaviour is testable.

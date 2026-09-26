@@ -22,6 +22,10 @@ import type { Context as ClientContext } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-client-ui-settings/client'
 import type {} from '@deepseek-ai/dsh-api-remotes/client'
 import type { SettingsPathOpView } from '@deepseek-ai/dsh-api-remotes/client'
+import type { en } from './locale.ts'
+
+/** Translate one locale key. Mirrors the `Translator` the sections declare. */
+type Translator = (key: keyof typeof en) => string
 
 /** One adapter-owned reasoning effort a model route offers. */
 export interface FusionEffort {
@@ -231,8 +235,11 @@ function seatValue(seat: FusionSeat | undefined): Record<string, string> {
  * Bind the Fusion section's Host operations.
  * @param ctx - the plugin's context, which declares `remote.session` and
  * `configForms` in its own `inject`.
+ * @param t - the section's translator. The `applyLeader` outcomes that are not
+ * failures but still need saying -- "there is no session to apply this to" --
+ * are prose, so the wording stays with the locale rather than here.
  */
-export function createFusionOperations(ctx: ClientContext): FusionOperations {
+export function createFusionOperations(ctx: ClientContext, t: Translator): FusionOperations {
   // 1.7 names a form after its Loader entry, and this plugin has one entry
   // holding all four sections. The Fusion fields are therefore a PATH into that
   // form rather than a namespace of their own, which is why every op below is
@@ -282,14 +289,29 @@ export function createFusionOperations(ctx: ClientContext): FusionOperations {
       // exists, because the default model became a service rather than a
       // section an extension could address.
       const current = currentSessionId(ctx)
-      if (current === undefined) return failures
+      if (current === undefined) {
+        // Reporting beats a silent pass. The reasoning above explains why no
+        // separate default write happens -- it would be redundant when
+        // selectModel runs -- but that argument only holds if selectModel runs,
+        // and from a page with no session open it never does. Returning success
+        // here told the operator the leader seat was applied when nothing had
+        // been touched, in the one screen where they are most likely to set it.
+        failures.push(t('applyLeaderNoSession'))
+        return failures
+      }
       const listed = await session.list({})
       if (!listed.ok) {
         failures.push(listed.error.message)
         return failures
       }
       const target = leaderTargetSession(listed.value.items, current)
-      if (target === undefined) return failures
+      if (target === undefined) {
+        // The current session is a subagent, which this deliberately skips so
+        // persisted history is not activated outside the parent-continuation
+        // path. Saying so beats reporting a success that did not happen.
+        failures.push(t('applyLeaderSubagent'))
+        return failures
+      }
       const selected = await session.selectModel({
         sessionId: target,
         provider: seat.provider,

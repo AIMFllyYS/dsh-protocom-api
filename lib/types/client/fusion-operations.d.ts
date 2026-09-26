@@ -19,6 +19,9 @@
  */
 import type { Context as ClientContext } from '@deepseek-ai/cordis';
 import type { SettingsPathOpView } from '@deepseek-ai/dsh-api-remotes/client';
+import type { en } from './locale.ts';
+/** Translate one locale key. Mirrors the `Translator` the sections declare. */
+type Translator = (key: keyof typeof en) => string;
 /** One adapter-owned reasoning effort a model route offers. */
 export interface FusionEffort {
     readonly id: string;
@@ -174,5 +177,9 @@ export declare function fusionOps(draft: FusionDraft): SettingsPathOpView[];
  * Bind the Fusion section's Host operations.
  * @param ctx - the plugin's context, which declares `remote.session` and
  * `configForms` in its own `inject`.
+ * @param t - the section's translator. The `applyLeader` outcomes that are not
+ * failures but still need saying -- "there is no session to apply this to" --
+ * are prose, so the wording stays with the locale rather than here.
  */
-export declare function createFusionOperations(ctx: ClientContext): FusionOperations;
+export declare function createFusionOperations(ctx: ClientContext, t: Translator): FusionOperations;
+export {};

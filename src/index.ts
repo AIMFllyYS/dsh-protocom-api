@@ -24,7 +24,7 @@ import type { AdapterRegistrationHandle } from '@deepseek-ai/dsh-llm'
 import { ProtocomAdapter } from './adapter.ts'
 import { BalanceService, balanceFetchHandler } from './balance.ts'
 import { GoUsageService, goUsageFetchHandler } from './go-usage.ts'
-import { OPENCODE_GO, PROTOCOM, resolveAdapterOptions } from './config.ts'
+import { describeRejectedRef, OPENCODE_GO, PROTOCOM, resolveAdapterOptions } from './config.ts'
 import { COMMANDCODE } from './commandcode.ts'
 import { CommandCodeAccountService, commandCodeAccountFetchHandler } from './commandcode-account.ts'
 import type { Config, ResolvedGroup, ResolvedProtocomOptions, SectionConfig, SectionKey } from './config.ts'
@@ -212,7 +212,9 @@ function mountFamily(
     // but the environment fallback is the sharp edge (it reads any `process.env`
     // key), so it re-checks rather than trusting its caller.
     if (!family.credentialRef.test(ref)) {
-      throw new LlmError(`${ns}: credential reference "${ref}" is outside this family's credential namespace`, 'MISSING_CREDENTIAL')
+      // Bounded echo: a literal key pasted into the reference field lands here,
+      // and the message is designed to be read and screenshotted.
+      throw new LlmError(`${ns}: credential reference "${describeRejectedRef(ref)}" is outside this family's credential namespace`, 'MISSING_CREDENTIAL')
     }
     const credentials = ctx.get('credentials')
     if (credentials !== undefined) {
