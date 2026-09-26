@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { IMAGE_OFFLOAD_REQUIRED_CODE } from '@deepseek-ai/dsh-llm'
 import type { GenerateOptions } from '@deepseek-ai/dsh-llm'
 import { ProtocomAdapter } from '../src/adapter.ts'
 import { resolveAdapterOptions } from '../src/config.ts'
@@ -127,32 +128,64 @@ describe('whole-request image budget (P2-2)', () => {
     expect(parts.some(part => part.type === 'text' && String(part.text).includes('image omitted'))).toBe(false)
   })
 
-  it('drops the oldest images past the count budget into text placeholders', async () => {
+  /**
+   * Drain one request and return the failure it raised, if any.
+   * @param adapter - the adapter under test.
+   * @param count - how many image occurrences the request carries.
+   * @param store - the attachment store answering for them.
+   * @returns the raised error, or undefined when the request was sent.
+   */
+  async function failureFor(count: number, store: unknown): Promise<any> {
+    const bodies: string[] = []
+    vi.stubGlobal('fetch', capturingFetch(bodies))
+    const adapter = adapterFor(AGGREGATE, store as never)
+    try {
+      for await (const _chunk of adapter.stream(request('protocom-aggregate', VISION_MODEL, imageBlocks(count)))) {
+        // drain
+      }
+    } catch (error) {
+      return error
+    }
+    return undefined
+  }
+
+  it('declares a count-budget overrun instead of dropping images itself', async () => {
+    // Since 1.7 an adapter does not silently project images away: it reports how
+    // many oldest occurrences must go, and the session-level executor records
+    // that choice durably and retries. Offloading here instead would make the
+    // decision per-request and invisible to replay.
+    const error = await failureFor(601, attachments)
+    expect(error?.failure?.code).toBe(IMAGE_OFFLOAD_REQUIRED_CODE)
+    expect(error?.failure?.offloadImages).toBeGreaterThan(0)
+  })
+
+  it('declares a byte-budget overrun at the exact number of occurrences', async () => {
+    const big = new Uint8Array(11 * 1024 * 1024)
+    const bigAttachments = { readImageRequest: vi.fn(async () => ({ mediaType: 'image/png', data: big })) }
+    const error = await failureFor(2, bigAttachments)
+    // 2 x 11 MiB encodes past the 20 MiB whole-request bound, so exactly the
+    // oldest one has to go -- not both.
+    expect(error?.failure?.code).toBe(IMAGE_OFFLOAD_REQUIRED_CODE)
+    expect(error?.failure?.offloadImages).toBe(1)
+  })
+
+  it('renders an already-offloaded image as its placeholder', async () => {
+    // The offloaded set is a durable surface fact, so every route renders the
+    // same selection as text; a replayed conversation must not silently
+    // re-send an attachment the budget already dropped.
     const bodies: string[] = []
     vi.stubGlobal('fetch', capturingFetch(bodies))
     const adapter = adapterFor(AGGREGATE, attachments)
-    for await (const _chunk of adapter.stream(request('protocom-aggregate', VISION_MODEL, imageBlocks(601)))) {
+    const blocks = imageBlocks(1) as Record<string, unknown>[]
+    ;(blocks[0] as Record<string, unknown>)['offloaded'] = true
+    for await (const _chunk of adapter.stream(request('protocom-aggregate', VISION_MODEL, blocks))) {
       // drain
     }
-    const parts = partsOf(bodies[0] as string)
-    expect(parts.filter(part => part.type === 'image_url')).toHaveLength(600)
-    const placeholder = parts.find(part => part.type === 'text')
-    expect(String(placeholder?.text)).toContain('image omitted to fit request image limits')
-  })
-
-  it('drops the oldest images past the byte budget', async () => {
-    const bodies: string[] = []
-    vi.stubGlobal('fetch', capturingFetch(bodies))
-    const big = new Uint8Array(11 * 1024 * 1024)
-    const bigAttachments = { readImageRequest: vi.fn(async () => ({ mediaType: 'image/png', data: big })) }
-    const adapter = adapterFor(AGGREGATE, bigAttachments)
-    for await (const _chunk of adapter.stream(request('protocom-aggregate', VISION_MODEL, imageBlocks(2)))) {
-      // drain
-    }
-    const parts = partsOf(bodies[0] as string)
-    // 2 x 11 MiB encodes past the 20 MiB whole-request bound, so the oldest goes.
-    expect(parts.filter(part => part.type === 'image_url')).toHaveLength(1)
-    expect(parts.some(part => part.type === 'text' && String(part.text).includes('image omitted'))).toBe(true)
+    const body = bodies[0] as string
+    // With no images left the serializer collapses the message to a plain
+    // string, so the check is on the wire body rather than on content parts.
+    expect(body).not.toContain('image_url')
+    expect(body).toContain('image omitted to fit request image limits')
   })
 })
 

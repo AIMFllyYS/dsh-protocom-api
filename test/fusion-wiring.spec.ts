@@ -8,6 +8,7 @@ import { describe, expect, it } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
 import { agentEvents } from '@deepseek-ai/dsh-agent'
 import type { LlmCallConfig } from '@deepseek-ai/dsh-llm'
+import { FusionSection } from '../src/config.ts'
 import { mountFusion } from '../src/fusion-host.ts'
 
 const LEADER = { provider: 'leader-route', model: 'leader-model' }
@@ -36,7 +37,9 @@ async function dispatch(
       return { ...resolved, provider: 'competitor', model: 'competitor-model' }
     }, { global: true, prepend: true })
   }
-  mountFusion(ctx as never, { enabled: true, leader: LEADER, coder: CODER })
+  // 1.7 hands the rule a READ of the Loader entry's volatile section rather
+  // than a composition entry, so the resolved section is what it starts from.
+  mountFusion(ctx as never, () => FusionSection({ enabled: true, leader: LEADER, coder: CODER } as never))
   const seed: LlmCallConfig = options.seed ?? { ...LEADER }
   return await agentEvents(ctx, agentFor(header)).waterfall(
     'agent/request',
@@ -74,7 +77,7 @@ describe('Fusion agent/request wiring (T2)', () => {
 
   it('honours includeForks through the real dispatch', async () => {
     const ctx = new Context()
-    mountFusion(ctx as never, { enabled: true, leader: LEADER, coder: CODER, includeForks: false })
+    mountFusion(ctx as never, () => FusionSection({ enabled: true, leader: LEADER, coder: CODER, includeForks: false } as never))
     const forked = await agentEvents(ctx, agentFor({ origin: 'subagent', isSeeded: true })).waterfall(
       'agent/request',
       { turn: 1, step: 0, signal: new AbortController().signal },
@@ -91,7 +94,7 @@ describe('Fusion agent/request wiring (T2)', () => {
 
   it('stays a pass-through while disabled', async () => {
     const ctx = new Context()
-    mountFusion(ctx as never, { enabled: false, leader: LEADER, coder: CODER })
+    mountFusion(ctx as never, () => FusionSection({ enabled: false, leader: LEADER, coder: CODER } as never))
     const config = await agentEvents(ctx, agentFor({ origin: 'subagent', isSeeded: false })).waterfall(
       'agent/request',
       { turn: 1, step: 0, signal: new AbortController().signal },
@@ -102,8 +105,14 @@ describe('Fusion agent/request wiring (T2)', () => {
 
   it('exposes the live source the editor reads', () => {
     const ctx = new Context()
-    const source = mountFusion(ctx as never, { enabled: true, leader: LEADER, coder: CODER })
+    let section = FusionSection({ enabled: true, leader: LEADER, coder: CODER } as never)
+    const source = mountFusion(ctx as never, () => section)
     expect(source.current()).toMatchObject({ enabled: true, coder: CODER })
     expect(source.raw()).toMatchObject({ enabled: true })
+    // Reading through the reference is what makes a settings write visible
+    // without a remount, so the same source must follow a replaced section.
+    section = FusionSection({ enabled: true, leader: LEADER, coder: { provider: 'next', model: 'next-model' } } as never)
+    expect(source.raw()).toMatchObject({ coder: { provider: 'next', model: 'next-model' } })
+    expect(source.current().coder?.provider).toBe('next')
   })
 })

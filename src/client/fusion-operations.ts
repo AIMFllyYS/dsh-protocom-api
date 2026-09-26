@@ -145,11 +145,19 @@ export interface FusionOperations {
   applyLeader(seat: FusionSeat): Promise<string[]>
 }
 
-/** The settings namespace the Fusion section owns; mirrors `FUSION_NS`. */
-export const FUSION_SETTINGS_NS = 'model-fusion'
+/**
+ * The Loader entry id this plugin's settings form is keyed by; mirrors
+ * `PROTOCOM_NS` on the Host.
+ *
+ * 1.7 keys a form by profile row rather than by a namespace the plugin
+ * registers, and one entry has exactly one Config. All four sections therefore
+ * share this id and are addressed by their path prefix within it — see
+ * {@link FUSION_SECTION_PATH}.
+ */
+export const PROTOCOM_ENTRY_ID = 'protocom-api'
 
-/** The harness-owned namespace carrying the default model for new Sessions. */
-export const AGENT_DEFAULT_MODEL_NS = 'agent-default-model'
+/** Where the Fusion section sits inside that one Config. */
+export const FUSION_SECTION_PATH = 'fusion' as const
 
 /**
  * The browser Session service's read face, as far as this section needs it.
@@ -191,14 +199,21 @@ export function leaderTargetSession(
   return row.origin === 'subagent' ? undefined : current
 }
 
-/** The path operations that write one draft as a complete section. */
+/**
+ * The path operations that write one draft as a complete section.
+ *
+ * Every path is rooted at the section name because 1.7 addresses fields from
+ * the Config root: the form belongs to the entry, and `fusion` is the section
+ * inside it rather than a namespace of its own.
+ */
 export function fusionOps(draft: FusionDraft): SettingsPathOpView[] {
+  const path = (...rest: string[]): string[] => [FUSION_SECTION_PATH, ...rest]
   return [
-    { op: 'set', path: ['enabled'], value: draft.enabled },
-    { op: 'set', path: ['leader'], value: seatValue(draft.leader) },
-    { op: 'set', path: ['coder'], value: seatValue(draft.coder) },
-    { op: 'set', path: ['includeForks'], value: draft.includeForks },
-    { op: 'set', path: ['applyLeader'], value: draft.applyLeader },
+    { op: 'set', path: path('enabled'), value: draft.enabled },
+    { op: 'set', path: path('leader'), value: seatValue(draft.leader) },
+    { op: 'set', path: path('coder'), value: seatValue(draft.coder) },
+    { op: 'set', path: path('includeForks'), value: draft.includeForks },
+    { op: 'set', path: path('applyLeader'), value: draft.applyLeader },
   ]
 }
 
@@ -215,11 +230,14 @@ function seatValue(seat: FusionSeat | undefined): Record<string, string> {
 /**
  * Bind the Fusion section's Host operations.
  * @param ctx - the plugin's context, which declares `remote.session` and
- * `settingsScope` in its own `inject`.
+ * `configForms` in its own `inject`.
  */
 export function createFusionOperations(ctx: ClientContext): FusionOperations {
-  const scope = ctx.settingsScope.bind<FusionStoredValue>({ namespace: FUSION_SETTINGS_NS })
-  const defaults = ctx.settingsScope.bind<Record<string, unknown>>({ namespace: AGENT_DEFAULT_MODEL_NS })
+  // 1.7 names a form after its Loader entry, and this plugin has one entry
+  // holding all four sections. The Fusion fields are therefore a PATH into that
+  // form rather than a namespace of their own, which is why every op below is
+  // rooted at FUSION_SECTION_PATH.
+  const scope = ctx.configForms.get<FusionStoredValue>(PROTOCOM_ENTRY_ID)
   const session = (ctx.remote as { session: {
     modelCatalog(): Promise<{ ok: true; value: FusionCatalog } | { ok: false; error: { message: string } }>
     list(request?: Record<string, never>): Promise<{ ok: true; value: { items: FusionSessionRow[] } } | { ok: false; error: { message: string } }>
@@ -257,21 +275,12 @@ export function createFusionOperations(ctx: ClientContext): FusionOperations {
     },
     applyLeader: async (seat) => {
       const failures: string[] = []
-      const snapshot = defaults.getSnapshot()
-      if (!snapshot.writable) return failures
-      try {
-        await defaults.mutate([
-          { op: 'set', path: ['provider'], value: seat.provider },
-          { op: 'set', path: ['model'], value: seat.model },
-          // The effort is written explicitly, including clearing it: a leftover
-          // effort from a previous leader belongs to that model's vocabulary.
-          seat.reasoningEffort === undefined
-            ? { op: 'unset', path: ['reasoningEffort'] }
-            : { op: 'set', path: ['reasoningEffort'], value: seat.reasoningEffort },
-        ], snapshot.revision)
-      } catch (error) {
-        failures.push(error instanceof Error ? error.message : String(error))
-      }
+      // No separate write to the deployment default: since 1.7
+      // `session.selectModel` persists the deployment default itself, in the
+      // background, through the harness's own service. Writing a settings
+      // namespace for it is not merely redundant -- that namespace no longer
+      // exists, because the default model became a service rather than a
+      // section an extension could address.
       const current = currentSessionId(ctx)
       if (current === undefined) return failures
       const listed = await session.list({})

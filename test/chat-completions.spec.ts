@@ -188,9 +188,12 @@ describe('chat-completions serialization', () => {
             { type: 'tool-call', id: 'call_1', name: 'run_code', arguments: '{"code":"1"}' },
           ],
         },
+        // Since 1.7 a tool result is its own message of role 'tool', carrying
+        // its blocks directly rather than nesting a 'tool-result' block.
         {
-          role: 'user',
-          content: [{ type: 'tool-result', toolCallId: 'call_1', content: [{ type: 'text', text: '1' }] }],
+          role: 'tool',
+          toolCallId: 'call_1',
+          content: [{ type: 'text', text: '1' }],
         },
       ],
     } as unknown as GenerateOptions

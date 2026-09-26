@@ -12,7 +12,15 @@
  */
 
 import { contentHasImage, EMPTY_RESPONSE_CODE, LlmError, ToolCallId } from '@deepseek-ai/dsh-llm'
-import type { ContentBlock, FinishReason, GenerateOptions, Message, StreamChunk, TokenUsage } from '@deepseek-ai/dsh-llm'
+import type {
+  ContentBlock,
+  FinishReason,
+  GenerateOptions,
+  Message,
+  RequestMessage,
+  StreamChunk,
+  TokenUsage,
+} from '@deepseek-ai/dsh-llm'
 import { DONE, parseSse, parseSseUntilEof } from '../sse.ts'
 import { postSse } from './http.ts'
 import type { ProtocolConnection, RequestImageUrls } from './http.ts'
@@ -171,15 +179,16 @@ function userContent(
   return parts.length === 0 ? text : parts
 }
 
-function wireMessage(message: Message, images: RequestImageUrls | undefined): WireMessage {
+function wireMessage(message: RequestMessage, images: RequestImageUrls | undefined): WireMessage {
   if (message.role === 'system') return { role: 'system', content: flattenText(message.content) }
+  // Since 1.7 a tool result is its own message of role `tool` carrying the
+  // blocks directly, rather than a `tool-result` block nested in a user
+  // message. The wire shape is unchanged; only where the harness puts it moved.
+  if (message.role === 'tool') {
+    assertTextOnly(message.content)
+    return { role: 'tool', tool_call_id: String(message.toolCallId), content: flattenText(message.content) }
+  }
   if (message.role === 'user') {
-    const result = message.content.find((block): block is Extract<ContentBlock, { type: 'tool-result' }> =>
-      block.type === 'tool-result')
-    if (result !== undefined) {
-      assertTextOnly(result.content)
-      return { role: 'tool', tool_call_id: String(result.toolCallId), content: flattenText(result.content) }
-    }
     return { role: 'user', content: userContent(message.content, images) }
   }
   // The assistant branch is decided by the compatibility mode, not here.
@@ -243,7 +252,7 @@ function assistantMessages(
 
 /** The wire messages one harness message becomes, under the route's modes. */
 function wireMessages(
-  message: Message,
+  message: RequestMessage,
   images: RequestImageUrls | undefined,
   replayReasoning: boolean,
   assistantTextReplay: AssistantTextReplay,

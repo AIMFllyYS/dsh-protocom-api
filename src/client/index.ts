@@ -37,7 +37,7 @@ const NS = 'settings.protocom' as const
 
 /**
  * Required services. Deliberately NOT including the Fusion-only two
- * (`remote.session`, `settingsScope`): a missing entry here deactivates the
+ * (`remote.session`, `configForms`): a missing entry here deactivates the
  * whole client plugin, which would take the working provider panels down with
  * a feature they do not depend on. Fusion declares its own dependencies in a
  * scoped `ctx.inject` below instead, so an unusual deployment loses the Fusion
@@ -78,15 +78,15 @@ export function apply(ctx: ClientContext): void {
     return () => { tag.remove() }
   })
 
-  // Built once, not per injection: binding a settings scope registers an
-  // unsubscribe on this plugin's fiber, so a fresh bind on every inject call
-  // would accumulate scopes for as long as the plugin lives. The face is lazy
-  // so constructing it here never touches a service the deployment may lack.
+  // Built once, not per injection: obtaining a config form subscribes on this
+  // plugin's fiber, so a fresh one on every inject call would accumulate
+  // subscriptions for as long as the plugin lives. The face is lazy so
+  // constructing it here never touches a service the deployment may lack.
   /** Whether this deployment exposes the two services the Fusion section reads. */
   const fusionAvailable = (): boolean =>
     ctx.get('remote') !== undefined
     && (ctx.remote as { session?: unknown }).session !== undefined
-    && ctx.get('settingsScope') !== undefined
+    && ctx.get('configForms') !== undefined
 
   let fusionOperations: FusionOperations | undefined
   const fusionInjected = (): FusionInjected => {

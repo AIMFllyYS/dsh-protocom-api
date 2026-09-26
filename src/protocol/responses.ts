@@ -18,7 +18,14 @@
  */
 
 import { contentHasImage, EMPTY_RESPONSE_CODE, LlmError, ToolCallId } from '@deepseek-ai/dsh-llm'
-import type { ContentBlock, FinishReason, GenerateOptions, Message, StreamChunk, TokenUsage } from '@deepseek-ai/dsh-llm'
+import type {
+  ContentBlock,
+  FinishReason,
+  GenerateOptions,
+  RequestMessage,
+  StreamChunk,
+  TokenUsage,
+} from '@deepseek-ai/dsh-llm'
 import { DONE, parseSseUntilEof } from '../sse.ts'
 import { postSse } from './http.ts'
 import type { ProtocolConnection, RequestImageUrls } from './http.ts'
@@ -120,22 +127,23 @@ function inputParts(blocks: readonly ContentBlock[], images: RequestImageUrls | 
   return parts.length === 0 ? [{ type: 'input_text', text }] : parts
 }
 
-function wireInput(message: Message, images: RequestImageUrls | undefined): Record<string, unknown>[] {
+function wireInput(message: RequestMessage, images: RequestImageUrls | undefined): Record<string, unknown>[] {
   if (message.role === 'system') return [inputTextItem('system', flattenText(message.content))]
+  // Since 1.7 a tool result is its own message of role `tool`, carrying its
+  // blocks directly rather than nesting a `tool-result` block in a user
+  // message. The wire item is the same; only its position in the harness moved.
+  if (message.role === 'tool') {
+    const parts = inputParts(message.content, images)
+    return [{
+      type: 'function_call_output',
+      call_id: String(message.toolCallId),
+      // A text-only tool result keeps the historical string form, so nothing
+      // about the common path changes; only a result carrying an image needs
+      // the content-part form the protocol also accepts.
+      output: parts.length === 1 && parts[0]?.type === 'input_text' ? parts[0].text : parts,
+    }]
+  }
   if (message.role === 'user') {
-    const result = message.content.find((block): block is Extract<ContentBlock, { type: 'tool-result' }> =>
-      block.type === 'tool-result')
-    if (result !== undefined) {
-      const parts = inputParts(result.content, images)
-      return [{
-        type: 'function_call_output',
-        call_id: String(result.toolCallId),
-        // A text-only tool result keeps the historical string form, so nothing
-        // about the common path changes; only a result carrying an image needs
-        // the content-part form the protocol also accepts.
-        output: parts.length === 1 && parts[0]?.type === 'input_text' ? parts[0].text : parts,
-      }]
-    }
     return [{ type: 'message', role: 'user', content: inputParts(message.content, images) }]
   }
   // Assistant output is declared text-only, so an image here is a caller bug

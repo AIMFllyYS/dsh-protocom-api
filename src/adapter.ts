@@ -11,11 +11,13 @@
  */
 
 import {
+  IMAGE_OFFLOAD_REQUIRED_CODE,
   LlmAdapter,
   LlmError,
   offloadedImageText,
-  offloadRequestImagesWithPolicy,
+  projectOffloadedImages,
   ReasoningEffortId,
+  requiredImageOffload,
 } from '@deepseek-ai/dsh-llm'
 import { idleWatchdog, timeoutOf } from '@deepseek-ai/dsh-timeout'
 import type {
@@ -25,13 +27,14 @@ import type {
   LlmModelReasoningInfo,
   LlmProviderInfo,
   LlmResolvedModelInfo,
-  Message,
   ModelModality,
   PreparedAdapterCall,
+  RequestMessage,
   ResolvedRetryPolicy,
   StreamChunk,
 } from '@deepseek-ai/dsh-llm'
-import type { AttachmentStore, ImageAttachmentRef, ImageRequestPolicy } from '@deepseek-ai/dsh-attachment'
+import { requestImageDimensions } from '@deepseek-ai/dsh-attachment'
+import type { AttachmentStore, ImageAttachmentRef, ImageRequestTarget } from '@deepseek-ai/dsh-attachment'
 import { PROTOCOM } from './family.ts'
 import type { ProviderFamily } from './family.ts'
 import type { ResolvedGroup, ResolvedProtocomOptions } from './config.ts'
@@ -68,14 +71,37 @@ export const MODEL_LIST_TTL_MS = 60_000
 export const PLAN_TTL_MS = 15 * 60 * 1_000
 
 /**
- * The request-image projection budget. Mirrors the harness's own default
- * vision budget: the attachment service re-encodes each stored image to fit,
- * so the endpoint never receives bytes beyond what a vision model is priced
- * and sized for.
+ * Widest total-pixel budget this plugin asks the attachment service to encode
+ * an image within. Since 1.7 the request image target is per OCCURRENCE
+ * (dimensions plus a byte target) rather than one route-wide policy, so the
+ * budget is applied through {@link requestImageTargetFor}.
  */
-export const REQUEST_IMAGE_POLICY: ImageRequestPolicy = {
-  maxPixels: 640_000,
-  maxBytes: 1024 * 1024,
+export const REQUEST_IMAGE_MAX_PIXELS = 640_000
+
+/**
+ * Encoded-byte target for one request image. The attachment service keeps the
+ * smallest quality-ladder output when no quality fits, so this is a target
+ * rather than a hard refusal.
+ */
+export const REQUEST_IMAGE_TARGET_BYTES = 1024 * 1024
+
+/**
+ * The request-image target for one attachment on this family's routes.
+ *
+ * 1.7 replaced the route-wide policy object with a per-occurrence target that
+ * the caller derives, which is what lets each route project an image
+ * differently while sharing one stored normalized copy. The projection itself
+ * (aspect-preserving integer dimensions inside a pixel budget) is the
+ * harness's own helper, so this plugin cannot drift from the first-party
+ * adapters' geometry.
+ * @param ref - the durable normalized attachment.
+ * @returns that occurrence's width, height, and encoded-byte target.
+ */
+export function requestImageTargetFor(ref: Pick<ImageAttachmentRef, 'width' | 'height'>): ImageRequestTarget {
+  return {
+    ...requestImageDimensions(ref.width, ref.height, REQUEST_IMAGE_MAX_PIXELS),
+    maxBytes: REQUEST_IMAGE_TARGET_BYTES,
+  }
 }
 
 /**
@@ -135,14 +161,20 @@ function teardownGrace(): Promise<void> {
 
 
 
-/** Collect every image reference a message tree carries, including tool results. */
+/**
+ * Collect every image reference one message's content carries.
+ *
+ * No recursion: since 1.7 a tool result is a first-class message of role
+ * `tool` whose content holds its blocks directly, so an image inside a tool
+ * result is already at the top level of that message and a nested walk would
+ * look for a block type that no longer exists.
+ */
 function collectImageRefs(
   content: readonly ContentBlock[],
   refs: Map<string, ImageAttachmentRef>,
 ): void {
   for (const block of content) {
     if (block.type === 'image') refs.set(String(block.attachment.attachmentId), block.attachment)
-    else if (block.type === 'tool-result') collectImageRefs(block.content, refs)
   }
 }
 
@@ -743,47 +775,58 @@ export class ProtocomAdapter extends LlmAdapter {
   private async resolveRequestImages(
     options: GenerateOptions,
     model: string,
-  ): Promise<{ images: RequestImageUrls | undefined; messages: readonly Message[] }> {
+  ): Promise<{ images: RequestImageUrls | undefined; messages: readonly RequestMessage[] }> {
+    const family = this.family()
+    // An attachment a session-level policy already offloaded renders as its
+    // placeholder on EVERY route: the offloaded set is a durable surface fact,
+    // so honouring it first is what keeps a replayed conversation faithful
+    // instead of silently re-sending an image the budget already dropped.
+    const projected = projectOffloadedImages(options.messages, ref => offloadedImageText(ref))
     const refs = new Map<string, ImageAttachmentRef>()
-    for (const message of options.messages) collectImageRefs(message.content, refs)
-    if (refs.size === 0) return { images: undefined, messages: options.messages }
+    for (const message of projected) collectImageRefs(message.content, refs)
+    if (refs.size === 0) return { images: undefined, messages: projected }
     if (!acceptsImages(model, this.config.options().visionModels)) {
-      throw new LlmError(`Protocom model "${model}" does not accept image input.`, 'UNSUPPORTED_CONTENT')
+      throw new LlmError(`${family.label} model "${model}" does not accept image input.`, 'UNSUPPORTED_CONTENT')
     }
     const attachments = this.config.resolveAttachments?.()
     if (attachments === undefined) {
       throw new LlmError(
-        'Protocom image input requires the durable attachment service.',
+        `${family.label} image input requires the durable attachment service.`,
         'UNSUPPORTED_CONTENT',
       )
     }
     const ordered = [...refs.values()]
     const resolved = await Promise.all(ordered.map(
-      ref => attachments.readImageRequest(ref, REQUEST_IMAGE_POLICY, options.signal),
+      ref => attachments.readImageRequest(ref, requestImageTargetFor(ref), options.signal),
     ))
     const rawBytes = new Map<string, number>()
     ordered.forEach((ref, index) => {
       rawBytes.set(String(ref.attachmentId), (resolved[index] as { data: Uint8Array }).data.byteLength)
     })
-    // Bound the whole request, oldest image first. The first-party adapters
-    // apply this exact projection and replace each dropped occurrence with a
-    // stable text placeholder, which is what keeps the replayed context
-    // faithful instead of silently losing an attachment.
-    const messages = offloadRequestImagesWithPolicy(options.messages, {
+    // DECLARE the budget rather than enforcing it here. Since 1.7 an adapter
+    // reports how many more oldest occurrences must go and fails with
+    // IMAGE_OFFLOAD_REQUIRED; the session-level executor
+    // (dsh-compaction-image-offload, part of the base bundle) records the
+    // omission durably and retries without spending the provider retry budget.
+    // Offloading locally instead would make the choice per-request and
+    // invisible to replay.
+    const offloadImages = requiredImageOffload(projected, {
       representation: 'base64',
-      byteLength: ref => rawBytes.get(String(ref.attachmentId)) ?? 0,
       maxBytes: REQUEST_IMAGE_TOTAL_BYTES,
       maxImages: REQUEST_IMAGE_MAX_COUNT,
-      placeholder: ref => offloadedImageText(ref),
-    })
-    const retained = new Map<string, ImageAttachmentRef>()
-    for (const message of messages) collectImageRefs(message.content, retained)
+    }, block => rawBytes.get(String(block.attachment.attachmentId)) ?? 0)
+    if (offloadImages > 0) {
+      throw new LlmError(
+        `${family.label} request images exceed the route budget;`
+        + ` ${offloadImages} more oldest occurrence(s) must be offloaded.`,
+        IMAGE_OFFLOAD_REQUIRED_CODE,
+        { offloadImages },
+      )
+    }
     const images = new Map<string, string>()
     ordered.forEach((ref, index) => {
-      const id = String(ref.attachmentId)
-      if (!retained.has(id)) return
-      images.set(id, toDataUrl(resolved[index] as { mediaType: string; data: Uint8Array }))
+      images.set(String(ref.attachmentId), toDataUrl(resolved[index] as { mediaType: string; data: Uint8Array }))
     })
-    return { images: images.size === 0 ? undefined : images, messages }
+    return { images: images.size === 0 ? undefined : images, messages: projected }
   }
 }

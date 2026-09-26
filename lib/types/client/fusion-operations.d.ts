@@ -139,10 +139,18 @@ export interface FusionOperations {
      */
     applyLeader(seat: FusionSeat): Promise<string[]>;
 }
-/** The settings namespace the Fusion section owns; mirrors `FUSION_NS`. */
-export declare const FUSION_SETTINGS_NS = "model-fusion";
-/** The harness-owned namespace carrying the default model for new Sessions. */
-export declare const AGENT_DEFAULT_MODEL_NS = "agent-default-model";
+/**
+ * The Loader entry id this plugin's settings form is keyed by; mirrors
+ * `PROTOCOM_NS` on the Host.
+ *
+ * 1.7 keys a form by profile row rather than by a namespace the plugin
+ * registers, and one entry has exactly one Config. All four sections therefore
+ * share this id and are addressed by their path prefix within it — see
+ * {@link FUSION_SECTION_PATH}.
+ */
+export declare const PROTOCOM_ENTRY_ID = "protocom-api";
+/** Where the Fusion section sits inside that one Config. */
+export declare const FUSION_SECTION_PATH: "fusion";
 /**
  * Pick the Session a leader change should apply to: the current one, and only
  * when it is a top-level conversation. A subagent Session is deliberately
@@ -154,11 +162,17 @@ export declare const AGENT_DEFAULT_MODEL_NS = "agent-default-model";
  * @returns the id to select a model on, or undefined when none qualifies.
  */
 export declare function leaderTargetSession(rows: readonly FusionSessionRow[], current: string | undefined): string | undefined;
-/** The path operations that write one draft as a complete section. */
+/**
+ * The path operations that write one draft as a complete section.
+ *
+ * Every path is rooted at the section name because 1.7 addresses fields from
+ * the Config root: the form belongs to the entry, and `fusion` is the section
+ * inside it rather than a namespace of its own.
+ */
 export declare function fusionOps(draft: FusionDraft): SettingsPathOpView[];
 /**
  * Bind the Fusion section's Host operations.
  * @param ctx - the plugin's context, which declares `remote.session` and
- * `settingsScope` in its own `inject`.
+ * `configForms` in its own `inject`.
  */
 export declare function createFusionOperations(ctx: ClientContext): FusionOperations;

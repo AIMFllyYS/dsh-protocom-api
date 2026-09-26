@@ -1,8 +1,8 @@
 /**
  * Fusion dual-model routing — the Host half.
  *
- * Mounts the `model-fusion` settings section and turns its live value into one
- * request rule: a request whose Agent belongs to a subagent Session is pinned
+ * Turns the `fusion` config section's live value into one request rule: a
+ * request whose Agent belongs to a subagent Session is pinned
  * to the coder seat. The main conversation is deliberately NOT rewritten here —
  * the leader seat is soft-applied by the editor through the ordinary
  * `agent-default-model`/session selection surfaces, so a composer choice can
@@ -20,7 +20,7 @@
  *
  * @module dsh-protocom-api/fusion-host
  */
-import type { Context } from '@deepseek-ai/cordis';
+import type { Context, VolatileSnapshot } from '@deepseek-ai/cordis';
 import type { LlmCallConfig } from '@deepseek-ai/dsh-llm';
 import type { FusionConfig, ResolvedFusion } from './fusion.ts';
 /** The two durable lineage facts the request rule reads from one Agent's Session. */
@@ -66,8 +66,8 @@ export interface FusionSource {
     raw(): FusionConfig;
 }
 /**
- * Mount Fusion on one Host context: install the section, then apply its rule to
- * every agent's request.
+ * Mount Fusion on one Host context: apply its routing rule to every agent's
+ * request.
  *
  * The listener is `global` so it sees agents created in any scope — subagent
  * children run in their own scope, and an ancestor listener is the only place
@@ -78,7 +78,7 @@ export interface FusionSource {
  * route rewrite (model selection resolves through agent options, which this
  * rule intentionally overrides).
  * @param ctx - the plugin's Host context.
- * @param base - the composition entry used before settings resolve.
+ * @param read - reads the section from the Loader entry's live config.
  * @returns the live source, for tests and for the client-facing helpers.
  */
-export declare function mountFusion(ctx: Context, base: FusionConfig): FusionSource;
+export declare function mountFusion(ctx: Context, read: () => VolatileSnapshot<FusionConfig>): FusionSource;

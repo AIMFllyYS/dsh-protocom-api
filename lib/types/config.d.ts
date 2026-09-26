@@ -10,6 +10,7 @@ import z from '@deepseek-ai/schemastery';
 import type { CredentialRef } from '@deepseek-ai/dsh-credentials';
 import type { KeyPolicy } from './key-pool.ts';
 import type { ProviderFamily } from './family.ts';
+import type { Volatile } from '@deepseek-ai/cordis';
 import type { FusionConfig } from './fusion.ts';
 export { DEFAULT_BASE_URL, DEFAULT_BASE_URL_ORIGIN, GROUP_DEFAULTS, GROUP_KEYS, groupOf, providerOf } from './groups.ts';
 export type { GroupKey, GroupReasoning, Protocol } from './groups.ts';
@@ -162,14 +163,35 @@ export interface SectionConfig {
  * yml profile out of the `protocom-api` settings namespace it does not belong
  * to; its shape is the same section shape.
  */
-export interface Config extends SectionConfig {
-    /** OpenCode Go family profile; same section shape under its own namespace. */
-    opencode?: SectionConfig;
-    /** Command Code family profile; same section shape under its own namespace. */
-    commandcode?: SectionConfig;
-    /** Fusion dual-model routing profile; the same shape as its own settings section. */
-    fusion?: FusionConfig;
+/**
+ * The plugin's configuration, as DSH 1.7 defines it for a Loader entry.
+ *
+ * 1.7 removed the settings-NAMESPACE model entirely: a plugin no longer
+ * registers sections, because its own `Config` IS its settings form. The form's
+ * namespace is the profile row id (`protocom-api` for this plugin) and only
+ * fields marked `.volatile()` are user-writable at runtime — an unmarked
+ * schema yields no form at all.
+ *
+ * One entry therefore carries one Config, which is why the four sections this
+ * plugin used to register separately are nested here instead. Each is marked
+ * volatile as a whole: that makes every field beneath it editable and returns
+ * the section as a live reference, so a settings write reaches the next request
+ * without a remount.
+ */
+export interface Config {
+    /** Protocom official API family. */
+    protocom: Volatile<SectionConfig>;
+    /** OpenCode Go subscription family. */
+    opencodeGo: Volatile<SectionConfig>;
+    /** Command Code subscription family. */
+    commandcode: Volatile<SectionConfig>;
+    /** Fusion dual-model routing. */
+    fusion: Volatile<FusionConfig>;
 }
+/** The four section keys, for iterating a Config. */
+export declare const SECTION_KEYS: readonly ["protocom", "opencodeGo", "commandcode", "fusion"];
+/** One section key of {@link Config}. */
+export type SectionKey = (typeof SECTION_KEYS)[number];
 /** Settings-section schema for the `protocom-api` namespace. */
 export declare const ProtocomSection: z<SectionConfig>;
 /** Settings-section schema for the `opencode-go` namespace. */
@@ -183,8 +205,24 @@ export declare const CommandCodeSection: z<SectionConfig>;
  * cannot express, so `resolveFusion` is the authority and runs on every write.
  */
 export declare const FusionSection: z<FusionConfig>;
-/** Runtime schema for the plugin's yml configuration. */
-export declare const Config: z<Config>;
+/**
+ * Runtime schema for the plugin's configuration.
+ *
+ * Every section is `.volatile()`, which is what makes it appear in the
+ * settings form and what makes a user edit apply without remounting the plugin.
+ * A section left unmarked would both vanish from the form and refuse writes.
+ */
+export declare const Config: z<Schemastery.ObjectS<NoInfer<{
+    protocom: z<NoInfer<SectionConfig>, NoInfer<SectionConfig>, "volatile">;
+    opencodeGo: z<NoInfer<SectionConfig>, NoInfer<SectionConfig>, "volatile">;
+    commandcode: z<NoInfer<SectionConfig>, NoInfer<SectionConfig>, "volatile">;
+    fusion: z<NoInfer<FusionConfig>, NoInfer<FusionConfig>, "volatile">;
+}>>, Schemastery.ObjectT<NoInfer<{
+    protocom: z<NoInfer<SectionConfig>, NoInfer<SectionConfig>, "volatile">;
+    opencodeGo: z<NoInfer<SectionConfig>, NoInfer<SectionConfig>, "volatile">;
+    commandcode: z<NoInfer<SectionConfig>, NoInfer<SectionConfig>, "volatile">;
+    fusion: z<NoInfer<FusionConfig>, NoInfer<FusionConfig>, "volatile">;
+}>>, "plain">;
 /** Validated per-group facts with every adapter-owned default resolved. */
 export interface ResolvedGroup {
     /** Group key and the `groups` dict key (family-scoped). */

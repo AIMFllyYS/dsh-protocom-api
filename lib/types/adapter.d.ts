@@ -11,19 +11,38 @@
  */
 import { LlmAdapter } from '@deepseek-ai/dsh-llm';
 import type { GenerateOptions, LlmModelInfo, LlmProviderInfo, LlmResolvedModelInfo, PreparedAdapterCall, ResolvedRetryPolicy, StreamChunk } from '@deepseek-ai/dsh-llm';
-import type { AttachmentStore, ImageRequestPolicy } from '@deepseek-ai/dsh-attachment';
+import type { AttachmentStore, ImageAttachmentRef, ImageRequestTarget } from '@deepseek-ai/dsh-attachment';
 import type { ResolvedGroup, ResolvedProtocomOptions } from './config.ts';
 /** How long one fetched model listing is reused per group. */
 export declare const MODEL_LIST_TTL_MS = 60000;
 /** How long one resolved account tier is reused. It changes per billing period. */
 export declare const PLAN_TTL_MS: number;
 /**
- * The request-image projection budget. Mirrors the harness's own default
- * vision budget: the attachment service re-encodes each stored image to fit,
- * so the endpoint never receives bytes beyond what a vision model is priced
- * and sized for.
+ * Widest total-pixel budget this plugin asks the attachment service to encode
+ * an image within. Since 1.7 the request image target is per OCCURRENCE
+ * (dimensions plus a byte target) rather than one route-wide policy, so the
+ * budget is applied through {@link requestImageTargetFor}.
  */
-export declare const REQUEST_IMAGE_POLICY: ImageRequestPolicy;
+export declare const REQUEST_IMAGE_MAX_PIXELS = 640000;
+/**
+ * Encoded-byte target for one request image. The attachment service keeps the
+ * smallest quality-ladder output when no quality fits, so this is a target
+ * rather than a hard refusal.
+ */
+export declare const REQUEST_IMAGE_TARGET_BYTES: number;
+/**
+ * The request-image target for one attachment on this family's routes.
+ *
+ * 1.7 replaced the route-wide policy object with a per-occurrence target that
+ * the caller derives, which is what lets each route project an image
+ * differently while sharing one stored normalized copy. The projection itself
+ * (aspect-preserving integer dimensions inside a pixel budget) is the
+ * harness's own helper, so this plugin cannot drift from the first-party
+ * adapters' geometry.
+ * @param ref - the durable normalized attachment.
+ * @returns that occurrence's width, height, and encoded-byte target.
+ */
+export declare function requestImageTargetFor(ref: Pick<ImageAttachmentRef, 'width' | 'height'>): ImageRequestTarget;
 /**
  * Whole-request image budget: total represented bytes and image count. The
  * single-image policy above bounds each image but not their sum, so a history

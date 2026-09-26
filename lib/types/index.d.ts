@@ -43,4 +43,13 @@ export { ThinkTagExtractor } from './protocol/chat-completions.ts';
 export type { ChatStreamBehavior, ThinkingMode } from './protocol/chat-completions.ts';
 export declare const name = "protocom-api";
 export declare const inject: string[];
+/**
+ * The Loader entry id this plugin's settings form is keyed by.
+ *
+ * 1.7 names a form after its profile row, so this must match the `id` in
+ * `cordis.patch.yml`. It is also the namespace every configured-provider entry
+ * reports, because all four families now live in one Config.
+ */
+export declare const PROTOCOM_NS: string;
+/** Mount the four provider families and the routing layer over them. */
 export declare function apply(ctx: Context, config: Config): void;

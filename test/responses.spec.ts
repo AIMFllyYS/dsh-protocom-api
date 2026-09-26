@@ -402,25 +402,25 @@ describe('responses serialization', () => {
     }])
   })
 
-  it('keeps a text-only tool result a string and carries one with an image as parts', () => {
+  it('keeps a text-only tool message a string and carries one with an image as parts', () => {
+    // Since 1.7 a tool result is its own message of role 'tool', carrying its
+    // blocks directly rather than nesting a 'tool-result' block.
     const plain = {
-      role: 'user',
-      content: [{ type: 'tool-result', toolCallId: 'call_1', content: [{ type: 'text', text: 'ok' }] }],
+      role: 'tool',
+      toolCallId: 'call_1',
+      content: [{ type: 'text', text: 'ok' }],
     } as unknown as Message
     expect(serializeResponsesRequest({ ...base, messages: [plain] }, 'm').input).toEqual([
       { type: 'function_call_output', call_id: 'call_1', output: 'ok' },
     ])
 
     const withImage = {
-      role: 'user',
-      content: [{
-        type: 'tool-result',
-        toolCallId: 'call_2',
-        content: [
-          { type: 'text', text: 'screenshot' },
-          { type: 'image', attachment: { attachmentId: 'sha256:abc', mediaType: 'image/png' } },
-        ],
-      }],
+      role: 'tool',
+      toolCallId: 'call_2',
+      content: [
+        { type: 'text', text: 'screenshot' },
+        { type: 'image', attachment: { attachmentId: 'sha256:abc', mediaType: 'image/png' } },
+      ],
     } as unknown as Message
     const images = new Map([['sha256:abc', 'data:image/png;base64,AAAA']])
     expect(serializeResponsesRequest({ ...base, messages: [withImage] }, 'm', images).input).toEqual([

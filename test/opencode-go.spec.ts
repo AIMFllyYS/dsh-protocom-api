@@ -65,15 +65,21 @@ describe('OpenCode Go config schema', () => {
     expect(resolved.groups.get('go')?.contextLengths).toEqual([204_800, 262_144, 409_600, 1_048_576])
   })
 
-  it('parses a nested opencode section alongside the protocom one', () => {
+  it('carries both families as volatile sections of the one entry', () => {
+    // 1.7 gives a plugin exactly one Config: the four sections are fields of it
+    // rather than separately registered namespaces, and each is volatile so the
+    // form can edit it and the plugin can read it live.
     const parsed = Config({
-      groups: { codex: { enabled: true } },
-      opencode: { groups: { go: { enabled: true, apiKey: 'OPENCODE_GO_API_KEY' } } },
+      protocom: { groups: { codex: { enabled: true } } },
+      opencodeGo: { groups: { go: { enabled: true, apiKey: 'OPENCODE_GO_API_KEY' } } },
     })
-    expect(parsed.opencode?.groups['go']?.enabled).toBe(true)
-    expect(parsed.opencode?.groups['go']?.apiKey).toBe('OPENCODE_GO_API_KEY')
-    // The Go section's own shipped defaults land on its own document.
-    expect(parsed.opencode?.baseURL).toBe(GO_DEFAULT_BASE_URL)
+    expect(parsed.protocom.get().groups['codex']?.enabled).toBe(true)
+    expect(parsed.opencodeGo.get().groups['go']?.enabled).toBe(true)
+    expect(parsed.opencodeGo.get().groups['go']?.apiKey).toBe('OPENCODE_GO_API_KEY')
+    // Each section keeps its OWN shipped defaults; the Go document must not
+    // inherit Protocom's endpoint.
+    expect(parsed.opencodeGo.get().baseURL).toBe(GO_DEFAULT_BASE_URL)
+    expect(parsed.protocom.get().baseURL).not.toBe(GO_DEFAULT_BASE_URL)
   })
 
   it('defaults a missing opencode section to the shipped document', () => {

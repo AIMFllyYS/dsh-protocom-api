@@ -1,8 +1,8 @@
 /**
  * Fusion dual-model routing — the Host half.
  *
- * Mounts the `model-fusion` settings section and turns its live value into one
- * request rule: a request whose Agent belongs to a subagent Session is pinned
+ * Turns the `fusion` config section's live value into one request rule: a
+ * request whose Agent belongs to a subagent Session is pinned
  * to the coder seat. The main conversation is deliberately NOT rewritten here —
  * the leader seat is soft-applied by the editor through the ordinary
  * `agent-default-model`/session selection surfaces, so a composer choice can
@@ -21,14 +21,13 @@
  * @module dsh-protocom-api/fusion-host
  */
 
-import type { Context } from '@deepseek-ai/cordis'
-import type {} from '@deepseek-ai/dsh-settings'
+import type { Context, VolatileSnapshot } from '@deepseek-ai/cordis'
+import type {} from '@deepseek-ai/cordis-plugin-loader'
 import type {} from '@deepseek-ai/dsh-agent'
 import { ReasoningEffortId } from '@deepseek-ai/dsh-llm'
 import type { LlmCallConfig } from '@deepseek-ai/dsh-llm'
 import { FUSION_NS, resolveFusion } from './fusion.ts'
 import type { FusionConfig, ResolvedFusion } from './fusion.ts'
-import { FusionSection } from './config.ts'
 
 /** The two durable lineage facts the request rule reads from one Agent's Session. */
 export interface SubagentSessionFacts {
@@ -100,8 +99,8 @@ export interface FusionSource {
 }
 
 /**
- * Mount Fusion on one Host context: install the section, then apply its rule to
- * every agent's request.
+ * Mount Fusion on one Host context: apply its routing rule to every agent's
+ * request.
  *
  * The listener is `global` so it sees agents created in any scope — subagent
  * children run in their own scope, and an ancestor listener is the only place
@@ -112,11 +111,15 @@ export interface FusionSource {
  * route rewrite (model selection resolves through agent options, which this
  * rule intentionally overrides).
  * @param ctx - the plugin's Host context.
- * @param base - the composition entry used before settings resolve.
+ * @param read - reads the section from the Loader entry's live config.
  * @returns the live source, for tests and for the client-facing helpers.
  */
-export function mountFusion(ctx: Context, base: FusionConfig): FusionSource {
-  let source: () => FusionConfig = () => base
+export function mountFusion(ctx: Context, read: () => VolatileSnapshot<FusionConfig>): FusionSource {
+  // Read through the volatile reference every time rather than caching the
+  // snapshot: 1.7 updates the reference in place, so re-reading is what makes a
+  // settings write reach the next request. The cast drops the snapshot's
+  // readonly modifiers; `current()` below only reads what it is given.
+  const source = (): FusionConfig => read() as FusionConfig
   let lastRaw: FusionConfig | undefined
   let lastGood: ResolvedFusion | undefined
   const current = (): ResolvedFusion => {
@@ -145,18 +148,19 @@ export function mountFusion(ctx: Context, base: FusionConfig): FusionSource {
     return fuseCallConfig(resolved, current(), subagentFacts(agent.session))
   }, { global: true, prepend: true })
 
-  ctx.inject(['settings'], (settingsCtx) => {
-    settingsCtx.settings.installSection(ctx, FUSION_NS, FusionSection, base, {
-      setSource: (next) => { source = next },
-      // Every consumer reads through `current()`, so its memoization is the
-      // only work a committed change needs; no registration-level fact to rebuild.
-      onChange: () => {},
-      // The cross-field rule — enabling needs BOTH seats — is not expressible in
-      // the schema, so it is enforced here, at the write that would store it.
-      // Without this hook the section would commit and the rule would only fail
-      // later, inside a request, where the deployment reads as silently unused.
-      validate: (value) => { resolveFusion(value) },
-    })
+  // Every consumer reads through `current()`, so a committed change needs no
+  // registration-level work: the memoization above re-resolves on the next
+  // request. Re-validating here is what keeps an invalid write from landing --
+  // the cross-field rule (enabling needs BOTH seats) is not expressible in the
+  // schema, so without this the section would commit and only fail later,
+  // inside a request, where the deployment reads as silently unused.
+  ctx.on('loader/volatile-update', () => {
+    try {
+      resolveFusion(source())
+    } catch (error) {
+      ctx.logger.error(`${FUSION_NS}: the fusion section is not usable`)
+      ctx.logger.error(error)
+    }
   })
 
   return { current, raw: () => source() }

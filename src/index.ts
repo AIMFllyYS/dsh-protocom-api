@@ -16,18 +16,18 @@
  * @module dsh-protocom-api
  */
 
-import type { Context } from '@deepseek-ai/cordis'
+import type { Context, VolatileSnapshot } from '@deepseek-ai/cordis'
+import type {} from '@deepseek-ai/cordis-plugin-loader'
 import type {} from '@deepseek-ai/dsh-settings'
 import { assertUsableApiKey, LlmError } from '@deepseek-ai/dsh-llm'
 import type { AdapterRegistrationHandle } from '@deepseek-ai/dsh-llm'
-import type z from '@deepseek-ai/schemastery'
 import { ProtocomAdapter } from './adapter.ts'
 import { BalanceService, balanceFetchHandler } from './balance.ts'
 import { GoUsageService, goUsageFetchHandler } from './go-usage.ts'
-import { CommandCodeSection, FusionSection, GoSection, OPENCODE_GO, PROTOCOM, ProtocomSection, resolveAdapterOptions } from './config.ts'
+import { OPENCODE_GO, PROTOCOM, resolveAdapterOptions } from './config.ts'
 import { COMMANDCODE } from './commandcode.ts'
 import { CommandCodeAccountService, commandCodeAccountFetchHandler } from './commandcode-account.ts'
-import type { Config, ResolvedGroup, ResolvedProtocomOptions, SectionConfig } from './config.ts'
+import type { Config, ResolvedGroup, ResolvedProtocomOptions, SectionConfig, SectionKey } from './config.ts'
 import { mountFusion } from './fusion-host.ts'
 import type { ProviderFamily } from './family.ts'
 import { KeyPool } from './key-pool.ts'
@@ -168,12 +168,21 @@ interface TelemetryHooks {
 function mountFamily(
   ctx: Context,
   family: ProviderFamily,
-  schema: z<SectionConfig>,
-  base: SectionConfig,
+  sectionKey: SectionKey,
+  section: () => VolatileSnapshot<SectionConfig>,
   telemetry: (hooks: TelemetryHooks) => FamilyTelemetry,
 ): void {
   const ns = family.ns
-  let current: () => SectionConfig = () => base
+  // The section is read LIVE from the Loader entry's config on every use. In
+  // 1.7 a volatile field is a reference the Host updates in place, so there is
+  // no setSource callback and no snapshot to keep: a settings write is visible
+  // to the very next request without remounting this plugin.
+  //
+  // The cast drops the snapshot's readonly modifiers. It is truthful about what
+  // this code does -- every read below is a read, and the resolver never writes
+  // to its argument -- and it keeps SectionConfig's mutable array types from
+  // rippling through the rest of the module for no safety gain.
+  const current = (): SectionConfig => section() as SectionConfig
   let lastRaw: SectionConfig | undefined
   let lastGood: ResolvedProtocomOptions | undefined
   const options = (): ResolvedProtocomOptions => {
@@ -299,8 +308,11 @@ function mountFamily(
     const directory = ctx.llm.registerConfigurableProviders(family.keys.map(key => ({
       provider: family.providerOf(key),
       displayName: family.defaults[key]?.displayName ?? key,
-      settingsNs: ns,
-      settingsPath: ['groups', key],
+      // 1.7 addresses settings by Loader entry id, so every family in this
+      // plugin names the SAME namespace and distinguishes itself by the path
+      // prefix into the shared Config.
+      settingsNs: PROTOCOM_NS,
+      settingsPath: [sectionKey, 'groups', key],
     })))
     const discovery = ctx.llm.registerModelDiscovery(ns, (request, signal) => discoverModels(request, signal, {
       baseURL: () => options().baseURL,
@@ -342,17 +354,14 @@ function mountFamily(
     }
   })
 
-  ctx.inject(['settings'], (settingsCtx) => {
-    settingsCtx.settings.installSection(ctx, ns, schema, base, {
-      setSource: (source) => {
-        current = source
-      },
-      onChange: () => {
-        syncRoutes()
-        adapter.invalidateListings()
-        quota.invalidate()
-      },
-    })
+  // 1.7 has no section registration: the plugin's own Config is the form. What
+  // a section still needs is a nudge when its values change, because an enabled
+  // -group set decides which routes exist -- the adapter itself reads its facts
+  // live and needs no signal.
+  ctx.on('loader/volatile-update', () => {
+    syncRoutes()
+    adapter.invalidateListings()
+    quota.invalidate()
   })
 
   // The quota route rides the Host's shared, fenced API channel instead of a
@@ -452,14 +461,24 @@ function commandCodeTelemetry(hooks: TelemetryHooks): FamilyTelemetry {
   }
 }
 
+/**
+ * The Loader entry id this plugin's settings form is keyed by.
+ *
+ * 1.7 names a form after its profile row, so this must match the `id` in
+ * `cordis.patch.yml`. It is also the namespace every configured-provider entry
+ * reports, because all four families now live in one Config.
+ */
+export const PROTOCOM_NS = PROTOCOM.ns
+
+/** Mount the four provider families and the routing layer over them. */
 export function apply(ctx: Context, config: Config): void {
-  const { opencode, commandcode, fusion, ...protocom } = config
-  mountFamily(ctx, PROTOCOM, ProtocomSection, protocom, protocomTelemetry)
-  // The Go section is optional in yml; absent it resolves to the family's own
-  // defaults (all-disabled single group waiting on a key).
-  mountFamily(ctx, OPENCODE_GO, GoSection, opencode ?? GoSection({}), goTelemetry)
-  mountFamily(ctx, COMMANDCODE, CommandCodeSection, commandcode ?? CommandCodeSection({}), commandCodeTelemetry)
-  // Fusion is a routing layer over the routes the two families above register,
-  // so it mounts last: with neither family active it simply pins nothing.
-  mountFusion(ctx, fusion ?? FusionSection({}))
+  // Each family reads its own section live. Schemastery fills the section's
+  // defaults even when the profile carries no config at all, so an entry that
+  // was just added still mounts -- all-disabled, waiting on a key.
+  mountFamily(ctx, PROTOCOM, 'protocom', () => config.protocom.get(), protocomTelemetry)
+  mountFamily(ctx, OPENCODE_GO, 'opencodeGo', () => config.opencodeGo.get(), goTelemetry)
+  mountFamily(ctx, COMMANDCODE, 'commandcode', () => config.commandcode.get(), commandCodeTelemetry)
+  // Fusion is a routing layer over the routes the families above register, so
+  // it mounts last: with no family active it simply pins nothing.
+  mountFusion(ctx, () => config.fusion.get())
 }

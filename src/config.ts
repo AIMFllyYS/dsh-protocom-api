@@ -18,6 +18,7 @@ import { COMMANDCODE_BASE_URL, COMMANDCODE_RECOMMENDED } from './commandcode.ts'
 import { MAX_KEYS_PER_GROUP } from './key-pool.ts'
 import type { KeyPolicy } from './key-pool.ts'
 import type { FamilyGroupDefaults, ProviderFamily } from './family.ts'
+import type { Volatile } from '@deepseek-ai/cordis'
 import type { FusionConfig, FusionSeatConfig } from './fusion.ts'
 
 export { DEFAULT_BASE_URL, DEFAULT_BASE_URL_ORIGIN, GROUP_DEFAULTS, GROUP_KEYS, groupOf, providerOf } from './groups.ts'
@@ -199,14 +200,37 @@ export interface SectionConfig {
  * yml profile out of the `protocom-api` settings namespace it does not belong
  * to; its shape is the same section shape.
  */
-export interface Config extends SectionConfig {
-  /** OpenCode Go family profile; same section shape under its own namespace. */
-  opencode?: SectionConfig
-  /** Command Code family profile; same section shape under its own namespace. */
-  commandcode?: SectionConfig
-  /** Fusion dual-model routing profile; the same shape as its own settings section. */
-  fusion?: FusionConfig
+/**
+ * The plugin's configuration, as DSH 1.7 defines it for a Loader entry.
+ *
+ * 1.7 removed the settings-NAMESPACE model entirely: a plugin no longer
+ * registers sections, because its own `Config` IS its settings form. The form's
+ * namespace is the profile row id (`protocom-api` for this plugin) and only
+ * fields marked `.volatile()` are user-writable at runtime — an unmarked
+ * schema yields no form at all.
+ *
+ * One entry therefore carries one Config, which is why the four sections this
+ * plugin used to register separately are nested here instead. Each is marked
+ * volatile as a whole: that makes every field beneath it editable and returns
+ * the section as a live reference, so a settings write reaches the next request
+ * without a remount.
+ */
+export interface Config {
+  /** Protocom official API family. */
+  protocom: Volatile<SectionConfig>
+  /** OpenCode Go subscription family. */
+  opencodeGo: Volatile<SectionConfig>
+  /** Command Code subscription family. */
+  commandcode: Volatile<SectionConfig>
+  /** Fusion dual-model routing. */
+  fusion: Volatile<FusionConfig>
 }
+
+/** The four section keys, for iterating a Config. */
+export const SECTION_KEYS = ['protocom', 'opencodeGo', 'commandcode', 'fusion'] as const
+
+/** One section key of {@link Config}. */
+export type SectionKey = (typeof SECTION_KEYS)[number]
 
 const group: z<GroupConfig> = z.object({
   enabled: z.boolean().default(false),
@@ -278,19 +302,18 @@ export const FusionSection: z<FusionConfig> = z.object({
   applyLeader: z.boolean().default(true),
 })
 
-/** Runtime schema for the plugin's yml configuration. */
-export const Config: z<Config> = z.object({
-  baseURL: z.string().default(DEFAULT_BASE_URL),
-  allowCustomBaseURL: z.boolean(),
-  streamIdleTimeoutMs: z.number().min(Number.MIN_VALUE).max(MAX_TIMER_DELAY_MS).default(DEFAULT_STREAM_IDLE_TIMEOUT_MS),
-  groups: z.dict(group).default({}),
-  hiddenModels: z.array(z.string()).default([]),
-  recommendedModels: z.array(z.string()).default([...DEFAULT_RECOMMENDED]),
-  modelContexts: z.dict(z.array(z.number().step(1).min(1))).default({}),
-  visionModels: z.dict(z.boolean()).default({}),
-  opencode: GoSection,
-  commandcode: CommandCodeSection,
-  fusion: FusionSection,
+/**
+ * Runtime schema for the plugin's configuration.
+ *
+ * Every section is `.volatile()`, which is what makes it appear in the
+ * settings form and what makes a user edit apply without remounting the plugin.
+ * A section left unmarked would both vanish from the form and refuse writes.
+ */
+export const Config = z.object({
+  protocom: ProtocomSection.volatile(),
+  opencodeGo: GoSection.volatile(),
+  commandcode: CommandCodeSection.volatile(),
+  fusion: FusionSection.volatile(),
 })
 
 /** Validated per-group facts with every adapter-owned default resolved. */

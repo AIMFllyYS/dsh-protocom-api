@@ -15,7 +15,7 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
 }
 /**
  * Required services. Deliberately NOT including the Fusion-only two
- * (`remote.session`, `settingsScope`): a missing entry here deactivates the
+ * (`remote.session`, `configForms`): a missing entry here deactivates the
  * whole client plugin, which would take the working provider panels down with
  * a feature they do not depend on. Fusion declares its own dependencies in a
  * scoped `ctx.inject` below instead, so an unusual deployment loses the Fusion
