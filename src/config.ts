@@ -14,6 +14,8 @@ import type { CredentialRef } from '@deepseek-ai/dsh-credentials'
 import { DEFAULT_BASE_URL } from './groups.ts'
 import { DEFAULT_RECOMMENDED, GO_DEFAULT_RECOMMENDED, identityKey } from './model-registry.ts'
 import { GO_DEFAULT_BASE_URL, PROTOCOM } from './family.ts'
+import { MAX_KEYS_PER_GROUP } from './key-pool.ts'
+import type { KeyPolicy } from './key-pool.ts'
 import type { FamilyGroupDefaults, ProviderFamily } from './family.ts'
 import type { FusionConfig, FusionSeatConfig } from './fusion.ts'
 
@@ -104,6 +106,24 @@ export interface GroupConfig {
    * that does not.
    */
   assistantTextReplay?: 'keep' | 'drop' | 'user'
+  /**
+   * Additional credential references for this group, beyond {@link apiKey}.
+   * Together they form the group's key pool. Absent or empty means the group
+   * has exactly one key, which is the historical behavior.
+   *
+   * Every entry must match the family's credential namespace, exactly as
+   * {@link apiKey} does: the reference is what the environment fallback reads,
+   * so an open shape would reach any variable the launching process holds.
+   */
+  apiKeys?: string[]
+  /**
+   * How this group's pool picks a key (default `sticky`).
+   *
+   * `sticky` pins one key per Session so a conversation keeps hitting the same
+   * account and its upstream prefix cache stays warm; `round-robin` rotates
+   * every request to spread load and spend, at the cost of that cache.
+   */
+  keyPolicy?: KeyPolicy
 }
 
 /**
@@ -193,6 +213,11 @@ const group: z<GroupConfig> = z.object({
   showBalance: z.boolean().default(true),
   replayReasoning: z.boolean().default(false),
   assistantTextReplay: z.union(['keep', 'drop', 'user']).default('keep'),
+  // No schema default for apiKeys: Schemastery normalizes an absent array to
+  // `[]`, and the resolver treats an empty array as "no extra keys", which is
+  // exactly the single-key behavior an absent field means.
+  apiKeys: z.array(z.string().role('credential-ref')),
+  keyPolicy: z.union(['sticky', 'round-robin']).default('sticky'),
 })
 
 /**
@@ -273,6 +298,13 @@ export interface ResolvedGroup {
   protocol: Protocol
   /** Validated credential reference, when one is configured. */
   apiKeyRef?: CredentialRef
+  /**
+   * The group's complete key pool, in configured order: {@link apiKeyRef} first
+   * when present, then every entry of `apiKeys`. Empty means no key at all.
+   */
+  apiKeyRefs: readonly CredentialRef[]
+  /** How this group's pool picks a key for one request. */
+  keyPolicy: KeyPolicy
   /** Configured context-variant lengths, when offered. */
   contextLengths?: number[]
   showBalance: boolean
@@ -371,19 +403,44 @@ export function resolveAdapterOptions(config: SectionConfig, family: ProviderFam
     // missing `contextLengths` to `[]` in a described document, so the empty
     // array is "unset", not "zero variants" — a group can never serve none.
     const effectiveLengths = source.contextLengths?.length ? source.contextLengths : defaults.contextLengths
-    let apiKeyRef: CredentialRef | undefined
-    if (source.apiKey !== undefined) {
-      // Namespacing is a security bound, not a style rule: the reference is
-      // what the `process.env` fallback reads, so an open shape reaches any
-      // environment variable the launching process holds.
-      if (!family.credentialRef.test(source.apiKey)) {
-        throw new Error(`${family.ns}: group "${key}" apiKey must match ${String(family.credentialRef)}`)
+    // Namespacing is a security bound, not a style rule: the reference is what
+    // the `process.env` fallback reads, so an open shape reaches any environment
+    // variable the launching process holds. Every entry of the pool is judged,
+    // not just the first.
+    const prospective = [
+      ...source.apiKey === undefined ? [] : [source.apiKey],
+      ...source.apiKeys ?? [],
+    ]
+    if (prospective.length > MAX_KEYS_PER_GROUP + 1) {
+      throw new Error(`${family.ns}: group "${key}" configures more than ${MAX_KEYS_PER_GROUP} API keys`)
+    }
+    const apiKeyRefs: CredentialRef[] = []
+    for (const candidate of prospective) {
+      if (typeof candidate !== 'string' || candidate.length === 0) {
+        throw new Error(`${family.ns}: group "${key}" apiKeys entries must be non-empty credential references`)
+      }
+      if (!family.credentialRef.test(candidate)) {
+        throw new Error(`${family.ns}: group "${key}" apiKey "${candidate}" must match ${String(family.credentialRef)}`)
       }
       try {
-        apiKeyRef = credentialRef(source.apiKey)
+        const ref = credentialRef(candidate)
+        // A repeated reference would make the pool hand out the same key twice
+        // and make cooldown bookkeeping ambiguous, so it is refused outright.
+        if (apiKeyRefs.includes(ref)) {
+          throw new Error(`${family.ns}: group "${key}" repeats the credential reference "${candidate}"`)
+        }
+        apiKeyRefs.push(ref)
       } catch (error) {
-        throw new Error(`${family.ns}: group "${key}" apiKey is not a valid credential reference`, { cause: error })
+        if (error instanceof Error && error.message.includes('repeats the credential reference')) throw error
+        throw new Error(`${family.ns}: group "${key}" apiKey "${candidate}" is not a valid credential reference`, { cause: error })
       }
+    }
+    const apiKeyRef = apiKeyRefs[0]
+    // Re-judged here because programmatic construction bypasses Schemastery,
+    // exactly as the watchdog and retry bounds above are.
+    const keyPolicy = source.keyPolicy ?? 'sticky'
+    if (keyPolicy !== 'sticky' && keyPolicy !== 'round-robin') {
+      throw new Error(`${family.ns}: group "${key}" keyPolicy must be "sticky" or "round-robin"`)
     }
     groups.set(key, {
       key,
@@ -392,6 +449,8 @@ export function resolveAdapterOptions(config: SectionConfig, family: ProviderFam
       enabled: source.enabled ?? false,
       protocol: source.protocol ?? defaults.protocol,
       ...apiKeyRef === undefined ? {} : { apiKeyRef },
+      apiKeyRefs,
+      keyPolicy,
       ...effectiveLengths === undefined ? {} : { contextLengths: [...effectiveLengths] },
       showBalance: source.showBalance ?? true,
       replayReasoning: source.replayReasoning ?? false,

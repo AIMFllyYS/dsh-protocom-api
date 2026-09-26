@@ -147,8 +147,23 @@ export interface ProtocomAdapterOptions {
    * never re-read — so the key can only ever come from the same resolution as
    * the endpoint it is sent to. Throws `LlmError` `MISSING_CREDENTIAL` when
    * no key is available anywhere.
+   *
+   * A group with a key POOL needs the Session to pick a key: sticky selection
+   * pins one account per conversation so its prefix cache stays warm. Callers
+   * with no conversation (a listing, a probe) omit it and get the pool's
+   * deterministic default, which is all a cache-less request can use.
+   * @param group - the resolved group whose key is wanted.
+   * @param sessionId - the conversation this request belongs to, when any.
    */
-  resolveApiKey: (group: ResolvedGroup) => Promise<string>
+  resolveApiKey: (group: ResolvedGroup, sessionId?: string) => Promise<string>
+  /**
+   * Report that a key just failed admission, so the pool can park it briefly.
+   * Called with an `AUTH` or `RATE_LIMIT` failure; other codes are the model's
+   * or the relay's problem, not the credential's.
+   * @param group - the group whose key failed.
+   * @param sessionId - the conversation that was being served, when any.
+   */
+  reportKeyFailure?: (group: ResolvedGroup, sessionId?: string) => void
   /**
    * The deployment's durable attachment service, when one is mounted. Absent
    * means no image can be resolved, so image input is refused rather than
@@ -219,6 +234,8 @@ export class ProtocomAdapter extends LlmAdapter {
     const hit = this.listings.get(group.key)
     if (hit !== undefined && Date.now() - hit.at < MODEL_LIST_TTL_MS) return hit.value
     const { baseURL } = this.config.options()
+    // A listing has no conversation to pin, so the pool hands out its default
+    // key; nothing here is cacheable against a Session.
     const value = this.config.resolveApiKey(group)
       .then(apiKey => fetchUpstreamModels(baseURL, apiKey, signal))
     value.catch(() => {
@@ -379,7 +396,10 @@ export class ProtocomAdapter extends LlmAdapter {
     // configuration change and the next call re-resolves.
     const { baseURL, streamIdleTimeoutMs } = this.config.options()
     const family = this.family()
-    const apiKey = await this.config.resolveApiKey(group)
+    // The Session rides along so a pooled group can pin one account to this
+    // conversation and keep its prefix cache warm across steps.
+    const sessionId = options.sessionId === undefined ? undefined : String(options.sessionId)
+    const apiKey = await this.config.resolveApiKey(group, sessionId)
     // Session scoping is contractual on OpenCode Go (a missing header answers
     // 400 MissingSessionID): the harness's own `x-deepseek-harness-session-id`
     // rides beside `x-opencode-session` carrying the same value, because the
@@ -441,6 +461,13 @@ export class ProtocomAdapter extends LlmAdapter {
       }
       if (options.signal?.aborted) {
         throw new LlmError(`${family.label} request aborted by caller`, 'ABORTED', { cause: error })
+      }
+      // Park a key the provider itself rejected. Only credential-shaped
+      // failures qualify: a 5xx, a timeout, or a malformed request says nothing
+      // about the key, and parking on one would rotate a healthy account out.
+      const code = (error as { code?: unknown }).code
+      if (code === 'AUTH' || code === 'RATE_LIMIT') {
+        this.config.reportKeyFailure?.(group, sessionId)
       }
       throw error
     } finally {

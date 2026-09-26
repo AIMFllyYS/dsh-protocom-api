@@ -36,7 +36,7 @@ describe('OpenCode Go options resolution', () => {
     expect(() => resolveAdapterOptions(
       { groups: { go: { enabled: true, apiKey: 'PROTOCOM_API_KEY' } } },
       OPENCODE_GO,
-    )).toThrowError(/opencode-go: group "go" apiKey must match/)
+    )).toThrowError(/opencode-go: group "go" apiKey "PROTOCOM_API_KEY" must match/)
   })
 
   it('pins a custom baseURL behind the same confirmation flag', () => {
