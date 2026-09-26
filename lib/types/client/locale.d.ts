@@ -13,6 +13,14 @@ export declare const en: {
     allowCustom: string;
     allowCustomHint: string;
     allowCustomRequired: string;
+    keyPool: string;
+    keyPoolHint: string;
+    keyPoolPlaceholder: string;
+    keyPolicy: string;
+    keyPolicySticky: string;
+    keyPolicyRoundRobin: string;
+    keyPoolDuplicate: string;
+    keyPoolApply: string;
     retryMaxAttempts: string;
     retryMaxAttemptsHint: string;
     retryMaxDelayMs: string;

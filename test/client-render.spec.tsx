@@ -156,6 +156,72 @@ describe('custom endpoint confirmation (F-2)', () => {
   })
 })
 
+describe('key pool editing (R2)', () => {
+  /** The aggregate group card, which every test here edits. */
+  async function poolCard(): Promise<HTMLElement> {
+    const card = (await screen.findByText(en.groupAggregate)).closest('li') as HTMLElement
+    return card
+  }
+
+  it('writes the pool as a list of credential references', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse({})))
+    const writeSettings = vi.fn(async () => ({ kind: 'written', view: VIEW }) as never)
+    renderSection(makeOperations({ writeSettings }))
+    const card = await poolCard()
+    const pool = within(card).getByLabelText(en.keyPool) as HTMLTextAreaElement
+    fireEvent.change(pool, { target: { value: 'PROTOCOM_A_KEY\n\nPROTOCOM_B_KEY\n' } })
+    fireEvent.click(within(card).getByRole('button', { name: en.keyPoolApply }))
+    await waitFor(() => expect(writeSettings).toHaveBeenCalledOnce())
+    const [ops] = writeSettings.mock.calls[0] as [{ op: string; path: string[]; value?: unknown }[]]
+    // Blank lines are dropped rather than stored as empty references.
+    expect(ops).toEqual([
+      { op: 'set', path: ['groups', 'aggregate', 'apiKeys'], value: ['PROTOCOM_A_KEY', 'PROTOCOM_B_KEY'] },
+    ])
+  })
+
+  it('clears the pool when every line is removed', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse({})))
+    const writeSettings = vi.fn(async () => ({ kind: 'written', view: VIEW }) as never)
+    renderSection(makeOperations({ writeSettings }))
+    const card = await poolCard()
+    const pool = within(card).getByLabelText(en.keyPool) as HTMLTextAreaElement
+    fireEvent.change(pool, { target: { value: '   ' } })
+    fireEvent.click(within(card).getByRole('button', { name: en.keyPoolApply }))
+    await waitFor(() => expect(writeSettings).toHaveBeenCalledOnce())
+    const [ops] = writeSettings.mock.calls[0] as [{ op: string; path: string[] }[]]
+    // An empty pool is a clear, not an empty array: the field re-inherits.
+    expect(ops).toEqual([{ op: 'unset', path: ['groups', 'aggregate', 'apiKeys'] }])
+  })
+
+  it('refuses a repeated reference before reaching the Host', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse({})))
+    const writeSettings = vi.fn(async () => ({ kind: 'written', view: VIEW }) as never)
+    renderSection(makeOperations({ writeSettings }))
+    const card = await poolCard()
+    const pool = within(card).getByLabelText(en.keyPool) as HTMLTextAreaElement
+    fireEvent.change(pool, { target: { value: 'PROTOCOM_A_KEY\nPROTOCOM_A_KEY' } })
+    fireEvent.click(within(card).getByRole('button', { name: en.keyPoolApply }))
+    await waitFor(() => expect(within(card).getByText(new RegExp(en.keyPoolDuplicate))).toBeTruthy())
+    expect(writeSettings).not.toHaveBeenCalled()
+  })
+
+  it('shows the stored policy and writes a change to it', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse({})))
+    const writeSettings = vi.fn(async () => ({ kind: 'written', view: VIEW }) as never)
+    renderSection(makeOperations({ writeSettings }))
+    const card = await poolCard()
+    const policy = within(card).getByLabelText(en.keyPolicy) as HTMLSelectElement
+    // Sticky is the cache-preserving default and what an unstated field means.
+    expect(policy.value).toBe('sticky')
+    fireEvent.change(policy, { target: { value: 'round-robin' } })
+    await waitFor(() => expect(writeSettings).toHaveBeenCalledOnce())
+    const [ops] = writeSettings.mock.calls[0] as [{ op: string; path: string[]; value?: unknown }[]]
+    expect(ops).toEqual([
+      { op: 'set', path: ['groups', 'aggregate', 'keyPolicy'], value: 'round-robin' },
+    ])
+  })
+})
+
 describe('retry budget editing (R1)', () => {
   /** Open the advanced block, where the retry fields live. */
   function openAdvanced(): void {

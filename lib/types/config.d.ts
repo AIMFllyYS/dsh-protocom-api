@@ -8,6 +8,7 @@
  */
 import z from '@deepseek-ai/schemastery';
 import type { CredentialRef } from '@deepseek-ai/dsh-credentials';
+import type { KeyPolicy } from './key-pool.ts';
 import type { ProviderFamily } from './family.ts';
 import type { FusionConfig } from './fusion.ts';
 export { DEFAULT_BASE_URL, DEFAULT_BASE_URL_ORIGIN, GROUP_DEFAULTS, GROUP_KEYS, groupOf, providerOf } from './groups.ts';
@@ -71,6 +72,24 @@ export interface GroupConfig {
      * that does not.
      */
     assistantTextReplay?: 'keep' | 'drop' | 'user';
+    /**
+     * Additional credential references for this group, beyond {@link apiKey}.
+     * Together they form the group's key pool. Absent or empty means the group
+     * has exactly one key, which is the historical behavior.
+     *
+     * Every entry must match the family's credential namespace, exactly as
+     * {@link apiKey} does: the reference is what the environment fallback reads,
+     * so an open shape would reach any variable the launching process holds.
+     */
+    apiKeys?: string[];
+    /**
+     * How this group's pool picks a key (default `sticky`).
+     *
+     * `sticky` pins one key per Session so a conversation keeps hitting the same
+     * account and its upstream prefix cache stays warm; `round-robin` rotates
+     * every request to spread load and spend, at the cost of that cache.
+     */
+    keyPolicy?: KeyPolicy;
 }
 /**
  * One family's settings-section shape: the endpoint base plus its group
@@ -174,6 +193,13 @@ export interface ResolvedGroup {
     protocol: Protocol;
     /** Validated credential reference, when one is configured. */
     apiKeyRef?: CredentialRef;
+    /**
+     * The group's complete key pool, in configured order: {@link apiKeyRef} first
+     * when present, then every entry of `apiKeys`. Empty means no key at all.
+     */
+    apiKeyRefs: readonly CredentialRef[];
+    /** How this group's pool picks a key for one request. */
+    keyPolicy: KeyPolicy;
     /** Configured context-variant lengths, when offered. */
     contextLengths?: number[];
     showBalance: boolean;

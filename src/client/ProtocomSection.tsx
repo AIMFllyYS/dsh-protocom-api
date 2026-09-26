@@ -66,6 +66,10 @@ interface GroupSectionValue {
   protocol?: Protocol
   contextLengths?: number[]
   showBalance?: boolean
+  /** Extra credential references forming this group's key pool. */
+  apiKeys?: string[]
+  /** How the pool picks a key: `sticky` (cache-warm) or `round-robin`. */
+  keyPolicy?: string
 }
 
 /** The plugin's redacted section value. */
@@ -111,6 +115,8 @@ function groupValueOf(section: SectionValue, key: string, family: ProviderFamily
     // normalized empty array means unset, matching the adapter's resolution.
     contextLengths: raw.contextLengths?.length ? raw.contextLengths : [...defaults?.contextLengths ?? []],
     showBalance: raw.showBalance ?? true,
+    apiKeys: raw.apiKeys ?? [],
+    keyPolicy: raw.keyPolicy ?? 'sticky',
   }
 }
 
@@ -399,6 +405,9 @@ function GroupCard({ groupKey, group, family, credential, writable, revision, pr
   const [keyDraft, setKeyDraft] = useState('')
   const [keyBusy, setKeyBusy] = useState(false)
   const [keyMessage, setKeyMessage] = useState<{ kind: 'ok' | 'error'; text: string } | undefined>(undefined)
+  const [poolDraft, setPoolDraft] = useState<string | undefined>(undefined)
+  const [poolNotice, setPoolNotice] = useState<{ kind: 'ok' | 'error'; text: string } | undefined>(undefined)
+  /** The pool as the settings document states it; the draft wins while editing. */
   const [cardError, setCardError] = useState<string | undefined>(undefined)
   const [busy, setBusy] = useState(false)
   const [open, setOpen] = useState(true)
@@ -408,6 +417,29 @@ function GroupCard({ groupKey, group, family, credential, writable, revision, pr
     data: GroupBalance | GoUsageView | undefined
     error: string | undefined
   }>({ phase: 'idle', data: undefined, error: undefined })
+
+  /**
+   * Commit the pool textarea. Blank lines are dropped rather than stored as
+   * empty references, and a repeat is refused locally so the operator sees
+   * which line is at fault instead of a Host-level message about the group.
+   */
+  const savePool = (): void => {
+    if (poolDraft === undefined) return
+    const entries = poolDraft.split('\n').map(line => line.trim()).filter(line => line.length > 0)
+    const seen = new Set<string>()
+    for (const entry of entries) {
+      if (seen.has(entry)) {
+        setPoolNotice({ kind: 'error', text: `${t('keyPoolDuplicate')} ${entry}` })
+        return
+      }
+      seen.add(entry)
+    }
+    setPoolNotice(undefined)
+    setPoolDraft(undefined)
+    write(entries.length === 0
+      ? [{ op: 'unset', path: ['groups', groupKey, 'apiKeys'] }]
+      : [{ op: 'set', path: ['groups', groupKey, 'apiKeys'], value: entries }])
+  }
 
   const write = (ops: Parameters<ProtocomOperations['writeSettings']>[0]): void => {
     setCardError(undefined)
@@ -558,6 +590,49 @@ function GroupCard({ groupKey, group, family, credential, writable, revision, pr
               </button>
             </div>
             <span className="protocom-key-state">{credentialConfigured ? `${t('keyConfigured')} (${ref})` : `${t('keyMissing')} (${ref})`}</span>
+            {/* The pool is a list of credential REFERENCES, not secrets: the
+                values are stored through the same credential seam as the
+                primary key, so nothing secret rides the settings document. */}
+            <div className="protocom-field">
+              <span className="protocom-field-label">{t('keyPool')}</span>
+              <textarea
+                className="protocom-input protocom-keypool"
+                rows={Math.max(2, (group.apiKeys?.length ?? 0) + 1)}
+                value={poolDraft ?? (group.apiKeys ?? []).join('\n')}
+                placeholder={t('keyPoolPlaceholder')}
+                aria-label={t('keyPool')}
+                disabled={!writable || busy}
+                spellCheck={false}
+                onChange={event => { setPoolDraft(event.target.value) }}
+              />
+              <button
+                type="button"
+                className="protocom-button"
+                disabled={!writable || busy || poolDraft === undefined}
+                onClick={savePool}
+              >
+                {t('keyPoolApply')}
+              </button>
+            </div>
+            <p className="protocom-notice">{t('keyPoolHint')}</p>
+            <div className="protocom-field">
+              <span className="protocom-field-label">{t('keyPolicy')}</span>
+              <select
+                className="protocom-input"
+                aria-label={t('keyPolicy')}
+                value={group.keyPolicy ?? 'sticky'}
+                disabled={!writable || busy}
+                onChange={event => {
+                  write([{ op: 'set', path: ['groups', groupKey, 'keyPolicy'], value: event.target.value }])
+                }}
+              >
+                <option value="sticky">{t('keyPolicySticky')}</option>
+                <option value="round-robin">{t('keyPolicyRoundRobin')}</option>
+              </select>
+            </div>
+            {poolNotice === undefined ? null : (
+              <p className={poolNotice.kind === 'ok' ? 'protocom-status' : 'protocom-error'}>{poolNotice.text}</p>
+            )}
             {keyMessage === undefined ? null : (
               <p className={keyMessage.kind === 'ok' ? 'protocom-status' : 'protocom-error'}>
                 {keyMessage.kind === 'ok' ? keyMessage.text : `${t('keyFailed')}: ${keyMessage.text}`}

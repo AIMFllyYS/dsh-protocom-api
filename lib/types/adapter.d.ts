@@ -40,8 +40,23 @@ export interface ProtocomAdapterOptions {
      * never re-read — so the key can only ever come from the same resolution as
      * the endpoint it is sent to. Throws `LlmError` `MISSING_CREDENTIAL` when
      * no key is available anywhere.
+     *
+     * A group with a key POOL needs the Session to pick a key: sticky selection
+     * pins one account per conversation so its prefix cache stays warm. Callers
+     * with no conversation (a listing, a probe) omit it and get the pool's
+     * deterministic default, which is all a cache-less request can use.
+     * @param group - the resolved group whose key is wanted.
+     * @param sessionId - the conversation this request belongs to, when any.
      */
-    resolveApiKey: (group: ResolvedGroup) => Promise<string>;
+    resolveApiKey: (group: ResolvedGroup, sessionId?: string) => Promise<string>;
+    /**
+     * Report that a key just failed admission, so the pool can park it briefly.
+     * Called with an `AUTH` or `RATE_LIMIT` failure; other codes are the model's
+     * or the relay's problem, not the credential's.
+     * @param group - the group whose key failed.
+     * @param sessionId - the conversation that was being served, when any.
+     */
+    reportKeyFailure?: (group: ResolvedGroup, sessionId?: string) => void;
     /**
      * The deployment's durable attachment service, when one is mounted. Absent
      * means no image can be resolved, so image input is refused rather than
