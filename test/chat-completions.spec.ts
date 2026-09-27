@@ -262,6 +262,103 @@ describe('chat-completions serialization', () => {
     expect((plain.messages as { content: unknown }[])[0]?.content).toBe('hi')
   })
 
+  it('moves an image out of a tool result onto the user item that follows', () => {
+    // NOT sent on the tool message, though the field accepts a part list. This
+    // relay answers 200 and silently discards an image in a tool result: asked
+    // the colour of a red image a tool returned, it answered "White" (and
+    // "Yellow" for a green one) with no error anywhere. OpenCode Go honours the
+    // same shape. A silent wrong answer is worse than a loud failure and no
+    // client can detect it, so the image rides a user item, which BOTH routes
+    // deliver correctly -- verified on both.
+    const toolMessage = {
+      role: 'tool',
+      toolCallId: 'call_1',
+      content: [
+        { type: 'text', text: 'Read 1 image.' },
+        { type: 'image', attachment: { attachmentId: 'sha256:abc', mediaType: 'image/png' } },
+      ],
+    } as unknown as Message
+    const body = serializeChatRequest({
+      ...base,
+      messages: [toolMessage],
+    }, 'm', new Map([['sha256:abc', 'data:image/png;base64,AAAA']]))
+    expect(body.messages).toEqual([
+      // The tool message keeps the string form the OpenAI schema allows here.
+      { role: 'tool', tool_call_id: 'call_1', content: 'Read 1 image.' },
+      {
+        role: 'user',
+        content: [
+          { type: 'text', text: 'The image returned by the tool call above:' },
+          { type: 'image_url', image_url: { url: 'data:image/png;base64,AAAA' } },
+        ],
+      },
+    ])
+  })
+
+  it('carries every image of a multi-image tool result, in order', () => {
+    // The spill policy produces tool results with several images, and the
+    // reference adapter keeps all of them. One user item carries the lot, in
+    // the order the tool returned them -- verified live: asked to name every
+    // colour of a red+green tool result, the model answered "Red, Green".
+    const toolMessage = {
+      role: 'tool',
+      toolCallId: 'call_multi',
+      content: [
+        { type: 'text', text: 'Read 2 images.' },
+        { type: 'image', attachment: { attachmentId: 'sha256:r', mediaType: 'image/png' } },
+        { type: 'text', text: 'and' },
+        { type: 'image', attachment: { attachmentId: 'sha256:g', mediaType: 'image/png' } },
+      ],
+    } as unknown as Message
+    const body = serializeChatRequest(
+      { ...base, messages: [toolMessage] },
+      'm',
+      new Map([['sha256:r', 'data:image/png;base64,RRRR'], ['sha256:g', 'data:image/png;base64,GGGG']]),
+    )
+    expect(body.messages).toEqual([
+      { role: 'tool', tool_call_id: 'call_multi', content: 'Read 2 images.and' },
+      {
+        role: 'user',
+        content: [
+          { type: 'text', text: 'The image returned by the tool call above:' },
+          { type: 'image_url', image_url: { url: 'data:image/png;base64,RRRR' } },
+          { type: 'image_url', image_url: { url: 'data:image/png;base64,GGGG' } },
+        ],
+      },
+    ])
+  })
+
+  it('keeps a tool result with no image on the tool message alone', () => {
+    // The common path is untouched: no extra user item appears.
+    const toolMessage = {
+      role: 'tool',
+      toolCallId: 'call_2',
+      content: [{ type: 'text', text: 'nothing to show' }],
+    } as unknown as Message
+    const body = serializeChatRequest({ ...base, messages: [toolMessage] }, 'm', new Map([['sha256:abc', 'data:x']]))
+    expect(body.messages).toEqual([
+      { role: 'tool', tool_call_id: 'call_2', content: 'nothing to show' },
+    ])
+  })
+
+  it('degrades an unresolvable tool image rather than failing the turn', () => {
+    // An id the map does not carry contributes no part, so no user item is
+    // added and the tool result still reaches the model. This used to throw
+    // UNSUPPORTED_CONTENT and lose the whole turn.
+    const toolMessage = {
+      role: 'tool',
+      toolCallId: 'call_3',
+      content: [
+        { type: 'text', text: 'Read 1 image.' },
+        { type: 'image', attachment: { attachmentId: 'sha256:missing', mediaType: 'image/png' } },
+      ],
+    } as unknown as Message
+    const body = serializeChatRequest({ ...base, messages: [toolMessage] }, 'm', new Map())
+    expect(body.messages).toEqual([
+      { role: 'tool', tool_call_id: 'call_3', content: 'Read 1 image.' },
+    ])
+  })
+
   it('refuses an image on an assistant message', () => {
     const assistantImage = {
       role: 'assistant',

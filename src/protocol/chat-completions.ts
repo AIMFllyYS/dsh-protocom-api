@@ -159,6 +159,27 @@ function assertTextOnly(blocks: readonly ContentBlock[]): void {
 }
 
 /**
+ * The image parts one message's blocks resolve to, in order.
+ *
+ * An image this request did not retain contributes nothing, leaving the text
+ * around it to carry the turn. That is the same degradation the budget path
+ * already produces, rather than a second failure mode.
+ */
+function imageParts(
+  blocks: readonly ContentBlock[],
+  images: RequestImageUrls | undefined,
+): WireContentPart[] {
+  const parts: WireContentPart[] = []
+  if (images === undefined || images.size === 0) return parts
+  for (const block of blocks) {
+    if (block.type !== 'image') continue
+    const url = images.get(String(block.attachment.attachmentId))
+    if (url !== undefined) parts.push({ type: 'image_url', image_url: { url } })
+  }
+  return parts
+}
+
+/**
  * The user-message content: a plain string while no image survives, otherwise
  * the multimodal part list. Text parts keep their order ahead of the images,
  * matching how the composer presents them.
@@ -168,28 +189,63 @@ function userContent(
   images: RequestImageUrls | undefined,
 ): string | WireContentPart[] {
   const text = flattenText(blocks)
-  if (images === undefined || images.size === 0) return text
-  const parts: WireContentPart[] = []
-  if (text.length > 0) parts.push({ type: 'text', text })
-  for (const block of blocks) {
-    if (block.type !== 'image') continue
-    const url = images.get(String(block.attachment.attachmentId))
-    if (url !== undefined) parts.push({ type: 'image_url', image_url: { url } })
-  }
-  return parts.length === 0 ? text : parts
+  const retained = imageParts(blocks, images)
+  if (retained.length === 0) return text
+  return [...text.length > 0 ? [{ type: 'text' as const, text }] : [], ...retained]
 }
 
-function wireMessage(message: RequestMessage, images: RequestImageUrls | undefined): WireMessage {
-  if (message.role === 'system') return { role: 'system', content: flattenText(message.content) }
+/**
+ * The words that carry a tool's image across to the user item that delivers it.
+ *
+ * The image cannot stay in the tool message (see {@link wireMessage}), so it
+ * arrives on its own user item and needs to be attributed to the tool call that
+ * produced it. Without this the model sees an unexplained picture in the middle
+ * of a tool exchange.
+ */
+const TOOL_IMAGE_BRIDGE = 'The image returned by the tool call above:'
+
+/**
+ * The wire messages one harness message becomes.
+ *
+ * An image in a TOOL RESULT is deliberately not sent on the tool message, even
+ * though the field accepts a part list. Verified against the live endpoints
+ * (2026-09-27), the two routes disagree about what that shape means, and one of
+ * them loses the image without saying so:
+ *
+ *  - This relay answers **200 and silently discards the image.** Asked to name
+ *    the colour of a red image returned by a tool, the model answered "White",
+ *    and "Yellow" for a green one -- it was guessing, with no error anywhere.
+ *    The native Responses path delivers the same image correctly, so the loss is
+ *    in this relay's chat-to-Responses translation rather than in the model.
+ *  - OpenCode Go honours it, and answers correctly.
+ *
+ * A silent wrong answer is worse than a loud failure, and no client can detect
+ * it: there is no status code to fall back on. So the image is moved to the
+ * user item that follows instead, which both routes deliver correctly --
+ * verified on both, on a tool result whose text was empty, and on a turn with
+ * two tool results where only the second carried the image.
+ *
+ * The tool message itself keeps the string form, which is what the OpenAI schema
+ * actually allows there (its content parts are text-only). Nothing about the
+ * common, image-free path changes.
+ */
+function wireMessage(message: RequestMessage, images: RequestImageUrls | undefined): WireMessage[] {
+  if (message.role === 'system') return [{ role: 'system', content: flattenText(message.content) }]
   // Since 1.7 a tool result is its own message of role `tool` carrying the
   // blocks directly, rather than a `tool-result` block nested in a user
   // message. The wire shape is unchanged; only where the harness puts it moved.
   if (message.role === 'tool') {
-    assertTextOnly(message.content)
-    return { role: 'tool', tool_call_id: String(message.toolCallId), content: flattenText(message.content) }
+    const tool: WireMessage = {
+      role: 'tool',
+      tool_call_id: String(message.toolCallId),
+      content: flattenText(message.content),
+    }
+    const retained = imageParts(message.content, images)
+    if (retained.length === 0) return [tool]
+    return [tool, { role: 'user', content: [{ type: 'text', text: TOOL_IMAGE_BRIDGE }, ...retained] }]
   }
   if (message.role === 'user') {
-    return { role: 'user', content: userContent(message.content, images) }
+    return [{ role: 'user', content: userContent(message.content, images) }]
   }
   // The assistant branch is decided by the compatibility mode, not here.
   throw new LlmError('assistant messages are serialized by assistantMessages()', 'INVALID_REQUEST')
@@ -258,7 +314,7 @@ function wireMessages(
   assistantTextReplay: AssistantTextReplay,
 ): WireMessage[] {
   if (message.role === 'assistant') return assistantMessages(message, replayReasoning, assistantTextReplay)
-  return [wireMessage(message, images)]
+  return wireMessage(message, images)
 }
 
 /** Serialize one request into the chat-completions wire body. */
