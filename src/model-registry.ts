@@ -16,7 +16,7 @@
  * @module dsh-protocom-api/model-registry
  */
 
-import { variantLengths } from './context-variants.ts'
+import { variantLengths, withinLadderCeiling } from './context-variants.ts'
 import { CONTEXT_1M, CONTEXT_200K, CONTEXT_256K, CONTEXT_LADDER, GROUP_DEFAULTS } from './groups.ts'
 import type { GroupKey, GroupReasoning, Protocol } from './groups.ts'
 import type { ProviderFamily } from './family.ts'
@@ -760,7 +760,20 @@ export function contextStepsFor(
   ladder: readonly number[] | undefined,
 ): number[] {
   if (model.contextOptions !== undefined) {
-    return variantLengths(model.contextOptions, ladder) ?? [model.contextWindow]
+    // The model's own window is its CAPACITY, not one of the budgets a ladder
+    // picks between, so it is offered whatever the ladder says. A rung is
+    // matched by budget rather than by exact integer, and can still miss the
+    // window entirely -- grok-4.7 declares 500,000, which sits between the 400K
+    // and 1M rungs and matches neither. Without this the model is capped below
+    // its own ceiling by a filter that never meant to touch it. Capping a model
+    // on purpose is what the per-model modelContexts choice is for.
+    const matched = variantLengths(model.contextOptions, ladder) ?? []
+    const steps = withinLadderCeiling(model.contextWindow, ladder)
+      ? [...matched, model.contextWindow]
+      : matched
+    // Never empty: a model with no step at all would vanish from the menu, so
+    // an empty match degrades to its own window exactly as it always has.
+    return steps.length > 0 ? [...new Set(steps)].sort((left, right) => left - right) : [model.contextWindow]
   }
   if (ladder === undefined || ladder.length === 0) return [model.contextWindow]
   const allowed = model.contextWindowDisclosed === true

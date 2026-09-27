@@ -23,7 +23,6 @@ import {
   MAX_RETRY_DELAY_MS,
   RETRY_INITIAL_DELAY_MS,
 } from '../retry.ts'
-import { variantLengths } from '../context-variants.ts'
 import { parseBalanceView } from '../balance-view.ts'
 import type { GroupBalance } from '../balance-view.ts'
 import { parseGoUsage } from '../usage-view.ts'
@@ -720,7 +719,9 @@ function GroupCard({ groupKey, group, family, credential, writable, revision, pr
   const hiddenInGroup = groupIds.filter(id => hidden.includes(id))
   const entryCount = visibleRows.reduce((total, row) => {
     const stored = contexts[identityKey(row.upstreamId, family.registry)]
-    const lengths = stored ?? variantLengths(row.contextOptions, group.contextLengths) ?? [row.contextWindow]
+    // The same function the chips use, so the count cannot describe a different
+    // set of entries from the ones the row actually offers.
+    const lengths = stored ?? contextStepsFor(row, group.contextLengths)
     return total + Math.max(1, lengths.length)
   }, 0)
 
