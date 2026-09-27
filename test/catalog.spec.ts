@@ -1,7 +1,14 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { ProtocomAdapter } from '../src/adapter.ts'
 import { resolveAdapterOptions } from '../src/config.ts'
-import { groupCatalog, modelIdentities, REFUSED_CHAT_MODEL_IDS, REGISTRY, servesChat } from '../src/model-registry.ts'
+import {
+  DEFAULT_RECOMMENDED,
+  groupCatalog,
+  modelIdentities,
+  REFUSED_CHAT_MODEL_IDS,
+  REGISTRY,
+  servesChat,
+} from '../src/model-registry.ts'
 
 afterEach(() => {
   vi.unstubAllGlobals()
@@ -39,7 +46,12 @@ describe('catalog composition', () => {
 
   it('leads with the models whose reasoning content streams', async () => {
     const listed = await offlineAdapter(ENABLED).listModels('protocom-aggregate')
-    expect(listed.slice(0, 3).map(model => model.id)).toEqual(['kimi-k3', 'glm-5.2', 'mimo-v2.5'])
+    // Derived from the shipped list rather than hardcoded, so a model the
+    // endpoint stops serving does not have to be chased through this test as
+    // well -- it leaves the recommendation and the menu together.
+    expect(DEFAULT_RECOMMENDED.length).toBeGreaterThan(0)
+    expect(listed.slice(0, DEFAULT_RECOMMENDED.length).map(model => model.id))
+      .toEqual([...DEFAULT_RECOMMENDED])
   })
 
   it('removes exactly the hidden models from the menu', async () => {

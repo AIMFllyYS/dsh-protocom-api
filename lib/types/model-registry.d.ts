@@ -413,11 +413,24 @@ export declare function groupCatalog(key: string, listing: readonly UpstreamMode
  */
 export declare const GO_REGISTRY: readonly RegistryEntry[];
 /**
- * Ids the Go endpoint lists but cannot serve a chat turn for on any wire
- * protocol, verified by request: `minimax-m2.7` answers 503 on both
- * chat-completions and responses, and `hy3-preview` answers 400
- * "Model is unavailable". They stay listed (the probe table names them) but
- * never reach the menu.
+ * Ids this endpoint cannot serve a chat turn for on any wire protocol.
+ *
+ * Two ways an id lands here, both verified by request rather than inferred:
+ *
+ *  - **Listed but unservable.** `minimax-m2.7` answers 503 on both
+ *    chat-completions and responses; `hy3-preview` answers 400 "Model is
+ *    unavailable". They stay listed (the probe table names them) but never
+ *    reach the menu.
+ *
+ *  - **Declared here but no longer served.** These six were added when the
+ *    endpoint's catalog listed them, and the catalog has since shrunk from 43
+ *    ids to 36 (stable across three fetches, 2026-09-27). A registry entry
+ *    tagged for this group is a menu MEMBERSHIP SOURCE, so it is offered even
+ *    when the live listing no longer carries it -- which made every one of
+ *    these a row whose every use answered 400 "Model is unavailable". That is
+ *    the reported "sometimes it works, sometimes it errors": the row was
+ *    selectable and always failed. Removing an id from this list is what puts
+ *    it back the moment the endpoint serves it again.
  */
 export declare const GO_REFUSED_MODEL_IDS: readonly string[];
 /** Go menu leads: the models whose thinking actually streams, in preference order. */

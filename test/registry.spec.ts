@@ -55,7 +55,9 @@ describe('model-registry', () => {
 
   it('recommends the models whose reasoning content actually streams', () => {
     // The shipped recommendation orders the menu; it removes nothing.
-    expect(DEFAULT_RECOMMENDED).toEqual(['kimi-k3', 'glm-5.2', 'mimo-v2.5'])
+    // mimo-v2.5 was once third. It is refused on this relay now (404 for every
+    // credential), and a refused id is not in the menu, so it cannot lead it.
+    expect(DEFAULT_RECOMMENDED).toEqual(['kimi-k3', 'glm-5.2'])
     // The flash model hides its reasoning, so it is not recommended by default.
     expect(DEFAULT_RECOMMENDED).not.toContain('deepseek/deepseek-v4.1-flash')
   })
@@ -140,6 +142,11 @@ describe('model-registry', () => {
       // Re-verified 2026-09-27: the bare id answers "not available on this
       // endpoint" while the `:free` variant is simply not listed.
       'meituan/LongCat-2.0',
+      // Registry entries no credential lists and every route 404s. This list
+      // is family-scoped, so mimo-v2.5 stays in the OpenCode Go menu.
+      'mimo-v2.5',
+      'mimo-v2.5-pro',
+      'meituan/LongCat-2.0:free',
     ])
     expect(servesChat('step-5-preview')).toBe(true)
     expect(servesChat('stepaudio-2.5-tts')).toBe(false)
