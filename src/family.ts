@@ -13,6 +13,7 @@ import { DEFAULT_BASE_URL, DEFAULT_BASE_URL_ORIGIN, defaultKeyRef, GROUP_DEFAULT
 import { GO_DEFAULT_RECOMMENDED, GO_REFUSED_MODEL_IDS, GO_REGISTRY, DEFAULT_RECOMMENDED, REFUSED_CHAT_MODEL_IDS, REGISTRY } from './model-registry.ts'
 import type { GroupReasoning, Protocol } from './groups.ts'
 import { COMMANDCODE } from './commandcode.ts'
+import { CLINEPASS } from './clinepass.ts'
 import type { RegistryEntry, RegistryReasoning } from './model-registry.ts'
 
 /** Per-group shipped defaults of one family. */
@@ -84,6 +85,23 @@ export interface ProviderFamily {
   /** Ids this family's endpoint lists but cannot serve a chat turn for. */
   refused: readonly string[]
   /**
+   * Whether the endpoint's `/models` listing is a membership source, i.e.
+   * whether a model that listing names belongs in this family's menu.
+   * Default true, which is right for every endpoint that publishes its own
+   * catalog.
+   *
+   * ClinePass is the exception, and it is a real one rather than a nuance:
+   * `https://api.cline.bot/api/v1/models` answers 200 WITHOUT a credential and
+   * carries 458 models from Cline's pay-as-you-go catalog -- OpenRouter-style
+   * ids such as `z-ai/glm-5.3`, `qwen/qwen3.8-max` and `x-ai/grok-4.7` -- and
+   * not one `cline-pass/*` entry among them. Treating that as membership
+   * would put 458 unroutable rows in a ClinePass menu, every one of which
+   * would answer 401 on a ClinePass key. The hand-maintained registry is the
+   * membership source instead, which is why every entry in it is tagged for
+   * the group.
+   */
+  listingIsMembership?: boolean
+  /**
    * Session-scoping request header this family's endpoint requires
    * (`x-opencode-session` on OpenCode Go). When set, every request carries it
    * with the harness session id — or a per-adapter stable id for requests that
@@ -100,7 +118,7 @@ export interface ProviderFamily {
    * (`none`/`off`), since the same surface rejects a `thinking` block on some
    * model routes.
    */
-  chatThinking?: 'toggle' | 'effort-only'
+  chatThinking?: 'toggle' | 'effort-only' | 'reasoning-object'
   /**
    * The fenced Fetch route this family's account surface registers, or
    * undefined when the family ships no account surface.
@@ -222,4 +240,4 @@ export const OPENCODE_GO: ProviderFamily = {
 }
 
 /** Every family this plugin mounts. */
-export const FAMILIES: readonly ProviderFamily[] = [PROTOCOM, OPENCODE_GO, COMMANDCODE]
+export const FAMILIES: readonly ProviderFamily[] = [PROTOCOM, OPENCODE_GO, COMMANDCODE, CLINEPASS]

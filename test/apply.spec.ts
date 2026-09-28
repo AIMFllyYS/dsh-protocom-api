@@ -1,19 +1,21 @@
 import { describe, expect, it } from 'vitest'
 import { apply } from '../src/index.ts'
-import { CommandCodeSection, FusionSection, GoSection, ProtocomSection } from '../src/config.ts'
+import { ClinePassSection, CommandCodeSection, FusionSection, GoSection, ProtocomSection } from '../src/config.ts'
+import { FAMILIES } from '../src/family.ts'
 
 /**
  * The config shape DSH 1.7 hands a plugin: one Loader entry whose sections are
  * volatile references. Schemastery fills each section's defaults here exactly
  * as the Host does, so a section the profile never mentioned still resolves.
  * @param protocom - protocom section input, overriding the schema defaults.
- * @returns a Config whose four sections each answer `get()`.
+ * @returns a Config whose five sections each answer `get()`.
  */
 function volatileConfig(protocom: Record<string, unknown> = {}): any {
   return {
     protocom: { get: () => ProtocomSection(protocom as never) },
     opencodeGo: { get: () => GoSection({}) },
     commandcode: { get: () => CommandCodeSection({}) },
+    clinepass: { get: () => ClinePassSection({}) },
     fusion: { get: () => FusionSection({}) },
   }
 }
@@ -118,10 +120,12 @@ describe('plugin assembly (P0-1)', () => {
   it('mounts every family and the Fusion request rule', () => {
     const { ctx, listeners } = fakeContext()
     apply(ctx, config)
-    // Four sections changed hands from "registered namespace" to "field of this
+    // Each section changed hands from "registered namespace" to "field of this
     // one entry", so what each mount now needs is a change signal rather than a
-    // registration: three families plus Fusion, then the routing rule itself.
-    expect(listeners.filter(entry => entry.name === 'loader/volatile-update')).toHaveLength(4)
+    // registration: one per family, plus Fusion. Derived from FAMILIES so adding
+    // a provider is one edit rather than a count to chase.
+    expect(listeners.filter(entry => entry.name === 'loader/volatile-update'))
+      .toHaveLength(FAMILIES.length + 1)
     // The rule only works from a global, outermost listener: a subagent's agent
     // scope is below whatever scope this plugin mounts in.
     expect(listeners.filter(entry => entry.name === 'agent/request'))

@@ -26,22 +26,37 @@ export interface WireUsage {
     };
 }
 /** How a request spells thinking control on this family's chat surface. */
-export type ThinkingMode = 'toggle' | 'effort-only';
+export type ThinkingMode = 'toggle' | 'effort-only' | 'reasoning-object';
 /**
- * Resolve the wire thinking fields for one request. The default `toggle`
- * spelling sends `thinking: {type}` plus `reasoning_effort`: `off` disables
- * thinking explicitly; any other effort enables it and rides as
- * `reasoning_effort`; an absent effort leaves the provider's own default
- * alone. `effort-only` (OpenCode Go) sends `reasoning_effort` verbatim — the
- * gateway parses it without a `thinking` block, which GLM routes refuse
- * outright — and the disabling word (`none`, `off`) is part of the model's
- * advertised effort vocabulary rather than a special case here.
+ * Resolve the wire thinking fields for one request.
+ *
+ * The default `toggle` spelling sends `thinking: {type}` plus
+ * `reasoning_effort`: `off` disables thinking explicitly; any other effort
+ * enables it and rides as `reasoning_effort`; an absent effort leaves the
+ * provider's own default alone.
+ *
+ * `effort-only` (OpenCode Go) sends `reasoning_effort` verbatim — the gateway
+ * parses it without a `thinking` block, which GLM routes refuse outright — and
+ * the disabling word (`none`, `off`) is part of the model's advertised effort
+ * vocabulary rather than a special case here.
+ *
+ * `reasoning-object` (ClinePass) sends `reasoning: {enabled, effort}` and
+ * neither of the other two fields. Cline's reference documents no request-side
+ * thinking parameter at all, and the two implementations that exercised the
+ * surface disagree: the one that observed it on the wire reports this object
+ * and records that `reasoning_effort` was not what it sent. The disabling word
+ * is spelled `none` or `off`, matching the other modes, and an absent effort
+ * still leaves the provider's own default alone.
  */
 export declare function resolveThinking(effort: string | undefined, mode?: ThinkingMode): {
     thinking?: {
         type: 'enabled' | 'disabled';
     };
     reasoning_effort?: string;
+    reasoning?: {
+        enabled: boolean;
+        effort?: string;
+    };
 };
 /**
  * Map wire usage fields to the harness's DISJOINT counts: the endpoint folds

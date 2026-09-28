@@ -1,0 +1,1345 @@
+﻿From 526a4bb38cfe2fcef40d033b3b36183f7058e24a Mon Sep 17 00:00:00 2001
+From: n3wr1ch <40690535+n3wr1ch@users.noreply.github.com>
+Date: Sun, 2 Aug 2026 18:20:41 +0900
+Subject: [PATCH] feat(provider): add ClinePass subscription provider
+
+---
+ .../docs/getting-started/quickstart.md        |   2 +-
+ .../src/content/docs/guides/providers.md      |  11 +-
+ .../docs/ja/getting-started/quickstart.md     |   2 +-
+ .../src/content/docs/ja/guides/providers.md   |  11 +-
+ .../ja/reference/configuration/providers.md   |   1 +
+ .../docs/ko/getting-started/quickstart.md     |   2 +-
+ .../src/content/docs/ko/guides/providers.md   |  12 +-
+ .../ko/reference/configuration/providers.md   |   1 +
+ .../docs/reference/configuration/providers.md |   1 +
+ .../docs/ru/getting-started/quickstart.md     |   2 +-
+ .../src/content/docs/ru/guides/providers.md   |  11 +-
+ .../ru/reference/configuration/providers.md   |   1 +
+ .../docs/zh-cn/getting-started/quickstart.md  |   2 +-
+ .../content/docs/zh-cn/guides/providers.md    |  11 +-
+ .../reference/configuration/providers.md      |   1 +
+ gui/src/hooks/useJsonConfigEditor.ts          |   2 +-
+ gui/src/pages/Logs.tsx                        |   6 +-
+ gui/src/pages/providers-shared.ts             |   1 +
+ src/adapters/base.ts                          |   4 +-
+ src/adapters/openai-chat.ts                   | 190 +++++++++---
+ src/providers/derive.ts                       |   4 +
+ src/providers/registry.ts                     |  69 ++++-
+ src/router.ts                                 |   3 +
+ src/server/auth-cors.ts                       |   1 +
+ src/server/request-log.ts                     |  10 +-
+ src/types.ts                                  |   2 +
+ src/usage/log.ts                              |  12 +-
+ tests/cline-pass-provider.test.ts             | 270 ++++++++++++++++++
+ tests/openai-chat-eof.test.ts                 |  50 ++++
+ tests/openai-chat-hardening.test.ts           |  26 ++
+ tests/provider-registry-parity.test.ts        |   2 +-
+ tests/request-log.test.ts                     |  17 ++
+ tests/server-auth.test.ts                     |   2 +
+ 33 files changed, 672 insertions(+), 70 deletions(-)
+ create mode 100644 tests/cline-pass-provider.test.ts
+
+diff --git a/docs-site/src/content/docs/getting-started/quickstart.md b/docs-site/src/content/docs/getting-started/quickstart.md
+index 6dbd3135ca6..104dfa01721 100644
+--- a/docs-site/src/content/docs/getting-started/quickstart.md
++++ b/docs-site/src/content/docs/getting-started/quickstart.md
+@@ -13,7 +13,7 @@ ocx init
+ 
+ `ocx init` walks you through:
+ 
+-1. **Pick a provider** — choose one of the 66 built-in registry presets or `custom` to type a base
++1. **Pick a provider** — choose one of the 67 built-in registry presets or `custom` to type a base
+    URL and adapter.
+ 2. **API key** — paste a key, or reference an environment variable like `${ANTHROPIC_API_KEY}`.
+ 3. **Default model** — for key, local, and custom providers, accept the preset or enter a model id.
+diff --git a/docs-site/src/content/docs/guides/providers.md b/docs-site/src/content/docs/guides/providers.md
+index 341d822203c..27eb2da9c19 100644
+--- a/docs-site/src/content/docs/guides/providers.md
++++ b/docs-site/src/content/docs/guides/providers.md
+@@ -190,15 +190,24 @@ selectors, then retry. Signing in from a machine with no existing `kiro-cli` ses
+ 
+ ## 3. API-key catalog
+ 
+-opencodex ships 66 built-in presets: 55 key-based, seven OAuth, three local, and the default
++opencodex ships 67 built-in presets: 56 key-based, seven OAuth, three local, and the default
+ ChatGPT-forward preset. The dashboard's **Add provider** picker opens a key provider's dashboard,
+ validates the key, and stores it. Notable entries:
+ 
++**ClinePass** uses a Cline API key with the [official subscription catalog](https://docs.cline.bot/getting-started/clinepass)
++and [Chat Completions endpoint](https://docs.cline.bot/api/chat-completions), operated by Cline Bot Inc. under
++[Cline's terms](https://cline.bot/tos). A routed id such as `cline-pass/cline-pass/kimi-k3` is
++intentional: the first segment selects the opencodex provider, while `cline-pass/kimi-k3` is the
++full model slug sent upstream. ClinePass quota is shared by the account across rolling 5-hour,
++weekly, and monthly limits. opencodex currently advertises the live-verified `low` reasoning tier;
++higher requested tiers clamp to `low` until the gateway publishes or verifies a wider ladder.
++
+ | Provider | Base URL |
+ | --- | --- |
+ | **OpenAI (API key)** | `https://api.openai.com/v1` |
+ | **Anthropic (API key)** | `https://api.anthropic.com` |
+ | **OpenRouter** | `https://openrouter.ai/api/v1` |
++| **ClinePass** | `https://api.cline.bot/api/v1` |
+ | **Ollama Cloud** | `https://ollama.com/v1` |
+ | Google Gemini · Google Vertex AI | `https://generativelanguage.googleapis.com` · `https://aiplatform.googleapis.com` |
+ | Azure OpenAI | `https://{resource}.openai.azure.com/openai` |
+diff --git a/docs-site/src/content/docs/ja/getting-started/quickstart.md b/docs-site/src/content/docs/ja/getting-started/quickstart.md
+index fee4fbd264e..0b473db1759 100644
+--- a/docs-site/src/content/docs/ja/getting-started/quickstart.md
++++ b/docs-site/src/content/docs/ja/getting-started/quickstart.md
+@@ -13,7 +13,7 @@ ocx init
+ 
+ `ocx init` では次の手順を説明します。
+ 
+-1. **プロバイダーを選択してください** — 66 の組み込みレジストリ プリセットのいずれか、または `custom` を選択してベースを入力します
++1. **プロバイダーを選択してください** — 67 の組み込みレジストリ プリセットのいずれか、または `custom` を選択してベースを入力します
+ URLとアダプター。
+ 2. **API キー** — キーを貼り付けるか、`${ANTHROPIC_API_KEY}` のような環境変数を参照します。
+ 3. **デフォルト モデル** — キー、ローカル、カスタム プロバイダーの場合は、プリセットを受け入れるか、モデル ID を入力します。
+diff --git a/docs-site/src/content/docs/ja/guides/providers.md b/docs-site/src/content/docs/ja/guides/providers.md
+index 2005aa32969..e76c6606688 100644
+--- a/docs-site/src/content/docs/ja/guides/providers.md
++++ b/docs-site/src/content/docs/ja/guides/providers.md
+@@ -119,15 +119,24 @@ Kiro のログインには Kiro CLI が必要です。Unix では `curl -fsSL ht
+ 
+ ## 3. API キーカタログ
+ 
+-opencodex には組み込みプリセットが 66 個含まれています。キー方式 55、OAuth 7、ローカル 3、
++opencodex には組み込みプリセットが 67 個含まれています。キー方式 56、OAuth 7、ローカル 3、
+ デフォルト ChatGPT 転送プリセット 1 です。ダッシュボードの **Add provider** ピッカーはキー発行ページを開き、
+ 入力したキーを検証した後保存します。主な項目は以下のとおりです:
+ 
++**ClinePass** は Cline API キーで[公式サブスクリプションカタログ](https://docs.cline.bot/getting-started/clinepass)と
++[Chat Completions エンドポイント](https://docs.cline.bot/api/chat-completions)に接続します。運営主体は
++[Cline の利用規約](https://cline.bot/tos)に記載された Cline Bot Inc. です。`cline-pass/cline-pass/kimi-k3` のようなルーティング ID は
++意図した形式です。先頭は opencodex のプロバイダー、残りの `cline-pass/kimi-k3` は upstream に送信する
++完全なモデル slug です。使用量はアカウントのローリング 5 時間、週次、月次の各上限で共有されます。
++現在 opencodex が公開する reasoning tier は実機検証済みの `low` のみで、より高い要求は公式範囲が
++公開または検証されるまで `low` にクランプされます。
++
+ | プロバイダー | ベース URL |
+  --- | --- |
+ | **OpenAI (API キー)** | `https://api.openai.com/v1` |
+ | **Anthropic (API キー)** | `https://api.anthropic.com` |
+ | **OpenRouter** | `https://openrouter.ai/api/v1` |
++| **ClinePass** | `https://api.cline.bot/api/v1` |
+ | **Ollama Cloud** | `https://ollama.com/v1` |
+ | Google Gemini · Google Vertex AI | `https://generativelanguage.googleapis.com` · `https://aiplatform.googleapis.com` |
+ | Azure OpenAI | `https://{resource}.openai.azure.com/openai` |
+diff --git a/docs-site/src/content/docs/ja/reference/configuration/providers.md b/docs-site/src/content/docs/ja/reference/configuration/providers.md
+index c9875cd135b..3eb61276a84 100644
+--- a/docs-site/src/content/docs/ja/reference/configuration/providers.md
++++ b/docs-site/src/content/docs/ja/reference/configuration/providers.md
+@@ -68,6 +68,7 @@ description: プロバイダー エントリ、認証、エンドポイント、
+ | `modelAdapters?` | `Record<string, string>` |混合配線ゲートウェイのモデルごとの `openai-chat` または `openai-responses` 配線オーバーライド。明示的なエントリはレジストリのデフォルトを破ります。 DeepSeek のプリセットは、`deepseek-v4-flash` のネイティブ レスポンスを選択できます。単線アップストリーム ピンと正規の ChatGPT 転送拒否オーバーライド。 |
+ | `reasoningEffortMap?` | `Record<string, string>` |ラベルを推論するためのプロバイダー全体のワイヤ エイリアス。 |
+ | `modelReasoningEffortMap?` | `Record<string, Record<string, string>>` |推論ラベルのモデルごとのワイヤ エイリアス。 |
++| `reasoningWireFormat?` | `"gateway-object"` | `reasoning_effort` ではなく `reasoning: { enabled, effort }` を受け取る OpenAI 互換ゲートウェイ用です。ClinePass プリセットが自動設定します。 |
+ | `noReasoningModels?` | `string[]` |推論/思考パラメーターを拒否するモデル。 |
+ | `noTemperatureModels?` | `string[]` |発信者指定の`temperature`を拒否するモデル。 |
+ | `noTopPModels?` | `string[]` |発信者指定の`top_p`を拒否するモデル。 |
+diff --git a/docs-site/src/content/docs/ko/getting-started/quickstart.md b/docs-site/src/content/docs/ko/getting-started/quickstart.md
+index 0784c85a134..c6d6683ad29 100644
+--- a/docs-site/src/content/docs/ko/getting-started/quickstart.md
++++ b/docs-site/src/content/docs/ko/getting-started/quickstart.md
+@@ -13,7 +13,7 @@ ocx init
+ 
+ `ocx init`은 다음 과정을 안내합니다:
+ 
+-1. **프로바이더 선택** — 내장 레지스트리 프리셋 66개 중 하나를 고르거나 `custom`을 선택해 base URL과 adapter를 직접 입력합니다.
++1. **프로바이더 선택** — 내장 레지스트리 프리셋 67개 중 하나를 고르거나 `custom`을 선택해 base URL과 adapter를 직접 입력합니다.
+ 2. **API 키** — 키를 붙여넣거나 `${ANTHROPIC_API_KEY}` 같은 환경 변수를 참조합니다.
+ 3. **기본 모델** — 키, 로컬, custom 프로바이더에서는 프리셋을 그대로 쓰거나 모델 ID를 직접 입력합니다.
+ 4. **프록시 포트** — 기본값은 `10100`입니다.
+diff --git a/docs-site/src/content/docs/ko/guides/providers.md b/docs-site/src/content/docs/ko/guides/providers.md
+index f7cf96e29f4..e0f0016d138 100644
+--- a/docs-site/src/content/docs/ko/guides/providers.md
++++ b/docs-site/src/content/docs/ko/guides/providers.md
+@@ -119,15 +119,25 @@ Kiro 로그인에는 Kiro CLI가 필요합니다. Unix에서는 `curl -fsSL http
+ 
+ ## 3. API 키 카탈로그
+ 
+-opencodex에는 빌트인 프리셋이 66개 들어 있습니다. 키 방식 55개, OAuth 7개, 로컬 3개,
++opencodex에는 빌트인 프리셋이 67개 들어 있습니다. 키 방식 56개, OAuth 7개, 로컬 3개,
+ 기본 ChatGPT 포워드 프리셋 1개입니다. 대시보드의 **Add provider** 선택기는 키 발급 페이지를 열고,
+ 입력한 키를 검증한 뒤 저장합니다. 주요 항목은 다음과 같습니다:
+ 
++**ClinePass**는 Cline API 키로 [공식 구독 카탈로그](https://docs.cline.bot/getting-started/clinepass)와
++[Chat Completions 엔드포인트](https://docs.cline.bot/api/chat-completions)에 연결합니다. 운영 주체는
++[Cline 약관](https://cline.bot/tos)에 명시된 Cline Bot Inc.입니다. `cline-pass/cline-pass/kimi-k3`
++같은 라우팅 ID는 정상입니다.
++앞의 `cline-pass`는 opencodex 프로바이더이고, 뒤의 `cline-pass/kimi-k3`는 upstream에 보내는
++전체 모델 slug입니다. ClinePass 사용량은 계정의 5시간 롤링·주간·월간 한도를 함께 사용합니다.
++현재 opencodex는 실측된 `low` reasoning 단계만 광고하며, 더 높은 요청은 공식 지원 범위가
++게시되거나 검증될 때까지 `low`로 제한합니다.
++
+ | 프로바이더 | 베이스 URL |
+ | --- | --- |
+ | **OpenAI (API key)** | `https://api.openai.com/v1` |
+ | **Anthropic (API key)** | `https://api.anthropic.com` |
+ | **OpenRouter** | `https://openrouter.ai/api/v1` |
++| **ClinePass** | `https://api.cline.bot/api/v1` |
+ | **Ollama Cloud** | `https://ollama.com/v1` |
+ | Google Gemini · Google Vertex AI | `https://generativelanguage.googleapis.com` · `https://aiplatform.googleapis.com` |
+ | Azure OpenAI | `https://{resource}.openai.azure.com/openai` |
+diff --git a/docs-site/src/content/docs/ko/reference/configuration/providers.md b/docs-site/src/content/docs/ko/reference/configuration/providers.md
+index b3adefda8a2..b1d9e683d71 100644
+--- a/docs-site/src/content/docs/ko/reference/configuration/providers.md
++++ b/docs-site/src/content/docs/ko/reference/configuration/providers.md
+@@ -68,6 +68,7 @@ description: 공급자 항목, 인증, 엔드포인트, 모델 카탈로그, 할
+ | `modelAdapters?` | `Record<string, string>` | 혼합 와이어 게이트웨이를 위한 모델별 `openai-chat` 또는 `openai-responses` 와이어 재정의입니다. 명시적 항목이 레지스트리 기본값보다 우선합니다. DeepSeek 프리셋은 `deepseek-v4-flash`에 네이티브 Responses를 선택할 수 있습니다. 단일 와이어 상위 항목과 정식 ChatGPT forward는 재정의를 거부합니다. |
+ | `reasoningEffortMap?` | `Record<string, string>` | reasoning 레이블의 공급자 전반 와이어 별칭입니다. |
+ | `modelReasoningEffortMap?` | `Record<string, Record<string, string>>` | reasoning 레이블의 모델별 와이어 별칭입니다. |
++| `reasoningWireFormat?` | `"gateway-object"` | `reasoning_effort` 대신 `reasoning: { enabled, effort }`를 받는 OpenAI 호환 게이트웨이용입니다. ClinePass 프리셋이 자동 설정합니다. |
+ | `noReasoningModels?` | `string[]` | reasoning/thinking 매개변수를 거부하는 모델입니다. |
+ | `noTemperatureModels?` | `string[]` | 호출자가 지정한 `temperature`를 거부하는 모델입니다. |
+ | `noTopPModels?` | `string[]` | 호출자가 지정한 `top_p`를 거부하는 모델입니다. |
+diff --git a/docs-site/src/content/docs/reference/configuration/providers.md b/docs-site/src/content/docs/reference/configuration/providers.md
+index 5109a9d8ea7..24e8f8eb038 100644
+--- a/docs-site/src/content/docs/reference/configuration/providers.md
++++ b/docs-site/src/content/docs/reference/configuration/providers.md
+@@ -79,6 +79,7 @@ differing backup and rewrites known legacy namespaced selected ids to bare ids.
+ | `modelAdapters?` | `Record<string, string>` | Per-model `openai-chat` or `openai-responses` wire override for mixed-wire gateways. Explicit entries beat registry defaults; DeepSeek's preset can select native Responses for `deepseek-v4-flash`. Single-wire upstream pins and canonical ChatGPT forward reject overrides. |
+ | `reasoningEffortMap?` | `Record<string, string>` | Provider-wide wire aliases for reasoning labels. |
+ | `modelReasoningEffortMap?` | `Record<string, Record<string, string>>` | Per-model wire aliases for reasoning labels. |
++| `reasoningWireFormat?` | `"gateway-object"` | For OpenAI-compatible gateways that accept `reasoning: { enabled, effort }` instead of `reasoning_effort`. The ClinePass preset sets this automatically. |
+ | `noReasoningModels?` | `string[]` | Models that reject reasoning/thinking parameters. |
+ | `noTemperatureModels?` | `string[]` | Models that reject caller-specified `temperature`. |
+ | `noTopPModels?` | `string[]` | Models that reject caller-specified `top_p`. |
+diff --git a/docs-site/src/content/docs/ru/getting-started/quickstart.md b/docs-site/src/content/docs/ru/getting-started/quickstart.md
+index 33a7e41ee11..e314a4c9719 100644
+--- a/docs-site/src/content/docs/ru/getting-started/quickstart.md
++++ b/docs-site/src/content/docs/ru/getting-started/quickstart.md
+@@ -13,7 +13,7 @@ ocx init
+ 
+ `ocx init` проведёт вас по следующим шагам:
+ 
+-1. **Выбор провайдера** — выберите один из 66 встроенных пресетов реестра или `custom`, чтобы
++1. **Выбор провайдера** — выберите один из 67 встроенных пресетов реестра или `custom`, чтобы
+    ввести базовый URL и адаптер вручную.
+ 2. **API-ключ** — вставьте ключ или сошлитесь на переменную окружения вида `${ANTHROPIC_API_KEY}`.
+ 3. **Модель по умолчанию** — для провайдеров с ключом, локальных и `custom` примите значение из
+diff --git a/docs-site/src/content/docs/ru/guides/providers.md b/docs-site/src/content/docs/ru/guides/providers.md
+index 1ed4d5cbcb7..222e727cf84 100644
+--- a/docs-site/src/content/docs/ru/guides/providers.md
++++ b/docs-site/src/content/docs/ru/guides/providers.md
+@@ -126,15 +126,24 @@ OAuth-провайдеры, чьи учётные данные содержат
+ 
+ ## 3. Каталог API-ключей
+ 
+-opencodex поставляется с 66 встроенными пресетами: 55 на основе ключей, семь OAuth, три локальных и
++opencodex поставляется с 67 встроенными пресетами: 56 на основе ключей, семь OAuth, три локальных и
+ пресет ChatGPT-форварда по умолчанию. Селектор **Add provider** в дашборде открывает страницу
+ выдачи ключей провайдера, проверяет ключ и сохраняет его. Наиболее заметные записи:
+ 
++**ClinePass** подключается с помощью Cline API key к [официальному каталогу подписки](https://docs.cline.bot/getting-started/clinepass)
++и [Chat Completions endpoint](https://docs.cline.bot/api/chat-completions). Оператор — Cline Bot Inc., указанный в
++[условиях Cline](https://cline.bot/tos). Маршрут вида `cline-pass/cline-pass/kimi-k3`
++намеренный: первая часть выбирает провайдера opencodex, а полный slug `cline-pass/kimi-k3`
++отправляется upstream. Использование учитывается в общих для аккаунта скользящем 5-часовом,
++недельном и месячном лимитах. Сейчас opencodex публикует только проверенный на живом API reasoning tier
++`low`; более высокие запросы ограничиваются до `low`, пока шлюз не опубликует или не подтвердит более широкий диапазон.
++
+ | Провайдер | Базовый URL |
+ | --- | --- |
+ | **OpenAI (API key)** | `https://api.openai.com/v1` |
+ | **Anthropic (API key)** | `https://api.anthropic.com` |
+ | **OpenRouter** | `https://openrouter.ai/api/v1` |
++| **ClinePass** | `https://api.cline.bot/api/v1` |
+ | **Ollama Cloud** | `https://ollama.com/v1` |
+ | Google Gemini · Google Vertex AI | `https://generativelanguage.googleapis.com` · `https://aiplatform.googleapis.com` |
+ | Azure OpenAI | `https://{resource}.openai.azure.com/openai` |
+diff --git a/docs-site/src/content/docs/ru/reference/configuration/providers.md b/docs-site/src/content/docs/ru/reference/configuration/providers.md
+index 6805a6e5524..5b27b83b108 100644
+--- a/docs-site/src/content/docs/ru/reference/configuration/providers.md
++++ b/docs-site/src/content/docs/ru/reference/configuration/providers.md
+@@ -84,6 +84,7 @@ cross-route credential fallback не существует. Строки API GPT-
+ | `modelAdapters?` | `Record<string, string>` | Wire-override по модели для `openai-chat` или `openai-responses` в gateway с несколькими wire-форматами. Явные записи имеют приоритет над default'ами registry; preset DeepSeek может выбирать native Responses для `deepseek-v4-flash`. Single-wire upstream pin'ы и canonical ChatGPT forward override не принимают. |
+ | `reasoningEffortMap?` | `Record<string, string>` | Provider-wide wire-alias'ы для reasoning-label'ов. |
+ | `modelReasoningEffortMap?` | `Record<string, Record<string, string>>` | Wire-alias'ы для reasoning-label'ов по отдельным моделям. |
++| `reasoningWireFormat?` | `"gateway-object"` | Для OpenAI-совместимых шлюзов, принимающих `reasoning: { enabled, effort }` вместо `reasoning_effort`. Пресет ClinePass задаёт это автоматически. |
+ | `noReasoningModels?` | `string[]` | Модели, отвергающие параметры reasoning/thinking. |
+ | `noTemperatureModels?` | `string[]` | Модели, отвергающие переданный вызывающей стороной `temperature`. |
+ | `noTopPModels?` | `string[]` | Модели, отвергающие переданный вызывающей стороной `top_p`. |
+diff --git a/docs-site/src/content/docs/zh-cn/getting-started/quickstart.md b/docs-site/src/content/docs/zh-cn/getting-started/quickstart.md
+index bcbfebbdfbf..a616fe44059 100644
+--- a/docs-site/src/content/docs/zh-cn/getting-started/quickstart.md
++++ b/docs-site/src/content/docs/zh-cn/getting-started/quickstart.md
+@@ -13,7 +13,7 @@ ocx init
+ 
+ `ocx init` 会引导你完成：
+ 
+-1. **选择 provider** — 从内置 registry 的 66 个预设中选择一个，或选择 `custom` 手动输入 base URL 和 adapter。
++1. **选择 provider** — 从内置 registry 的 67 个预设中选择一个，或选择 `custom` 手动输入 base URL 和 adapter。
+ 2. **API key** — 粘贴一个 key，或引用一个环境变量，例如 `${ANTHROPIC_API_KEY}`。
+ 3. **默认模型** — 对于 key、本地和 custom provider，接受预设值或输入模型 id。
+ 4. **代理端口** — 默认为 `10100`。
+diff --git a/docs-site/src/content/docs/zh-cn/guides/providers.md b/docs-site/src/content/docs/zh-cn/guides/providers.md
+index 6e6e4796f1f..c7c1aaf0649 100644
+--- a/docs-site/src/content/docs/zh-cn/guides/providers.md
++++ b/docs-site/src/content/docs/zh-cn/guides/providers.md
+@@ -111,15 +111,24 @@ Kiro 登录需要 Kiro CLI：Unix 使用 `curl -fsSL https://cli.kiro.dev/instal
+ 
+ ## 3. API 密钥目录
+ 
+-opencodex 内置 66 个预设：55 个密钥预设、7 个 OAuth 预设、3 个本地预设，以及默认的
++opencodex 内置 67 个预设：56 个密钥预设、7 个 OAuth 预设、3 个本地预设，以及默认的
+ ChatGPT 转发预设。仪表盘的 **Add provider** 选择器会打开密钥提供商的控制台，验证并保存密钥。
+ 主要条目包括：
+ 
++**ClinePass** 使用 Cline API 密钥连接[官方订阅目录](https://docs.cline.bot/getting-started/clinepass)和
++[Chat Completions 端点](https://docs.cline.bot/api/chat-completions)。运营主体是
++[Cline 条款](https://cline.bot/tos)所列的 Cline Bot Inc.。
++`cline-pass/cline-pass/kimi-k3` 这样的路由 ID 是预期格式：第一段选择 opencodex 提供商，
++其余的 `cline-pass/kimi-k3` 是发送到上游的完整模型 slug。用量由账户的滚动 5 小时、每周和
++每月限额共同管理。当前 opencodex 仅公开经过实测的 `low` reasoning 档位；在网关公布或验证更宽
++档位之前，更高请求会被限制为 `low`。
++
+ | 提供商 | 基础 URL |
+ | --- | --- |
+ | **OpenAI (API key)** | `https://api.openai.com/v1` |
+ | **Anthropic (API key)** | `https://api.anthropic.com` |
+ | **OpenRouter** | `https://openrouter.ai/api/v1` |
++| **ClinePass** | `https://api.cline.bot/api/v1` |
+ | **Ollama Cloud** | `https://ollama.com/v1` |
+ | Google Gemini · Google Vertex AI | `https://generativelanguage.googleapis.com` · `https://aiplatform.googleapis.com` |
+ | Azure OpenAI | `https://{resource}.openai.azure.com/openai` |
+diff --git a/docs-site/src/content/docs/zh-cn/reference/configuration/providers.md b/docs-site/src/content/docs/zh-cn/reference/configuration/providers.md
+index 71f5b9218c1..ce9b3ba4f86 100644
+--- a/docs-site/src/content/docs/zh-cn/reference/configuration/providers.md
++++ b/docs-site/src/content/docs/zh-cn/reference/configuration/providers.md
+@@ -68,6 +68,7 @@ description: 提供者条目、身份验证、端点、模型目录、配额、
+ | `modelAdapters?` | `Record<string, string>` | 按模型设置的 `openai-chat` 或 `openai-responses` 线协议覆盖项，用于混合线协议网关。显式条目优先于注册表默认值；DeepSeek 预设可以为 `deepseek-v4-flash` 选择原生 Responses。单一线协议上游固定项和规范 ChatGPT forward 会拒绝覆盖。 |
+ | `reasoningEffortMap?` | `Record<string, string>` | 提供者级、用于推理标签的线协议别名。 |
+ | `modelReasoningEffortMap?` | `Record<string, Record<string, string>>` | 按模型设置的推理标签线协议别名。 |
++| `reasoningWireFormat?` | `"gateway-object"` | 用于接受 `reasoning: { enabled, effort }` 而非 `reasoning_effort` 的 OpenAI 兼容 gateway。ClinePass preset 会自动设置。 |
+ | `noReasoningModels?` | `string[]` | 会拒绝推理/思考参数的模型。 |
+ | `noTemperatureModels?` | `string[]` | 会拒绝调用方指定 `temperature` 的模型。 |
+ | `noTopPModels?` | `string[]` | 会拒绝调用方指定 `top_p` 的模型。 |
+diff --git a/gui/src/hooks/useJsonConfigEditor.ts b/gui/src/hooks/useJsonConfigEditor.ts
+index 628913677cd..b2f53a3b4a8 100644
+--- a/gui/src/hooks/useJsonConfigEditor.ts
++++ b/gui/src/hooks/useJsonConfigEditor.ts
+@@ -3,7 +3,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
+ export interface Config {
+   port: number;
+   defaultProvider: string;
+-  providers: Record<string, { adapter: string; baseUrl: string; hasApiKey?: boolean; hasHeaders?: boolean; defaultModel?: string; models?: string[]; liveModels?: boolean; authMode?: string; keyOptional?: boolean; disabled?: boolean; note?: string; codexAccountMode?: "direct" | "pool" }>;
++  providers: Record<string, { adapter: string; baseUrl: string; hasApiKey?: boolean; hasHeaders?: boolean; defaultModel?: string; models?: string[]; liveModels?: boolean; reasoningWireFormat?: "gateway-object"; authMode?: string; keyOptional?: boolean; disabled?: boolean; note?: string; codexAccountMode?: "direct" | "pool" }>;
+ }
+ 
+ export function useJsonConfigEditor(deps: {
+diff --git a/gui/src/pages/Logs.tsx b/gui/src/pages/Logs.tsx
+index 21a402eb674..69b1316fd47 100644
+--- a/gui/src/pages/Logs.tsx
++++ b/gui/src/pages/Logs.tsx
+@@ -101,7 +101,7 @@ interface LogAttempt {
+   requestedEffort?: string;
+   effectiveEffort?: string;
+   reasoningWireField?: string;
+-  reasoningWireValue?: string | number;
++  reasoningWireValue?: string | number | boolean;
+   displayMetrics?: LogDisplayMetrics;
+ }
+ 
+@@ -115,7 +115,7 @@ export interface LogEntry {
+   requestedEffort?: string;
+   effectiveEffort?: string;
+   reasoningWireField?: string;
+-  reasoningWireValue?: string | number;
++  reasoningWireValue?: string | number | boolean;
+   requestedServiceTier?: string;
+   requestedSpeedLabel?: string;
+   configuredServiceTier?: string;
+@@ -221,7 +221,7 @@ interface ReasoningLogFields {
+   requestedEffort?: string;
+   effectiveEffort?: string;
+   reasoningWireField?: string;
+-  reasoningWireValue?: string | number;
++  reasoningWireValue?: string | number | boolean;
+ }
+ 
+ function effortLabel(log: ReasoningLogFields): string {
+diff --git a/gui/src/pages/providers-shared.ts b/gui/src/pages/providers-shared.ts
+index 34ebbc825fa..fb64a56a861 100644
+--- a/gui/src/pages/providers-shared.ts
++++ b/gui/src/pages/providers-shared.ts
+@@ -9,6 +9,7 @@ export interface ProvidersConfig {
+     defaultModel?: string;
+     models?: string[];
+     liveModels?: boolean;
++    reasoningWireFormat?: "gateway-object";
+     authMode?: string;
+     keyOptional?: boolean;
+     disabled?: boolean;
+diff --git a/src/adapters/base.ts b/src/adapters/base.ts
+index 58ab9b3d5c1..c71ff4b7449 100644
+--- a/src/adapters/base.ts
++++ b/src/adapters/base.ts
+@@ -51,8 +51,8 @@ export interface AdapterRequest {
+     /** Exact reasoning parameter emitted by the adapter, for request-log diagnostics only. */
+     reasoningLog?: {
+       effectiveEffort: string;
+-      wireField: "reasoning_effort" | "thinking_budget" | "thinking.type";
+-      wireValue: string | number;
++      wireField: "reasoning_effort" | "reasoning.enabled" | "reasoning.effort" | "thinking_budget" | "thinking.type";
++      wireValue: string | number | boolean;
+     };
+     usageLog?: {
+       inputTokens?: number;
+diff --git a/src/adapters/openai-chat.ts b/src/adapters/openai-chat.ts
+index 1abd9743a9e..ff06e4ec215 100644
+--- a/src/adapters/openai-chat.ts
++++ b/src/adapters/openai-chat.ts
+@@ -70,6 +70,73 @@ function extractErrorDetail(parsed: unknown): string | undefined {
+   return undefined;
+ }
+ 
++// ClinePass live responses observed 2026-08-02 wrap non-stream Chat Completions in
++// `{ success, error, data }`; its public Chat Completions docs do not currently describe that
++// envelope. Keep ordinary OpenAI-shaped responses on the direct path.
++function unwrapChatCompletionPayload(json: Record<string, unknown>): Record<string, unknown> {
++  if ((json.error !== undefined && json.error !== null) || Array.isArray(json.choices)) return json;
++  const data = json.data;
++  return data !== null && typeof data === "object" && !Array.isArray(data)
++    ? data as Record<string, unknown>
++    : json;
++}
++
++interface OpenAIChatError {
++  message?: unknown;
++  code?: unknown;
++  type?: unknown;
++  status?: unknown;
++  metadata?: unknown;
++}
++
++function safeUpstreamRequestId(metadata: unknown): string | undefined {
++  if (metadata === null || typeof metadata !== "object" || Array.isArray(metadata)) return undefined;
++  const record = metadata as Record<string, unknown>;
++  const value = record.request_id ?? record.requestId;
++  if (typeof value !== "string") return undefined;
++  const requestId = value.trim();
++  return /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(requestId)
++    && redactSecretString(requestId) === requestId
++    ? requestId
++    : undefined;
++}
++
++function upstreamErrorEvent(
++  error: OpenAIChatError | undefined,
++  usage?: OcxUsage,
++): Extract<AdapterEvent, { type: "error" }> {
++  const rawMessage = typeof error?.message === "string" ? error.message : "upstream error";
++  const requestId = safeUpstreamRequestId(error?.metadata);
++  const message = requestId !== undefined && !rawMessage.includes(requestId)
++    ? `${rawMessage} (request ID: ${requestId})`
++    : rawMessage;
++  const code = typeof error?.code === "string"
++    ? error.code
++    : typeof error?.code === "number" && Number.isFinite(error.code) && Number.isInteger(error.code)
++      ? String(error.code)
++      : undefined;
++  const errorType = typeof error?.type === "string" ? error.type : undefined;
++  const codeStatus = typeof error?.code === "number"
++    && Number.isInteger(error.code)
++    && error.code >= 100
++    && error.code <= 599
++    ? error.code
++    : undefined;
++  const status = isCyberPolicyCode(code)
++    ? 400
++    : typeof error?.status === "number" && Number.isInteger(error.status)
++      ? error.status
++      : codeStatus;
++  return {
++    type: "error",
++    message,
++    ...(usage !== undefined ? { usage } : {}),
++    ...(code !== undefined ? { code } : {}),
++    ...(errorType !== undefined ? { errorType } : {}),
++    ...(status !== undefined ? { status } : {}),
++  };
++}
++
+ function developerSystemText(message: OcxMessage): string | undefined {
+   if (message.role !== "developer") return undefined;
+   if (typeof message.content === "string") return message.content;
+@@ -588,10 +655,27 @@ export function createOpenAIChatAdapter(provider: OcxProviderConfig): ProviderAd
+         body.top_p = parsed.options.topP;
+       }
+       if (parsed.options.stopSequences !== undefined) body.stop = parsed.options.stopSequences;
++      const reasoningDisabled = modelInList(provider.noReasoningModels, parsed.modelId);
+       const reasoningEffort = mapReasoningEffort(provider, parsed.modelId, parsed.options.reasoning);
+       let reasoningLog: AdapterRequest["reasoningLog"];
+-      if (reasoningEffort !== undefined) {
+-        if (modelInList(provider.thinkingBudgetModels, parsed.modelId)) {
++      // ClinePass live requests observed 2026-08-02 require this gateway-specific object; the
++      // public API docs do not currently specify its request shape.
++      if (!reasoningDisabled && provider.reasoningWireFormat === "gateway-object" && parsed.options.reasoning === "none") {
++        body.reasoning = { enabled: false };
++        reasoningLog = {
++          effectiveEffort: "none",
++          wireField: "reasoning.enabled",
++          wireValue: false,
++        };
++      } else if (reasoningEffort !== undefined) {
++        if (provider.reasoningWireFormat === "gateway-object") {
++          body.reasoning = { enabled: true, effort: reasoningEffort };
++          reasoningLog = {
++            effectiveEffort: reasoningEffort,
++            wireField: "reasoning.effort",
++            wireValue: reasoningEffort,
++          };
++        } else if (modelInList(provider.thinkingBudgetModels, parsed.modelId)) {
+           const budget = thinkingBudgetForEffort(parsed, reasoningEffort, maxTokens);
+           if (budget !== undefined) {
+             body.thinking_budget = budget;
+@@ -716,6 +800,10 @@ export function createOpenAIChatAdapter(provider: OcxProviderConfig): ProviderAd
+         }
+         pendingToolCalls.length = 0;
+       };
++      const discardToolCalls = (): void => {
++        for (const call of pendingToolCalls) budget.closeCall(call.key);
++        pendingToolCalls.length = 0;
++      };
+       let pendingUsage: OcxUsage | undefined;
+       // Track terminal signals so a socket EOF without any terminator can fail closed instead of
+       // being reported as a clean completion (silent truncation). A graceful close is either an
+@@ -756,21 +844,10 @@ export function createOpenAIChatAdapter(provider: OcxProviderConfig): ProviderAd
+         // instead of a clean [DONE]. Surface it as a terminal error so the bridge emits a
+         // classified response.failed (bridge case "error") — never a truncated completion.
+         if (chunk.error) {
+-          const err = chunk.error as { message?: string; code?: string; type?: string; status?: number } | undefined;
+-          const message = err?.message ?? "upstream error";
+-          debugProviderDiagnostic("openai-chat", "stream-error", { message });
+-          yield* flushToolCalls();
+-          yield {
+-            type: "error",
+-            message,
+-            ...(typeof err?.code === "string" ? { code: err.code } : {}),
+-            ...(typeof err?.type === "string" ? { errorType: err.type } : {}),
+-            ...(isCyberPolicyCode(err?.code)
+-              ? { status: 400 }
+-              : typeof err?.status === "number" && Number.isInteger(err.status)
+-                ? { status: err.status }
+-                : {}),
+-          };
++          const event = upstreamErrorEvent(chunk.error as OpenAIChatError, pendingUsage);
++          debugProviderDiagnostic("openai-chat", "stream-error", { message: event.message });
++          discardToolCalls();
++          yield event;
+           return "terminate";
+         }
+ 
+@@ -781,8 +858,19 @@ export function createOpenAIChatAdapter(provider: OcxProviderConfig): ProviderAd
+           pendingUsage = usageFromOpenAIChat(chunk.usage as Record<string, unknown>);
+         }
+ 
+-        const choices = chunk.choices as { delta?: Record<string, unknown>; finish_reason?: string }[] | undefined;
++        const choices = chunk.choices as {
++          delta?: Record<string, unknown>;
++          finish_reason?: string;
++          error?: OpenAIChatError;
++        }[] | undefined;
+         if (!choices || choices.length === 0) return "continue";
++        if (choices[0].finish_reason === "error") {
++          const event = upstreamErrorEvent(choices[0].error, pendingUsage);
++          debugProviderDiagnostic("openai-chat", "stream-error", { message: event.message });
++          discardToolCalls();
++          yield event;
++          return "terminate";
++        }
+         // Observe the terminator BEFORE the delta guard: a finish-only chunk (finish_reason set,
+         // no delta) is a graceful close and must record finishReason even though we skip it below.
+         if (typeof choices[0].finish_reason === "string" && choices[0].finish_reason) {
+@@ -790,8 +878,13 @@ export function createOpenAIChatAdapter(provider: OcxProviderConfig): ProviderAd
+         }
+         const delta = choices[0].delta;
+         if (delta) {
+-          if (typeof delta.reasoning_content === "string" && delta.reasoning_content.length > 0) {
+-            yield { type: "reasoning_raw_delta", text: delta.reasoning_content };
++          const reasoningText = typeof delta.reasoning_content === "string" && delta.reasoning_content.length > 0
++            ? delta.reasoning_content
++            : typeof delta.reasoning === "string" && delta.reasoning.length > 0
++              ? delta.reasoning
++              : undefined;
++          if (reasoningText !== undefined) {
++            yield { type: "reasoning_raw_delta", text: reasoningText };
+           }
+           if (typeof delta.content === "string" && delta.content.length > 0) {
+             sawUserFacingOutput = true;
+@@ -950,34 +1043,36 @@ export function createOpenAIChatAdapter(provider: OcxProviderConfig): ProviderAd
+       const responseBytes = new TextEncoder().encode(JSON.stringify(json)).byteLength;
+       budget.chargeRetained(responseBytes, { kind: "retained_collectors" });
+       try {
+-      if (json.error) {
+-        const upstreamError = json.error as { message?: unknown; code?: unknown; type?: unknown; status?: unknown };
+-        const message = typeof upstreamError.message === "string" ? upstreamError.message : "upstream error";
+-        const code = typeof upstreamError.code === "string" ? upstreamError.code : undefined;
+-        const errorType = typeof upstreamError.type === "string" ? upstreamError.type : undefined;
+-        const status = isCyberPolicyCode(code)
+-          ? 400
+-          : typeof upstreamError.status === "number" && Number.isInteger(upstreamError.status)
+-            ? upstreamError.status
+-            : undefined;
+-        return [{
+-          type: "error",
+-          message,
+-          ...(code !== undefined ? { code } : {}),
+-          ...(errorType !== undefined ? { errorType } : {}),
+-          ...(status !== undefined ? { status } : {}),
+-        }];
++      const payload = unwrapChatCompletionPayload(json);
++      if (json.success === false && payload.error === undefined) {
++        return [{ type: "error", message: "upstream reported failure without an error payload" }];
++      }
++      const usage = usageFromOpenAIChat(payload.usage as Record<string, unknown> | undefined);
++      if (payload.error) {
++        return [upstreamErrorEvent(payload.error as OpenAIChatError, usage)];
+       }
+ 
+       const events: AdapterEvent[] = [];
+-      const choices = json.choices as { message?: Record<string, unknown> }[] | undefined;
+-      if (!Array.isArray(choices) || choices.length === 0 || !choices[0].message) {
+-        return [{ type: "error", message: "upstream response contained no choices" }];
++      const choices = payload.choices as {
++        message?: Record<string, unknown>;
++        finish_reason?: unknown;
++        error?: OpenAIChatError;
++      }[] | undefined;
++      if (!Array.isArray(choices) || choices.length === 0) {
++        return [{ type: "error", message: "upstream response contained no choices", ...(usage ? { usage } : {}) }];
+       }
++      const choice = choices[0];
++      if (choice.finish_reason === "error") return [upstreamErrorEvent(choice.error, usage)];
++      if (!choice.message) return [{ type: "error", message: "upstream response contained no choices", ...(usage ? { usage } : {}) }];
+ 
+-      const msg = choices[0].message;
+-      if (typeof msg.reasoning_content === "string" && msg.reasoning_content.length > 0) {
+-        events.push({ type: "reasoning_raw_delta", text: msg.reasoning_content });
++      const msg = choice.message;
++      const reasoningText = typeof msg.reasoning_content === "string" && msg.reasoning_content.length > 0
++        ? msg.reasoning_content
++        : typeof msg.reasoning === "string" && msg.reasoning.length > 0
++          ? msg.reasoning
++          : undefined;
++      if (reasoningText !== undefined) {
++        events.push({ type: "reasoning_raw_delta", text: reasoningText });
+       }
+       if (typeof msg.content === "string") {
+         events.push({ type: "text_delta", text: msg.content });
+@@ -990,10 +1085,15 @@ export function createOpenAIChatAdapter(provider: OcxProviderConfig): ProviderAd
+           events.push({ type: "tool_call_end" });
+         }
+       }
+-      const usage = json.usage as Record<string, unknown> | undefined;
++      const stopReason = choice.finish_reason === "length"
++        ? "max_tokens"
++        : choice.finish_reason === "content_filter"
++          ? "content_filter"
++          : undefined;
+       events.push({
+         type: "done",
+-        usage: usageFromOpenAIChat(usage),
++        usage,
++        ...(stopReason ? { stopReason } : {}),
+       });
+       retainTranslatedEventBatch(events, budget);
+       return events;
+diff --git a/src/providers/derive.ts b/src/providers/derive.ts
+index 03e66f5cada..b403a7cc4cd 100644
+--- a/src/providers/derive.ts
++++ b/src/providers/derive.ts
+@@ -22,6 +22,7 @@ export interface DerivedKeyLoginProvider {
+   modelDefaultReasoningEfforts?: Record<string, string>;
+   reasoningEffortMap?: Record<string, string>;
+   modelReasoningEffortMap?: Record<string, Record<string, string>>;
++  reasoningWireFormat?: OcxProviderConfig["reasoningWireFormat"];
+   noVisionModels?: string[];
+   noReasoningModels?: string[];
+   noTemperatureModels?: string[];
+@@ -128,6 +129,7 @@ export function providerConfigSeed(entry: ProviderRegistryEntry): OcxProviderCon
+     ...(entry.modelDefaultReasoningEfforts ? { modelDefaultReasoningEfforts: { ...entry.modelDefaultReasoningEfforts } } : {}),
+     ...(entry.reasoningEffortMap ? { reasoningEffortMap: { ...entry.reasoningEffortMap } } : {}),
+     ...(entry.modelReasoningEffortMap ? { modelReasoningEffortMap: cloneNestedRecord(entry.modelReasoningEffortMap) } : {}),
++    ...(entry.reasoningWireFormat ? { reasoningWireFormat: entry.reasoningWireFormat } : {}),
+     ...(entry.noVisionModels ? { noVisionModels: [...entry.noVisionModels] } : {}),
+     ...(entry.noReasoningModels ? { noReasoningModels: [...entry.noReasoningModels] } : {}),
+     ...(entry.noTemperatureModels ? { noTemperatureModels: [...entry.noTemperatureModels] } : {}),
+@@ -175,6 +177,7 @@ export function deriveKeyLoginMap(): Record<string, DerivedKeyLoginProvider> {
+       ...(entry.modelDefaultReasoningEfforts ? { modelDefaultReasoningEfforts: { ...entry.modelDefaultReasoningEfforts } } : {}),
+       ...(entry.reasoningEffortMap ? { reasoningEffortMap: { ...entry.reasoningEffortMap } } : {}),
+       ...(entry.modelReasoningEffortMap ? { modelReasoningEffortMap: cloneNestedRecord(entry.modelReasoningEffortMap) } : {}),
++      ...(entry.reasoningWireFormat ? { reasoningWireFormat: entry.reasoningWireFormat } : {}),
+       ...(entry.noVisionModels ? { noVisionModels: [...entry.noVisionModels] } : {}),
+       ...(entry.noReasoningModels ? { noReasoningModels: [...entry.noReasoningModels] } : {}),
+       ...(entry.noTemperatureModels ? { noTemperatureModels: [...entry.noTemperatureModels] } : {}),
+@@ -248,6 +251,7 @@ export function enrichProviderFromRegistry(name: string, prov: OcxProviderConfig
+   if (!prov.modelDefaultReasoningEfforts && seed.modelDefaultReasoningEfforts) prov.modelDefaultReasoningEfforts = { ...seed.modelDefaultReasoningEfforts };
+   if (!prov.reasoningEffortMap && seed.reasoningEffortMap) prov.reasoningEffortMap = { ...seed.reasoningEffortMap };
+   if (!prov.modelReasoningEffortMap && seed.modelReasoningEffortMap) prov.modelReasoningEffortMap = cloneNestedRecord(seed.modelReasoningEffortMap);
++  if (prov.reasoningWireFormat === undefined && seed.reasoningWireFormat !== undefined) prov.reasoningWireFormat = seed.reasoningWireFormat;
+   if (!prov.noVisionModels && seed.noVisionModels) prov.noVisionModels = [...seed.noVisionModels];
+   if (!prov.noReasoningModels && seed.noReasoningModels) prov.noReasoningModels = [...seed.noReasoningModels];
+   if (!prov.noTemperatureModels && seed.noTemperatureModels) prov.noTemperatureModels = [...seed.noTemperatureModels];
+diff --git a/src/providers/registry.ts b/src/providers/registry.ts
+index e336c2f3946..0ee7be40ca7 100644
+--- a/src/providers/registry.ts
++++ b/src/providers/registry.ts
+@@ -172,6 +172,7 @@ export interface ProviderRegistryEntry {
+   modelDefaultReasoningEfforts?: Record<string, string>;
+   reasoningEffortMap?: Record<string, string>;
+   modelReasoningEffortMap?: Record<string, Record<string, string>>;
++  reasoningWireFormat?: OcxProviderConfig["reasoningWireFormat"];
+   noVisionModels?: string[];
+   noReasoningModels?: string[];
+   noTemperatureModels?: string[];
+@@ -203,7 +204,7 @@ export type ProviderConfigSeed = Pick<
+   "adapter" | "baseUrl" | "apiKeyTransport" | "responsesPath" | "authMode" | "keyOptional" | "freeTier" | "modelSuffixBracketStrip" | "defaultModel" | "models"
+   | "liveModels" | "contextWindow" | "modelContextWindows" | "modelInputModalities"
+   | "modelMaxInputTokens" | "defaultMaxOutputTokens" | "modelMaxOutputTokens"
+-  | "reasoningEfforts" | "modelReasoningEfforts" | "modelDefaultReasoningEfforts" | "reasoningEffortMap" | "modelReasoningEffortMap"
++  | "reasoningEfforts" | "modelReasoningEfforts" | "modelDefaultReasoningEfforts" | "reasoningEffortMap" | "modelReasoningEffortMap" | "reasoningWireFormat"
+   | "noVisionModels" | "noReasoningModels" | "noTemperatureModels" | "noTopPModels" | "noPenaltyModels"
+   | "autoToolChoiceOnlyModels" | "preserveReasoningContentModels" | "reasoningSplitModels" | "thinkingToggleModels" | "thinkingBudgetModels" | "escapeBuiltinToolNames"
+   | "googleMode" | "project" | "location" | "headers"
+@@ -566,6 +567,44 @@ const UMANS_MODEL_CONTEXT_WINDOWS: Record<string, number> = {
+ const UMANS_MODEL_INPUT_MODALITIES: Record<string, string[]> = Object.fromEntries(
+   UMANS_MODELS.map(id => [id, UMANS_TEXT_ONLY_MODELS.includes(id) ? ["text"] : ["text", "image"]]),
+ );
++const CLINE_PASS_MODELS = [
++  "cline-pass/glm-5.2",
++  "cline-pass/kimi-k3",
++  "cline-pass/kimi-k2.7-code",
++  "cline-pass/kimi-k2.6",
++  "cline-pass/deepseek-v4-pro",
++  "cline-pass/deepseek-v4-flash",
++  "cline-pass/mimo-v2.5",
++  "cline-pass/mimo-v2.5-pro",
++  "cline-pass/minimax-m3",
++  "cline-pass/qwen3.7-max",
++  "cline-pass/qwen3.7-plus",
++];
++const CLINE_PASS_MODEL_CONTEXT_WINDOWS: Record<string, number> = {
++  "cline-pass/glm-5.2": 1_048_576,
++  "cline-pass/kimi-k3": 1_048_576,
++  "cline-pass/kimi-k2.7-code": 262_144,
++  "cline-pass/kimi-k2.6": 262_144,
++  "cline-pass/deepseek-v4-pro": 1_048_576,
++  "cline-pass/deepseek-v4-flash": 1_048_576,
++  "cline-pass/mimo-v2.5": 1_050_000,
++  "cline-pass/mimo-v2.5-pro": 1_050_000,
++  "cline-pass/minimax-m3": 1_048_576,
++  "cline-pass/qwen3.7-max": 1_000_000,
++  "cline-pass/qwen3.7-plus": 1_000_000,
++};
++const CLINE_PASS_IMAGE_MODELS = new Set([
++  "cline-pass/kimi-k3",
++  "cline-pass/kimi-k2.7-code",
++  "cline-pass/kimi-k2.6",
++  "cline-pass/mimo-v2.5",
++  "cline-pass/minimax-m3",
++  "cline-pass/qwen3.7-plus",
++]);
++const CLINE_PASS_TEXT_ONLY_MODELS = CLINE_PASS_MODELS.filter(id => !CLINE_PASS_IMAGE_MODELS.has(id));
++const CLINE_PASS_MODEL_INPUT_MODALITIES: Record<string, string[]> = Object.fromEntries(
++  CLINE_PASS_MODELS.map(id => [id, CLINE_PASS_IMAGE_MODELS.has(id) ? ["text", "image"] : ["text"]]),
++);
+ 
+ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
+   {
+@@ -869,6 +908,34 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
+     preserveReasoningContentModels: NEURALWATT_REASONING_HISTORY_MODELS,
+   },
+   { id: "openrouter", label: "OpenRouter", adapter: "openai-chat", baseUrl: "https://openrouter.ai/api/v1", authKind: "key", featured: true, dashboardUrl: "https://openrouter.ai/keys", jawcodeBundle: "openrouter", models: ["anthropic/claude-sonnet-5", ...OPENROUTER_GPT56_MODELS], modelContextWindows: { "anthropic/claude-sonnet-5": 1_000_000, ...OPENROUTER_GPT56_CONTEXT_WINDOWS } },
++  {
++    // Primary sources checked 2026-08-02:
++    // - docs.cline.bot/getting-started/clinepass publishes this exact catalog and explicitly
++    //   authorizes using the full slugs through Cline's external API.
++    // - docs.cline.bot/api/chat-completions and /api/errors define the endpoint, reasoning delta,
++    //   and choice-scoped mid-stream error contract.
++    // - Cline's official catalog source resolves per-model capabilities through OpenRouter data;
++    //   the static context/modality snapshot below was cross-checked against that catalog.
++    // - cline.bot/tos identifies Cline Bot Inc. as the operator. Maintenance owner: @lidge-jun.
++    id: "cline-pass",
++    label: "ClinePass",
++    adapter: "openai-chat",
++    baseUrl: "https://api.cline.bot/api/v1",
++    authKind: "key",
++    dashboardUrl: "https://app.cline.bot",
++    defaultModel: "cline-pass/kimi-k3",
++    models: CLINE_PASS_MODELS,
++    modelContextWindows: CLINE_PASS_MODEL_CONTEXT_WINDOWS,
++    modelInputModalities: CLINE_PASS_MODEL_INPUT_MODALITIES,
++    noVisionModels: CLINE_PASS_TEXT_ONLY_MODELS,
++    // Only low and the `reasoning: { enabled, effort }` request shape have been accepted by a live
++    // ClinePass request. Neither wire detail is currently documented, so clamp higher Codex
++    // requests to the verified tier until the gateway documents or is live-probed more broadly.
++    reasoningEfforts: ["low"],
++    reasoningWireFormat: "gateway-object",
++    preserveCustomDestination: true,
++    note: "ClinePass subscription API. Uses a Cline API key and the full cline-pass/<model> upstream slug; quota is shared across the account's rolling 5-hour, weekly, and monthly limits.",
++  },
+   {
+     // OrcaRouter: OpenAI-compatible adaptive router (api.orcarouter.ai). Model ids are
+     // vendor-namespaced (`<vendor>/<model>`) and pass through to the upstream as-is.
+diff --git a/src/router.ts b/src/router.ts
+index 0c562240c47..617c6e59a6b 100644
+--- a/src/router.ts
++++ b/src/router.ts
+@@ -276,6 +276,9 @@ function routedProviderConfig(providerName: string, provider: OcxProviderConfig)
+     // opt-in, while an explicit user `false` keeps overriding registry `true`.
+     ...(provider.parallelToolCalls === undefined && registryEntry.parallelToolCalls !== undefined ? { parallelToolCalls: registryEntry.parallelToolCalls } : {}),
+     ...(provider.promptCacheKey === undefined && registryEntry.promptCacheKey !== undefined ? { promptCacheKey: registryEntry.promptCacheKey } : {}),
++    ...(provider.reasoningWireFormat === undefined && registryEntry.reasoningWireFormat !== undefined
++      ? { reasoningWireFormat: registryEntry.reasoningWireFormat }
++      : {}),
+     ...(provider.defaultMaxOutputTokens === undefined && registryEntry.defaultMaxOutputTokens !== undefined
+       ? { defaultMaxOutputTokens: registryEntry.defaultMaxOutputTokens }
+       : {}),
+diff --git a/src/server/auth-cors.ts b/src/server/auth-cors.ts
+index 4505510425a..76b21588988 100644
+--- a/src/server/auth-cors.ts
++++ b/src/server/auth-cors.ts
+@@ -496,6 +496,7 @@ export function safeConfigDTO(config: OcxConfig): unknown {
+       "modelOpenRouterRouting",
+       "reasoningEfforts",
+       "modelReasoningEfforts",
++      "reasoningWireFormat",
+       "noVisionModels",
+       "noReasoningModels",
+       "noTemperatureModels",
+diff --git a/src/server/request-log.ts b/src/server/request-log.ts
+index 845e3c4d555..2650983121a 100644
+--- a/src/server/request-log.ts
++++ b/src/server/request-log.ts
+@@ -58,7 +58,7 @@ export interface RequestLogContext {
+   requestedEffort?: string;
+   effectiveEffort?: string;
+   reasoningWireField?: string;
+-  reasoningWireValue?: string | number;
++  reasoningWireValue?: string | number | boolean;
+   requestedServiceTier?: string;
+   requestedSpeedLabel?: string;
+   configuredServiceTier?: string;
+@@ -121,7 +121,7 @@ export interface RequestLogEntry {
+   requestedEffort?: string;
+   effectiveEffort?: string;
+   reasoningWireField?: string;
+-  reasoningWireValue?: string | number;
++  reasoningWireValue?: string | number | boolean;
+   requestedServiceTier?: string;
+   requestedSpeedLabel?: string;
+   configuredServiceTier?: string;
+@@ -399,12 +399,16 @@ export function recordAdapterReasoning(
+     const reasoning = raw as Record<string, unknown>;
+     if (typeof reasoning.effectiveEffort !== "string" || !reasoning.effectiveEffort
+       || (reasoning.wireField !== "reasoning_effort"
++        && reasoning.wireField !== "reasoning.enabled"
++        && reasoning.wireField !== "reasoning.effort"
+         && reasoning.wireField !== "thinking_budget"
+         && reasoning.wireField !== "thinking.type")
+       || (!(typeof reasoning.wireValue === "string" && reasoning.wireValue)
+         && !(typeof reasoning.wireValue === "number"
+           && Number.isFinite(reasoning.wireValue)
+-          && reasoning.wireValue >= 0))) {
++          && reasoning.wireValue >= 0)
++        && !(reasoning.wireField === "reasoning.enabled"
++          && typeof reasoning.wireValue === "boolean"))) {
+       return;
+     }
+ 
+diff --git a/src/types.ts b/src/types.ts
+index c4827a8fa67..5460a573f81 100644
+--- a/src/types.ts
++++ b/src/types.ts
+@@ -1050,6 +1050,8 @@ export interface OcxProviderConfig {
+   reasoningEffortMap?: Record<string, string>;
+   /** Model-specific mapping from Codex effort labels to upstream `reasoning_effort` values. */
+   modelReasoningEffortMap?: Record<string, Record<string, string>>;
++  /** OpenAI-compatible gateway reasoning wire shape. Default sends `reasoning_effort`. */
++  reasoningWireFormat?: "gateway-object";
+   /**
+    * Model ids that do NOT support a reasoning/thinking parameter. The openai-chat adapter drops
+    * reasoning_effort for these even when Codex selects a reasoning level (e.g. xAI grok-build-0.1).
+diff --git a/src/usage/log.ts b/src/usage/log.ts
+index 3c588c758dd..5142e5d7afe 100644
+--- a/src/usage/log.ts
++++ b/src/usage/log.ts
+@@ -35,7 +35,7 @@ export interface PersistedUsageAttempt {
+   requestedEffort?: string;
+   effectiveEffort?: string;
+   reasoningWireField?: string;
+-  reasoningWireValue?: string | number;
++  reasoningWireValue?: string | number | boolean;
+ }
+ 
+ export interface PersistedUsageEntry {
+@@ -59,7 +59,7 @@ export interface PersistedUsageEntry {
+   /** Adapter-normalized tier and exact upstream parameter emitted for this request. */
+   effectiveEffort?: string;
+   reasoningWireField?: string;
+-  reasoningWireValue?: string | number;
++  reasoningWireValue?: string | number | boolean;
+   requestedServiceTier?: string;
+   requestedSpeedLabel?: string;
+   configuredServiceTier?: string;
+@@ -270,7 +270,9 @@ function normalizeUsageAttempt(raw: unknown): PersistedUsageAttempt | null {
+       : {}),
+     ...(typeof attempt.reasoningWireValue === "string" && attempt.reasoningWireValue
+       ? { reasoningWireValue: capMetadataString(attempt.reasoningWireValue) }
+-      : isNonNegativeFiniteNumber(attempt.reasoningWireValue)
++      : typeof attempt.reasoningWireValue === "boolean"
++        ? { reasoningWireValue: attempt.reasoningWireValue }
++        : isNonNegativeFiniteNumber(attempt.reasoningWireValue)
+         ? { reasoningWireValue: attempt.reasoningWireValue }
+         : {}),
+   };
+@@ -325,7 +327,9 @@ function normalizeUsageEntry(entry: PersistedUsageEntry): PersistedUsageEntry {
+       : {}),
+     ...(typeof entry.reasoningWireValue === "string" && entry.reasoningWireValue
+       ? { reasoningWireValue: capMetadataString(entry.reasoningWireValue) }
+-      : isNonNegativeFiniteNumber(entry.reasoningWireValue)
++      : typeof entry.reasoningWireValue === "boolean"
++        ? { reasoningWireValue: entry.reasoningWireValue }
++        : isNonNegativeFiniteNumber(entry.reasoningWireValue)
+         ? { reasoningWireValue: entry.reasoningWireValue }
+         : {}),
+     ...(typeof entry.requestedServiceTier === "string" && entry.requestedServiceTier
+diff --git a/tests/cline-pass-provider.test.ts b/tests/cline-pass-provider.test.ts
+new file mode 100644
+index 00000000000..e3d19fdcd9e
+--- /dev/null
++++ b/tests/cline-pass-provider.test.ts
+@@ -0,0 +1,270 @@
++import { describe, expect, test } from "bun:test";
++import { createOpenAIChatAdapter } from "../src/adapters/openai-chat";
++import { createTranslatorBudget } from "../src/lib/translator-budget";
++import { KEY_LOGIN_PROVIDERS } from "../src/oauth/key-providers";
++import { providerConfigSeed } from "../src/providers/derive";
++import { PROVIDER_REGISTRY } from "../src/providers/registry";
++import { routeModel } from "../src/router";
++import type { OcxConfig, OcxParsedRequest } from "../src/types";
++
++const OFFICIAL_CLINE_PASS_MODELS = [
++  "cline-pass/glm-5.2",
++  "cline-pass/kimi-k3",
++  "cline-pass/kimi-k2.7-code",
++  "cline-pass/kimi-k2.6",
++  "cline-pass/deepseek-v4-pro",
++  "cline-pass/deepseek-v4-flash",
++  "cline-pass/mimo-v2.5",
++  "cline-pass/mimo-v2.5-pro",
++  "cline-pass/minimax-m3",
++  "cline-pass/qwen3.7-max",
++  "cline-pass/qwen3.7-plus",
++];
++
++function parsed(modelId: string, reasoning: string): OcxParsedRequest {
++  return {
++    modelId,
++    context: { messages: [{ role: "user", content: "hello", timestamp: 0 }] },
++    stream: false,
++    options: { reasoning },
++  };
++}
++
++function registryEntry() {
++  const entry = PROVIDER_REGISTRY.find(provider => provider.id === "cline-pass");
++  if (!entry) throw new Error("missing ClinePass registry entry");
++  return entry;
++}
++
++async function parseNonStream(body: Record<string, unknown>) {
++  const provider = providerConfigSeed(registryEntry());
++  const adapter = createOpenAIChatAdapter({ ...provider, apiKey: "cline-test-key" });
++  const budget = createTranslatorBudget();
++  try {
++    return await adapter.parseResponse!(new Response(JSON.stringify(body)), budget);
++  } finally {
++    budget.dispose();
++  }
++}
++
++describe("ClinePass provider", () => {
++  test("registry exposes the official API-key transport and static subscription catalog", () => {
++    const entry = registryEntry();
++
++    expect(entry).toMatchObject({
++      label: "ClinePass",
++      adapter: "openai-chat",
++      baseUrl: "https://api.cline.bot/api/v1",
++      authKind: "key",
++      dashboardUrl: "https://app.cline.bot",
++      defaultModel: "cline-pass/kimi-k3",
++      preserveCustomDestination: true,
++      reasoningWireFormat: "gateway-object",
++    });
++    expect(entry?.models).toEqual(OFFICIAL_CLINE_PASS_MODELS);
++    expect(entry?.models).toContain(entry?.defaultModel);
++    expect(entry?.liveModels).toBeUndefined();
++    expect(entry?.reasoningEfforts).toEqual(["low"]);
++    expect(entry?.modelMaxInputTokens).toBeUndefined();
++    expect(entry?.noVisionModels).toEqual([
++      "cline-pass/glm-5.2",
++      "cline-pass/deepseek-v4-pro",
++      "cline-pass/deepseek-v4-flash",
++      "cline-pass/mimo-v2.5-pro",
++      "cline-pass/qwen3.7-max",
++    ]);
++    expect(entry?.modelInputModalities?.["cline-pass/kimi-k3"]).toEqual(["text", "image"]);
++    expect(entry?.modelInputModalities?.["cline-pass/glm-5.2"]).toEqual(["text"]);
++    expect(KEY_LOGIN_PROVIDERS["cline-pass"]?.models).toEqual(OFFICIAL_CLINE_PASS_MODELS);
++    expect(KEY_LOGIN_PROVIDERS["cline-pass"]?.noVisionModels).toEqual(entry.noVisionModels);
++    const seed = providerConfigSeed(entry);
++    expect(seed).toMatchObject({ reasoningWireFormat: "gateway-object" });
++    expect(seed).not.toHaveProperty("preserveCustomDestination");
++  });
++
++  test("routing keeps the full upstream model slug and emits the Cline gateway reasoning object", () => {
++    const config: OcxConfig = {
++      port: 10100,
++      defaultProvider: "cline-pass",
++      providers: {
++        "cline-pass": {
++          adapter: "openai-chat",
++          baseUrl: "https://api.cline.bot/api/v1",
++          apiKey: "cline-test-key",
++          authMode: "key",
++        },
++      },
++    };
++    const route = routeModel(config, "cline-pass/cline-pass/kimi-k3");
++    const request = createOpenAIChatAdapter(route.provider).buildRequest(parsed(route.modelId, "high"));
++    const body = JSON.parse(request.body) as Record<string, unknown>;
++
++    expect(route.modelId).toBe("cline-pass/kimi-k3");
++    expect(route.provider).toMatchObject({ reasoningWireFormat: "gateway-object" });
++    expect(body.model).toBe("cline-pass/kimi-k3");
++    expect(body.reasoning).toEqual({ enabled: true, effort: "low" });
++    expect(body).not.toHaveProperty("reasoning_effort");
++    expect(request.reasoningLog).toEqual({
++      effectiveEffort: "low",
++      wireField: "reasoning.effort",
++      wireValue: "low",
++    });
++  });
++
++  test("explicit reasoning disable uses the gateway object instead of leaking reasoning_effort", () => {
++    const provider = providerConfigSeed(PROVIDER_REGISTRY.find(entry => entry.id === "cline-pass")!);
++    const request = createOpenAIChatAdapter({ ...provider, apiKey: "cline-test-key" })
++      .buildRequest(parsed("cline-pass/glm-5.2", "none"));
++    const body = JSON.parse(request.body) as Record<string, unknown>;
++
++    expect(body.reasoning).toEqual({ enabled: false });
++    expect(body).not.toHaveProperty("reasoning_effort");
++    expect(request.reasoningLog).toEqual({
++      effectiveEffort: "none",
++      wireField: "reasoning.enabled",
++      wireValue: false,
++    });
++  });
++
++  test("noReasoningModels suppresses the gateway object for explicit disable", () => {
++    const provider = providerConfigSeed(registryEntry());
++    const request = createOpenAIChatAdapter({
++      ...provider,
++      apiKey: "cline-test-key",
++      noReasoningModels: ["cline-pass/glm-5.2"],
++    }).buildRequest(parsed("cline-pass/glm-5.2", "none"));
++    const body = JSON.parse(request.body) as Record<string, unknown>;
++
++    expect(body).not.toHaveProperty("reasoning");
++    expect(body).not.toHaveProperty("reasoning_effort");
++    expect(request.reasoningLog).toBeUndefined();
++  });
++
++  test("same-named custom provider keeps its own destination and credential boundary", () => {
++    const config: OcxConfig = {
++      port: 10100,
++      defaultProvider: "cline-pass",
++      providers: {
++        "cline-pass": {
++          adapter: "openai-chat",
++          baseUrl: "https://custom.example/v1",
++          apiKey: "custom-key",
++          authMode: "key",
++        },
++      },
++    };
++    const route = routeModel(config, "cline-pass/custom-model");
++    const request = createOpenAIChatAdapter(route.provider).buildRequest(parsed(route.modelId, "none"));
++
++    expect(route.provider.baseUrl).toBe("https://custom.example/v1");
++    expect(route.provider.apiKey).toBe("custom-key");
++    expect(route.provider.reasoningWireFormat).toBeUndefined();
++    expect(request.url).toBe("https://custom.example/v1/chat/completions");
++    expect(request.headers.Authorization).toBe("Bearer custom-key");
++  });
++
++  test("unwraps the Cline API non-stream response envelope", async () => {
++    const events = await parseNonStream({
++      success: true,
++      error: null,
++      data: {
++        choices: [{
++          finish_reason: "stop",
++          index: 0,
++          message: { content: "OK", reasoning: "thinking", role: "assistant" },
++        }],
++        usage: {
++          completion_tokens: 3,
++          completion_tokens_details: { reasoning_tokens: 2 },
++          prompt_tokens: 4,
++          total_tokens: 7,
++        },
++      },
++    });
++
++    expect(events).toContainEqual({ type: "reasoning_raw_delta", text: "thinking" });
++    expect(events).toContainEqual({ type: "text_delta", text: "OK" });
++    expect(events.at(-1)).toMatchObject({
++      type: "done",
++      usage: { inputTokens: 4, outputTokens: 3, reasoningOutputTokens: 2 },
++    });
++  });
++
++  test("non-stream finish reasons preserve truncation, filtering, and choice-scoped errors", async () => {
++    const length = await parseNonStream({
++      choices: [{ finish_reason: "length", message: { content: "partial" } }],
++    });
++    expect(length.at(-1)).toEqual({
++      type: "done",
++      usage: undefined,
++      stopReason: "max_tokens",
++    });
++
++    const filtered = await parseNonStream({
++      success: true,
++      data: { choices: [{ finish_reason: "content_filter", message: { content: "partial" } }] },
++    });
++    expect(filtered.at(-1)).toEqual({
++      type: "done",
++      usage: undefined,
++      stopReason: "content_filter",
++    });
++
++    const failed = await parseNonStream({
++      choices: [{
++        finish_reason: "error",
++        error: { code: "rate_limit", message: "ClinePass limit reached" },
++      }],
++    });
++    expect(failed).toEqual([{ type: "error", code: "rate_limit", message: "ClinePass limit reached" }]);
++
++    const numericCode = await parseNonStream({
++      error: {
++        code: 429,
++        message: "ClinePass limit reached",
++        metadata: { request_id: "req_cline_429" },
++      },
++    });
++    expect(numericCode).toEqual([{
++      type: "error",
++      code: "429",
++      status: 429,
++      message: "ClinePass limit reached (request ID: req_cline_429)",
++    }]);
++
++    const secretShapedMetadata = await parseNonStream({
++      error: {
++        code: 429,
++        message: "ClinePass limit reached",
++        metadata: { request_id: "sk-test-secret-shaped-request-id" },
++      },
++    });
++    expect(secretShapedMetadata).toEqual([{
++      type: "error",
++      code: "429",
++      status: 429,
++      message: "ClinePass limit reached",
++    }]);
++  });
++
++  test("rejects contradictory or malformed failure envelopes", async () => {
++    const contradictory = await parseNonStream({
++      success: false,
++      data: { choices: [{ finish_reason: "stop", message: { content: "must not pass" } }] },
++    });
++    expect(contradictory).toEqual([{
++      type: "error",
++      message: "upstream reported failure without an error payload",
++    }]);
++
++    const nestedError = await parseNonStream({
++      success: false,
++      data: { error: { code: "server_error", message: "nested failure" } },
++    });
++    expect(nestedError).toEqual([{
++      type: "error",
++      code: "server_error",
++      message: "nested failure",
++    }]);
++  });
++});
+diff --git a/tests/openai-chat-eof.test.ts b/tests/openai-chat-eof.test.ts
+index 06fdba53a26..4031b1e0a77 100644
+--- a/tests/openai-chat-eof.test.ts
++++ b/tests/openai-chat-eof.test.ts
+@@ -86,6 +86,56 @@ describe("openai-chat stream EOF fail-closed", () => {
+     expect(events.find(e => e.type === "error")).toMatchObject({ message: "Rate limit reached for model" });
+   });
+ 
++  test("choice-scoped finish_reason error yields a terminal error", async () => {
++    const response = new Response([
++      'data: {"choices":[{"delta":{"content":"partial"}}]}\n\n',
++      'data: {"choices":[{"finish_reason":"error","error":{"code":"rate_limit","message":"ClinePass limit reached"}}]}\n\n',
++    ].join(""));
++    const events = await collect(createOpenAIChatAdapter(provider).parseStream(response));
++
++    expect(events.at(-1)).toMatchObject({
++      type: "error",
++      code: "rate_limit",
++      message: "ClinePass limit reached",
++    });
++    expect(events.some(e => e.type === "done")).toBe(false);
++  });
++
++  test("terminal errors discard a pending tool call instead of completing it", async () => {
++    for (const terminal of [
++      'data: {"choices":[{"finish_reason":"error","error":{"code":"server_error","message":"upstream failed"}}]}\n\n',
++      'data: {"error":{"code":"server_error","message":"upstream failed"}}\n\n',
++    ]) {
++      const body = [
++        'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_1","function":{"name":"shell","arguments":"{\\"cmd\\":\\"l"}}]}}]}\n\n',
++        terminal,
++      ].join("");
++      const adapter = createOpenAIChatAdapter(provider);
++      const events = await collect(adapter.parseStream(new Response(body)));
++
++      expect(events).toEqual([{ type: "error", code: "server_error", message: "upstream failed" }]);
++
++      const bridged = await new Response(bridgeToResponsesSSE(
++        adapter.parseStream(new Response(body)),
++        "openai-chat/test-model",
++      )).text();
++      expect(bridged).toContain("event: response.failed");
++      expect(bridged).not.toContain("response.function_call_arguments.done");
++      expect(bridged).not.toContain('"status":"completed"');
++    }
++  });
++
++  test("Cline-compatible delta.reasoning is preserved as reasoning output", async () => {
++    const response = new Response([
++      'data: {"choices":[{"delta":{"reasoning":"considering"}}]}\n\n',
++      'data: {"choices":[{"delta":{"content":"answer"},"finish_reason":"stop"}]}\n\n',
++    ].join(""));
++    const events = await collect(createOpenAIChatAdapter(provider).parseStream(response));
++
++    expect(events).toContainEqual({ type: "reasoning_raw_delta", text: "considering" });
++    expect(events.at(-1)?.type).toBe("done");
++  });
++
+   test("finish-only chunk with no delta (provider omits [DONE]) is accepted as done", async () => {
+     const response = new Response([
+       'data: {"choices":[{"delta":{"content":"hi"}}]}\n\n',
+diff --git a/tests/openai-chat-hardening.test.ts b/tests/openai-chat-hardening.test.ts
+index 1f5846ace9b..a56e339caf3 100644
+--- a/tests/openai-chat-hardening.test.ts
++++ b/tests/openai-chat-hardening.test.ts
+@@ -69,6 +69,32 @@ describe("openai-chat non-stream response hardening", () => {
+     expect(events).toEqual([{ type: "error", message: "upstream response contained no choices" }]);
+   });
+ 
++  test("preserves usage when an upstream response has no choices", async () => {
++    const adapter = createOpenAIChatAdapter(provider());
++    const events = await adapter.parseResponse!(new Response(JSON.stringify({
++      choices: [],
++      usage: { prompt_tokens: 7, completion_tokens: 2 },
++    })));
++
++    expect(events).toEqual([{
++      type: "error",
++      message: "upstream response contained no choices",
++      usage: { inputTokens: 7, outputTokens: 2 },
++    }]);
++  });
++
++  test("keeps ordinary and data-wrapped responses compatible for non-Cline providers", async () => {
++    const adapter = createOpenAIChatAdapter(provider());
++    for (const body of [
++      { choices: [{ message: { content: "plain" } }] },
++      { success: true, data: { choices: [{ message: { content: "wrapped" } }] } },
++    ]) {
++      const events = await adapter.parseResponse!(new Response(JSON.stringify(body)));
++      expect(events.find(event => event.type === "error")).toBeUndefined();
++      expect(events.at(-1)?.type).toBe("done");
++    }
++  });
++
+   test("rejects a choice with no message", async () => {
+     const adapter = createOpenAIChatAdapter(provider());
+     const events = await adapter.parseResponse!(new Response(JSON.stringify({ choices: [{}] })));
+diff --git a/tests/provider-registry-parity.test.ts b/tests/provider-registry-parity.test.ts
+index 1df1ea44230..05fe5bdf2f2 100644
+--- a/tests/provider-registry-parity.test.ts
++++ b/tests/provider-registry-parity.test.ts
+@@ -30,7 +30,7 @@ function nativeTemplate(): Record<string, unknown> {
+ }
+ 
+ const EXPECTED_KEY_PROVIDER_IDS = [
+-  "anthropic-apikey", "openai-apikey", "umans", "opencode-go", "neuralwatt", "openrouter", "orcarouter", "bizrouter", "groq", "google", "google-vertex", "azure-openai",
++  "anthropic-apikey", "openai-apikey", "umans", "opencode-go", "neuralwatt", "openrouter", "cline-pass", "orcarouter", "bizrouter", "groq", "google", "google-vertex", "azure-openai",
+   "deepseek", "cerebras", "deepinfra", "hyperbolic", "baseten", "together", "fireworks", "firepass", "moonshot",
+   "huggingface", "nvidia", "venice", "zai", "zhipu-bigmodel", "nanogpt", "synthetic", "siliconflow", "qwen-cloud", "tencent-coding-plan",
+   "volcengine", "volcengine-coding-plan", "volcengine-agent-plan", "qianfan", "alibaba", "alibaba-token-plan", "alibaba-token-plan-intl", "parallel", "zenmux", "litellm", "ollama-cloud", "mistral",
+diff --git a/tests/request-log.test.ts b/tests/request-log.test.ts
+index 562cb004d9a..50042794d71 100644
+--- a/tests/request-log.test.ts
++++ b/tests/request-log.test.ts
+@@ -152,6 +152,23 @@ describe("request log metadata", () => {
+     }
+   });
+ 
++  test("records a gateway reasoning disable as a boolean", () => {
++    const logCtx: RequestLogContext = { model: "m", provider: "cline-pass" };
++    recordAdapterReasoning(logCtx, {
++      url: "https://api.cline.bot/api/v1/chat/completions",
++      method: "POST",
++      headers: {},
++      body: "{}",
++      reasoningLog: {
++        effectiveEffort: "none",
++        wireField: "reasoning.enabled",
++        wireValue: false,
++      },
++    });
++
++    expect(logCtx.reasoningWireValue).toBe(false);
++  });
++
+   test("recordFirstOutput is one-shot for request and active attempt (WP4 TTFT)", () => {
+     const attempt = beginRequestAttempt(1, "a", "m1", "openai-chat");
+     const logCtx: RequestLogContext = {
+diff --git a/tests/server-auth.test.ts b/tests/server-auth.test.ts
+index 41ccefff9e6..3f5063df4f2 100644
+--- a/tests/server-auth.test.ts
++++ b/tests/server-auth.test.ts
+@@ -350,6 +350,7 @@ describe("server local API auth", () => {
+       apiKeyPool: [{ id: "pool-id", key: "pool-secret", label: "private-pool-label" }],
+       modelMaxInputTokens: { "gpt-test": 1000 },
+       codexAccountMode: "pool",
++      reasoningWireFormat: "gateway-object",
+       virtualModels: { "gpt-test-pro": { wireModelId: "gpt-test", reasoningMode: "pro" } },
+       codexAuthContext: { accessToken: "runtime-token" },
+       selectedForwardHeaders: { authorization: "Bearer runtime-token" },
+@@ -376,6 +377,7 @@ describe("server local API auth", () => {
+       hasApiKey: true,
+       hasHeaders: true,
+       codexAccountMode: "pool",
++      reasoningWireFormat: "gateway-object",
+     });
+     expect(dto.providers.openai).not.toHaveProperty("apiKey");
+     expect(dto.providers.openai).not.toHaveProperty("headers");
+

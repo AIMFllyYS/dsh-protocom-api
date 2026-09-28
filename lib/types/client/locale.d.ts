@@ -125,6 +125,9 @@ export declare const en: {
     navCommandCode: string;
     titleCommandCode: string;
     introCommandCode: string;
+    navClinePass: string;
+    titleClinePass: string;
+    introClinePass: string;
     navFusion: string;
     titleFusion: string;
     introFusion: string;

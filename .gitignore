@@ -10,3 +10,9 @@ scratch-*.ts
 scratch-*.mjs
 scratch-*.cjs
 
+# Research agents clone vendor repositories to read the source. A 66 MB clone
+# of someone else's code has no business in this one, and neither do raw HTML
+# dumps: the notes that cite them are what belongs here.
+.agents/cline/cline-src/
+.agents/cline/*.html
+.agents/cline/models-list.json

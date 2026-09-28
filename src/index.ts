@@ -20,12 +20,13 @@ import type { Context, VolatileSnapshot } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/cordis-plugin-loader'
 import type {} from '@deepseek-ai/dsh-settings'
 import { assertUsableApiKey, LlmError } from '@deepseek-ai/dsh-llm'
-import type { AdapterRegistrationHandle } from '@deepseek-ai/dsh-llm'
+import type { AdapterRegistrationHandle, LlmDiscoveredModel } from '@deepseek-ai/dsh-llm'
 import { ProtocomAdapter } from './adapter.ts'
 import { BalanceService, balanceFetchHandler } from './balance.ts'
 import { GoUsageService, goUsageFetchHandler } from './go-usage.ts'
 import { describeRejectedRef, OPENCODE_GO, PROTOCOM, resolveAdapterOptions } from './config.ts'
 import { COMMANDCODE } from './commandcode.ts'
+import { CLINEPASS } from './clinepass.ts'
 import { CommandCodeAccountService, commandCodeAccountFetchHandler } from './commandcode-account.ts'
 import type { Config, ResolvedGroup, ResolvedProtocomOptions, SectionConfig, SectionKey } from './config.ts'
 import { mountFusion } from './fusion-host.ts'
@@ -316,19 +317,26 @@ function mountFamily(
       settingsNs: PROTOCOM_NS,
       settingsPath: [sectionKey, 'groups', key],
     })))
-    const discovery = ctx.llm.registerModelDiscovery(ns, (request, signal) => discoverModels(request, signal, {
-      baseURL: () => options().baseURL,
-      resolveApiKey: async (provider) => {
-        const group = [...options().groups.values()].find(candidate => candidate.provider === provider)
-        if (group === undefined) return undefined
-        if (!group.enabled) {
-          throw new Error(
-            `${ns}: group "${group.key}" is disabled; toggle it on in the "${ns}" settings section before discovering models`,
-          )
-        }
-        return await resolveApiKey(group)
-      },
-    }))
+    // A family whose endpoint publishes a DIFFERENT catalog cannot be probed
+    // for its own models: fetching would fill the panel with another product's
+    // catalog, and every row would then fail on this family's key. Its registry
+    // is the answer instead, which also makes the probe free and offline.
+    const discovery = ctx.llm.registerModelDiscovery(ns, (request, signal) =>
+      family.listingIsMembership === false
+        ? Promise.resolve(registryDiscovery(family))
+        : discoverModels(request, signal, {
+          baseURL: () => options().baseURL,
+          resolveApiKey: async (provider) => {
+            const group = [...options().groups.values()].find(candidate => candidate.provider === provider)
+            if (group === undefined) return undefined
+            if (!group.enabled) {
+              throw new Error(
+                `${ns}: group "${group.key}" is disabled; toggle it on in the "${ns}" settings section before discovering models`,
+              )
+            }
+            return await resolveApiKey(group)
+          },
+        }))
     // The adapter registers lazily: `registerAdapter` refuses an empty route
     // set, so an all-disabled configuration mounts nothing; the first enabled
     // configuration registers, and every later change is an atomic `replace`
@@ -464,6 +472,43 @@ function commandCodeTelemetry(hooks: TelemetryHooks): FamilyTelemetry {
 }
 
 /**
+ * The models one family advertises when its endpoint's listing is not its
+ * catalog.
+ *
+ * Reads the family's own registry, keeps the entries tagged for its group --
+ * which is what makes them menu members in the first place -- and drops the
+ * ones the vendor has retired, so a probe cannot advertise a model the
+ * subscription no longer serves.
+ * @param family - the family whose registry answers for it.
+ * @returns the discovered rows, in registry order.
+ */
+function registryDiscovery(family: ProviderFamily): LlmDiscoveredModel[] {
+  const refused = new Set(family.refused as readonly string[])
+  return family.registry
+    .filter(entry => family.keys.some(key => entry.groups?.includes(key) === true))
+    .filter(entry => !refused.has(entry.id))
+    .map(entry => ({
+      id: entry.id,
+      name: entry.displayName,
+      contextWindow: entry.contextWindow,
+    }))
+}
+
+/**
+ * A family that ships no account surface.
+ *
+ * ClinePass is the case: Cline's API reference documents no balance, quota or
+ * usage endpoint, and the subscription's own usage lives on a web dashboard
+ * behind a browser session rather than behind an API key. Mounting a route
+ * anyway would mean guessing a response shape no request confirmed, and a
+ * wrong guess renders as a broken panel rather than as "not supported here".
+ * So the family declares `telemetryPath: undefined` and mounts nothing.
+ */
+function noTelemetry(): FamilyTelemetry {
+  return { invalidate: () => {}, mount: () => {} }
+}
+
+/**
  * The Loader entry id this plugin's settings form is keyed by.
  *
  * 1.7 names a form after its profile row, so this must match the `id` in
@@ -480,6 +525,7 @@ export function apply(ctx: Context, config: Config): void {
   mountFamily(ctx, PROTOCOM, 'protocom', () => config.protocom.get(), protocomTelemetry)
   mountFamily(ctx, OPENCODE_GO, 'opencodeGo', () => config.opencodeGo.get(), goTelemetry)
   mountFamily(ctx, COMMANDCODE, 'commandcode', () => config.commandcode.get(), commandCodeTelemetry)
+  mountFamily(ctx, CLINEPASS, 'clinepass', () => config.clinepass.get(), noTelemetry)
   // Fusion is a routing layer over the routes the families above register, so
   // it mounts last: with no family active it simply pins nothing.
   mountFusion(ctx, () => config.fusion.get())

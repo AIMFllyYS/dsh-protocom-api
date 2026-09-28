@@ -185,11 +185,13 @@ export interface Config {
     opencodeGo: Volatile<SectionConfig>;
     /** Command Code subscription family. */
     commandcode: Volatile<SectionConfig>;
+    /** ClinePass subscription family. */
+    clinepass: Volatile<SectionConfig>;
     /** Fusion dual-model routing. */
     fusion: Volatile<FusionConfig>;
 }
 /** The four section keys, for iterating a Config. */
-export declare const SECTION_KEYS: readonly ["protocom", "opencodeGo", "commandcode", "fusion"];
+export declare const SECTION_KEYS: readonly ["protocom", "opencodeGo", "commandcode", "clinepass", "fusion"];
 /** One section key of {@link Config}. */
 export type SectionKey = (typeof SECTION_KEYS)[number];
 /** Settings-section schema for the `protocom-api` namespace. */
@@ -198,6 +200,8 @@ export declare const ProtocomSection: z<SectionConfig>;
 export declare const GoSection: z<SectionConfig>;
 /** Settings-section schema for the `commandcode` namespace. */
 export declare const CommandCodeSection: z<SectionConfig>;
+/** Settings-section schema for the `clinepass` namespace. */
+export declare const ClinePassSection: z<SectionConfig>;
 /**
  * Settings-section schema for the `model-fusion` namespace, and the shape of
  * the plugin's own `fusion` config slice. Only `enabled` defaults here; the
@@ -216,11 +220,13 @@ export declare const Config: z<Schemastery.ObjectS<NoInfer<{
     protocom: z<NoInfer<SectionConfig>, NoInfer<SectionConfig>, "volatile">;
     opencodeGo: z<NoInfer<SectionConfig>, NoInfer<SectionConfig>, "volatile">;
     commandcode: z<NoInfer<SectionConfig>, NoInfer<SectionConfig>, "volatile">;
+    clinepass: z<NoInfer<SectionConfig>, NoInfer<SectionConfig>, "volatile">;
     fusion: z<NoInfer<FusionConfig>, NoInfer<FusionConfig>, "volatile">;
 }>>, Schemastery.ObjectT<NoInfer<{
     protocom: z<NoInfer<SectionConfig>, NoInfer<SectionConfig>, "volatile">;
     opencodeGo: z<NoInfer<SectionConfig>, NoInfer<SectionConfig>, "volatile">;
     commandcode: z<NoInfer<SectionConfig>, NoInfer<SectionConfig>, "volatile">;
+    clinepass: z<NoInfer<SectionConfig>, NoInfer<SectionConfig>, "volatile">;
     fusion: z<NoInfer<FusionConfig>, NoInfer<FusionConfig>, "volatile">;
 }>>, "plain">;
 /** Validated per-group facts with every adapter-owned default resolved. */

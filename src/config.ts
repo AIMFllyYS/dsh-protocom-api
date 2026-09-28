@@ -15,6 +15,7 @@ import { DEFAULT_BASE_URL } from './groups.ts'
 import { DEFAULT_RECOMMENDED, GO_DEFAULT_RECOMMENDED, identityKey } from './model-registry.ts'
 import { GO_DEFAULT_BASE_URL, PROTOCOM } from './family.ts'
 import { COMMANDCODE_BASE_URL, COMMANDCODE_RECOMMENDED } from './commandcode.ts'
+import { CLINEPASS_BASE_URL, CLINEPASS_RECOMMENDED } from './clinepass.ts'
 import { MAX_KEYS_PER_GROUP } from './key-pool.ts'
 import type { KeyPolicy } from './key-pool.ts'
 import type { FamilyGroupDefaults, ProviderFamily } from './family.ts'
@@ -222,12 +223,14 @@ export interface Config {
   opencodeGo: Volatile<SectionConfig>
   /** Command Code subscription family. */
   commandcode: Volatile<SectionConfig>
+  /** ClinePass subscription family. */
+  clinepass: Volatile<SectionConfig>
   /** Fusion dual-model routing. */
   fusion: Volatile<FusionConfig>
 }
 
 /** The four section keys, for iterating a Config. */
-export const SECTION_KEYS = ['protocom', 'opencodeGo', 'commandcode', 'fusion'] as const
+export const SECTION_KEYS = ['protocom', 'opencodeGo', 'commandcode', 'clinepass', 'fusion'] as const
 
 /** One section key of {@link Config}. */
 export type SectionKey = (typeof SECTION_KEYS)[number]
@@ -276,6 +279,9 @@ export const GoSection: z<SectionConfig> = sectionSchema(GO_DEFAULT_BASE_URL, GO
 /** Settings-section schema for the `commandcode` namespace. */
 export const CommandCodeSection: z<SectionConfig> = sectionSchema(COMMANDCODE_BASE_URL, COMMANDCODE_RECOMMENDED)
 
+/** Settings-section schema for the `clinepass` namespace. */
+export const ClinePassSection: z<SectionConfig> = sectionSchema(CLINEPASS_BASE_URL, CLINEPASS_RECOMMENDED)
+
 /**
  * One Fusion seat. No field carries a schema default: Schemastery normalizes
  * an absent seat to an empty object, and `resolveFusionSeat` reads that empty
@@ -313,6 +319,7 @@ export const Config = z.object({
   protocom: ProtocomSection.volatile(),
   opencodeGo: GoSection.volatile(),
   commandcode: CommandCodeSection.volatile(),
+  clinepass: ClinePassSection.volatile(),
   fusion: FusionSection.volatile(),
 })
 

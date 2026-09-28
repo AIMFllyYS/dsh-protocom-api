@@ -540,6 +540,10 @@ export class ProtocomAdapter extends LlmAdapter {
     } catch {
       listing = undefined
     }
+    // A family whose endpoint publishes a DIFFERENT catalog gets no membership
+    // from that listing; its registry is the whole menu. See
+    // ProviderFamily.listingIsMembership for why this is not a nuance.
+    if (this.family().listingIsMembership === false) listing = undefined
     return groupCatalog(group.key, listing, {
       hidden: hiddenModels,
       recommended: recommendedModels,
