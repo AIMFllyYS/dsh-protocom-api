@@ -24,7 +24,7 @@ import type { AdapterRegistrationHandle, LlmDiscoveredModel } from '@deepseek-ai
 import { ProtocomAdapter } from './adapter.ts'
 import { BalanceService, balanceFetchHandler } from './balance.ts'
 import { GoUsageService, goUsageFetchHandler } from './go-usage.ts'
-import { describeRejectedRef, OPENCODE_GO, PROTOCOM, resolveAdapterOptions } from './config.ts'
+import { describePathShapedSecret, describeRejectedRef, OPENCODE_GO, PROTOCOM, resolveAdapterOptions } from './config.ts'
 import { COMMANDCODE } from './commandcode.ts'
 import { CLINEPASS } from './clinepass.ts'
 import { CommandCodeAccountService, commandCodeAccountFetchHandler } from './commandcode-account.ts'
@@ -217,14 +217,33 @@ function mountFamily(
       // and the message is designed to be read and screenshotted.
       throw new LlmError(`${ns}: credential reference "${describeRejectedRef(ref)}" is outside this family's credential namespace`, 'MISSING_CREDENTIAL')
     }
+    /**
+     * The value once it is usable, or a message naming what is wrong with it.
+     *
+     * The path check runs FIRST because it is the one mistake the generic guard
+     * describes only by its symptom. A user who pasted `C:\\Users\\...\\key.txt`
+     * is told the value has characters an HTTP header cannot carry, which is
+     * true and useless: the fix is to paste the key, not to sanitize a path.
+     */
+    const usable = (value: string): string => {
+      const shape = describePathShapedSecret(value)
+      if (shape !== undefined) {
+        throw new LlmError(
+          `${ns}: the value stored for ${ref} is ${shape}, not an API key.`
+          + ' Paste the key itself -- the text you copy from the provider -- rather than the file it was saved in.',
+          'INVALID_CREDENTIAL',
+        )
+      }
+      return assertUsableApiKey(value, 'dsh-protocom-api', ref)
+    }
     const credentials = ctx.get('credentials')
     if (credentials !== undefined) {
       const hit = await credentials.resolve(ref)
-      if (hit?.value !== undefined) return assertUsableApiKey(hit.value, 'dsh-protocom-api', ref)
+      if (hit?.value !== undefined) return usable(hit.value)
     }
     const ambient = process.env[ref]
     if (ambient !== undefined && ambient.length > 0) {
-      return assertUsableApiKey(ambient, 'dsh-protocom-api', ref)
+      return usable(ambient)
     }
     throw new LlmError(
       `${ns}: no API key for provider route "${provider}"; store ${ref} through the credentials`

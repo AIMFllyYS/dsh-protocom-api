@@ -2,6 +2,46 @@
 
 All notable changes to `dsh-protocom-api` are documented here.
 
+## [1.2.1] — 修复：把「密钥字段里填了文件路径」说清楚
+
+**529 个测试通过。**
+
+### 症状
+
+```
+dsh-protocom-api: the API key resolved from CLINE_API_KEY contains characters
+no HTTP header can carry; set CLINE_API_KEY to the raw key alone
+INVALID_CREDENTIAL
+```
+
+### 真实原因
+
+实测该用户 `.credentials.yaml` 里的值：
+
+```
+CLINE_API_KEY = C:\Users\AIMFl\Downloads\yusheng-code-film (1)
+```
+
+**这是一个文件夹路径，不是密钥。** 它真实存在，里面只有 `yusheng-video/` 一个子目录——与 Cline 毫无关系。` (1)` 是浏览器「重复下载」的后缀，典型来源是资源管理器右键的**「复制文件地址」**或拖拽。
+
+### 为什么原来的提示帮不上忙
+
+通用守卫拒绝这个值**是对的**（空格和反斜杠确实不能进 HTTP 头），但它描述的是**症状**，从来没说出**错在哪**：「含有 HTTP 头无法承载的字符」会让用户去清理字符串，而正确动作是**换成密钥本身**。
+
+### 修复
+
+在通用守卫**之前**加一个形状判断（`describePathShapedSecret`），路径形状直接给出准确的错误：
+
+```
+the value stored for CLINE_API_KEY is a drive path, not an API key.
+Paste the key itself -- the text you copy from the provider -- rather than
+the file it was saved in.
+```
+
+判定规则刻意收窄，只认**不可能是一个密钥**的形状：盘符路径、UNC 路径、盘符相对路径，以及「路径 + 重复下载后缀」。
+
+**另一半测试更重要**：`test/credential-shape.spec.ts` 用四家供应商真实签发的密钥形状（`sk-ant-`、JWT、base64 含 `+/=`、裸十六进制）断言这个判断**绝不误报**——误报比原来那句通用提示更糟，它会让人去找一个根本不存在的文件。
+
 ## [1.2.0] — 新增：ClinePass 订阅供应商
 
 第四家供应商。**523 个测试通过。**
