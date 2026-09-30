@@ -46,6 +46,8 @@ Command Code 一个分组一条 route（`commandcode`），实测 listing 共 **
 
 ## 功能特性
 
+> 第一次接触本项目？请看 [发布通知](./ANNOUNCEMENT.md)——按「为什么做 / 能做什么 / 怎么装」组织，不假设你读过 CHANGELOG。功能的全量细节在下面。
+
 - **模型实时探测**：`GET /v1/models` 拉取分组可见模型（60s 缓存），内置美化名录投影——`deepseek/deepseek-v4.1-flash` 显示为 `DeepSeek V4.1 Flash [1M]`；名录外模型显示原 ID；名录内但探测不到的不显示。
 - **上下文长度可选**：每个可选长度在模型菜单中呈现为独立条目（如 `DeepSeek V4.1 Flash [256K]`），选择即驱动上下文压力与压缩阈值。档位表是 200K/256K/400K/1M，**并且模型自己的窗口永远是最后一档**——阶梯是二进制而厂商公布十进制，缺了这一条会让 1M 模型最高只能选 400K。**超过模型窗口的档位绝不提供**：端点公布了长度的（如 Command Code，每行都带 `context_length`）按公布值过滤，没公布的才用分组阶梯。二进制与十进制的一百万分别标为 `1M` 与 `1M (dec)`，不会混淆。
 - **思考强度二级菜单**：模型菜单自动出现 Effort 子菜单。词汇**逐模型且按族不同**——**两个族的禁用词正好相反**（实测）：Protocom relay 用 `none` 并拒绝 `off`，OpenCode Go 用 `off` 并拒绝 `none`，所以不能共用一份词表。relay 侧 `kimi-k3` 实测接受 `minimal/low/medium/high/xhigh/max`；Codex 分组走 responses 协议的 `reasoning.effort`。思考内容以 `reasoning-delta` 流式接入，聊天界面折叠显示。 **Command Code 的档位逐模型取自厂商自己的 CLI 目录**（该网关的列表只公布路由、能力页只公布布尔值，两处都没有深度列表）：`deepseek-v4-pro` 是 `high/max`，`gpt-5.6-sol` 是 `low/medium/high/xhigh/max`，而 29 个模型厂商不接受任何深度，就不给控件——而不是伪造一个。
