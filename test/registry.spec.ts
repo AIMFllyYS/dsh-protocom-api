@@ -42,14 +42,18 @@ describe('model-registry', () => {
     expect(entry?.vision).toBe(true)
   })
 
-  it('advertises no reasoning vocabulary for a route that rejects the effort field', () => {
-    // Verified against the endpoint: sending `reasoning_effort` to the
-    // Moonshot route fails the whole request with HTTP 400 "invalid moonshotai
-    // provider options", so a declared default effort would make the model
-    // unusable rather than merely mute.
+  it('declares the effort vocabulary a changed endpoint actually accepts', () => {
+    // This entry used to assert `reasoning` was UNDEFINED, on the recorded
+    // finding that the Moonshot route failed every request carrying
+    // `reasoning_effort` with HTTP 400 "invalid moonshotai provider options".
+    // Re-probed 2026-10-01: the route now accepts six of the seven levels, so
+    // that assertion was pinning a stale observation -- and it was the reason
+    // this model had no Effort submenu at all. The vocabulary is the measured
+    // one, and `medium` is deliberately absent because the relay refuses it.
     const entry = matchRegistry('moonshotai/Kimi-K2.7-Code')
     expect(entry?.displayName).toBe('Kimi K2.7 Code')
-    expect(entry?.reasoning).toBeUndefined()
+    expect(entry?.reasoning?.efforts).toEqual(['none', 'minimal', 'low', 'high', 'xhigh', 'max'])
+    expect(entry?.reasoning?.efforts).not.toContain('medium')
     expect(entry?.vision).toBe(true)
   })
 

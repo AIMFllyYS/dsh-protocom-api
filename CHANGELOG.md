@@ -2,6 +2,85 @@
 
 All notable changes to `dsh-protocom-api` are documented here.
 
+## [1.2.3] — 修复：23 个模型没有思考强度菜单；密钥填错在写入时就拦下
+
+**536 个测试通过。** 两个问题，根因都不是 0.2.0 带来的。
+
+## 问题一：很多模型的「思考强度」无法选择
+
+### 根因：注册表里 23 个条目根本没有词表
+
+thinking 强度菜单的**唯一来源**是模型元数据里的 `reasoning.efforts`。解析顺序是：
+
+```
+注册表条目 → 端点自述 → family.reasoningFor → 分组默认值
+```
+
+而 `aggregate`（relay 主力分组）和 `go` **没有分组默认值**——`codex` / `stepfun` / `grok` 有。所以**没有自述词表的模型，一路落到 `undefined`，菜单里就没有任何档位可选**，而且**不报错**。
+
+实测规模：relay 33 个条目中 **15 个**没有词表，Go 41 个中 **12 个**。
+
+### 逐个实测后补齐（不是猜的）
+
+对每一个缺词表的模型，逐个 effort 打真实请求，记录哪些返回 200：
+
+| 族 | 模型 | 实测接受 |
+| --- | --- | --- |
+| relay | `Qwen/Qwen3.8-27B`、`Qwen/Qwen3.7-Flash`、`Qwen/Qwen3.8-Omni-Flash`、`google/gemini-3.8-flash`、`poolside/laguna-s-2.1-free`、`tencent/hy3-paid`、`meta/muse-spark-1.3-contributor` | 七档全接受 |
+| relay | `moonshotai/Kimi-K2.7-Code` | 六档（`medium` 400） |
+| go | `hy3`、`hy4-preview`、`longcat-2.5-preview-free` | 七档全接受 |
+| go | `mimo-v2.5`、`mimo-v2.6-flash`、`mimo-v2.6-pro` | `none/low/medium/high`（另三档 400） |
+
+**效果（你的配置实测）**：
+
+| 族 | 修复前 | 修复后 |
+| --- | --- | --- |
+| relay 可见模型 | 8 有 / **5 没有** | **12 有 / 1 没有**（剩下那个是 StepFun 专属，本来就不在 aggregate 路由上） |
+| go 可见模型 | 4 有 / **2 没有** | **6 有 / 0 没有** |
+
+### 顺带推翻两条「被钉成事实的过期观察」
+
+1. `moonshotai/Kimi-K2.7-Code` 的注释写着该路由**直接拒绝** `reasoning_effort`（HTTP 400），测试也把「没有词表」断言成了事实。**实测它现在接受六档**——端点变了，注释和测试都没变。
+2. `hy3` 的测试注释写着「一个仍接受 effort 字段但从不推理的模型」。**实测七档全 200**，它确实推理。
+
+另外 `kimi-k2.6` 在 Go 上返回 **410 Gone**，已加入拒用列表。
+
+### 新增守卫
+
+- **重复 id**：`matchRegistry` 只返回第一个，重复条目的元数据**完全不可达**。这个守卫抓到了我在本次修复中**自己引入的两个重复条目**。
+- **Go 每个可提供模型都必须有词表**（拒用的除外）——Go 没有分组默认值，缺词表就等于没有思考控制。
+
+## 问题二：Cline 一直报路径错误
+
+### 这不是代码 bug，是密钥字段里存了一个文件夹路径
+
+实测你 `.credentials.yaml` 里的值：
+
+```
+CLINE_API_KEY = C:\Users\AIMFl\Downloads\yusheng-code-film (1)
+```
+
+**它真实存在，是个目录**，与 Cline 毫无关系。` (1)` 是浏览器「重复下载」后缀，典型来源是资源管理器的**「复制文件地址」**。
+
+所以报错**是对的**——1.2.1 已经把它说清楚了。问题在于：**它只在每次请求解析密钥时才报**，所以你粘贴错了之后，是在很久以后、以「HTTP 头」这种措辞、在一个你没有理由回头看的字段上被告知的。
+
+### 修复：把校验前移到写入时
+
+设置面板保存密钥时先跑同一个形状判断，不合法**当场拒绝并说明**：
+
+```
+That is a drive path, not an API key. Paste the key itself -- the text you copy
+from the provider -- rather than the file it was saved in.
+```
+
+校验逻辑抽到 `src/credential-shape.ts`（**零依赖**）——面板 bundle 禁止引入 schema 与凭证机制，所以两边共用的东西必须放在一个什么都不 import 的模块里。
+
+**需要你做的**：把 `CLINE_API_KEY` 换成真密钥，或在设置里关掉 ClinePass 分组。我没有改你的凭据库。
+
+## 一条你可能想知道的事
+
+**Command Code 菜单现在是空的——82 个模型全在 `hiddenModels` 里。** 设置面板每张卡上有一个「全不选」按钮（`selectNone`），点一次会隐藏该分组的全部模型，且没有确认步骤。用同一张卡上的「全选」可以一键恢复。
+
 ## [1.2.2] — 兼容 DSH 0.2.0-rc.2
 
 **532 个测试通过。零代码改动**——只改了 peer 依赖范围。

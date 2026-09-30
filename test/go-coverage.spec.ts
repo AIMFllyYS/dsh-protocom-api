@@ -22,6 +22,19 @@ const LIVE: string[] = JSON.parse(
   readFileSync(new URL('../.agents/opencode-go-ids-2026-09-27.json', import.meta.url), 'utf8'),
 )
 
+/**
+ * Ids the listing still advertises that were proven unservable by request.
+ *
+ * A listing is an advertisement, not a promise. These appear in it and answer
+ * 503 or 410 when actually called, so refusing them is correct and the inverse
+ * check below -- which exists to catch a WORKING model being hidden -- must not
+ * flag them. Each entry records how it failed.
+ */
+const LISTED_BUT_DEAD: readonly string[] = [
+  'minimax-m2.7', // 503 on both wire protocols.
+  'kimi-k2.6', // 410 Gone, re-probed 2026-10-01.
+]
+
 describe('go registry coverage (R3)', () => {
   it('offers no tagged model the endpoint has stopped serving', () => {
     const refused = new Set(GO_REFUSED_MODEL_IDS as readonly string[])
@@ -38,9 +51,7 @@ describe('go registry coverage (R3)', () => {
     const live = new Set(LIVE)
     const wronglyRefused = GO_REFUSED_MODEL_IDS
       .filter(id => live.has(id))
-      // minimax-m2.7 is listed yet answers 503 on both wire protocols, so a
-      // listing alone is not proof of service -- it was verified by request.
-      .filter(id => id !== 'minimax-m2.7')
+      .filter(id => !LISTED_BUT_DEAD.includes(id))
     expect(wronglyRefused).toEqual([])
   })
 })

@@ -118,8 +118,13 @@ describe('OpenCode Go registry', () => {
     const plus = matchRegistry('qwen3.6-plus', GO_REGISTRY)?.reasoning?.efforts
     expect(plus).toEqual(expect.arrayContaining(['minimum', 'xhigh']))
     expect(plus).not.toContain('max')
-    // A never-reasoner that still accepts the effort field declares no menu.
-    expect(matchRegistry('hy3', GO_REGISTRY)?.reasoning).toBeUndefined()
+    // hy3 was recorded here as "a never-reasoner that still accepts the effort
+    // field". Re-probed 2026-10-01: it answers 200 on all seven levels, so it
+    // does reason and now declares the vocabulary -- which is what puts an
+    // Effort submenu on it. The old assertion was a stale observation pinned as
+    // a fact, and it was why this model had no thinking control.
+    expect(matchRegistry('hy3', GO_REGISTRY)?.reasoning?.efforts)
+      .toEqual(['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'])
   })
 })
 

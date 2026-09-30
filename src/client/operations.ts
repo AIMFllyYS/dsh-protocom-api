@@ -6,6 +6,7 @@
  */
 
 import type { Context as ClientContext } from '@deepseek-ai/cordis'
+import { credentialEntryProblem } from '../credential-shape.ts'
 import type {
   CredentialInfo,
   LlmDiscoveredModel,
@@ -106,6 +107,13 @@ export function createProtocomOperations(
       return response.ok ? response.value : {}
     },
     storeApiKey: async (group, ref, value, expectedRevision) => {
+      // Refuse a plainly-not-a-key shape AT ENTRY rather than at the first
+      // request. Validation used to happen only when a request resolved the
+      // credential, so a pasted file path was stored happily and then failed
+      // every turn with a message about HTTP headers -- correct, but nowhere
+      // near the paste and nowhere near the field that needed fixing.
+      const problem = credentialEntryProblem(value)
+      if (problem !== undefined) return problem
       const stored = await ctx.remote.credentials.set(ref, value)
       if (!stored.ok) return stored.error.message
       // The settings write is revision-guarded like every other write: without

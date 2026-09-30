@@ -12,7 +12,7 @@
  * never accuse a real key of being a path.
  */
 import { describe, expect, it } from 'vitest'
-import { describePathShapedSecret } from '../src/config.ts'
+import { credentialEntryProblem, describePathShapedSecret } from '../src/config.ts'
 
 describe('path-shaped credentials (R3)', () => {
   it('recognises the mistake that was actually made', () => {
@@ -57,5 +57,24 @@ describe('path-shaped credentials (R3)', () => {
     expect(describePathShapedSecret('line1\nline2')).toBeUndefined()
     expect(describePathShapedSecret('')).toBeUndefined()
     expect(describePathShapedSecret('(1)')).toBeUndefined()
+  })
+})
+
+describe('refusing a path at entry (R3)', () => {
+  it('turns a path into a sentence the operator can act on', () => {
+    const problem = credentialEntryProblem('C:\\Users\\someone\\Downloads\\cline-key (1)')
+    expect(problem).toContain('a drive path, not an API key')
+    // The remedy has to be in the message: the user's next move is the paste,
+    // not a hunt for the field.
+    expect(problem).toContain('Paste the key itself')
+  })
+
+  it('lets every real key through untouched', () => {
+    for (const key of [
+      'sk-ant-api03-AbCdEf1234567890GhIjKlMnOpQrStUvWxYz',
+      'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxIn0.dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk',
+      'aBcD1234+/efGH5678=',
+      '9f8e7d6c5b4a39281706f5e4d3c2b1a0',
+    ]) expect(credentialEntryProblem(key), key).toBeUndefined()
   })
 })

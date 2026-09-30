@@ -1,0 +1,266 @@
+[
+ {
+  "family": "relay",
+  "model": "qwen3.8-max",
+  "baseline": 404,
+  "accepted": []
+ },
+ {
+  "family": "relay",
+  "model": "Qwen/Qwen3.8-27B",
+  "baseline": 200,
+  "accepted": [
+   "none",
+   "minimal",
+   "low",
+   "medium",
+   "high",
+   "xhigh",
+   "max"
+  ]
+ },
+ {
+  "family": "relay",
+  "model": "moonshotai/Kimi-K2.7-Code",
+  "baseline": 200,
+  "accepted": [
+   "none",
+   "minimal",
+   "low",
+   "high",
+   "xhigh",
+   "max"
+  ]
+ },
+ {
+  "family": "relay",
+  "model": "Qwen/Qwen3.8-Omni-Flash",
+  "baseline": 200,
+  "accepted": [
+   "none",
+   "minimal",
+   "low",
+   "medium",
+   "high",
+   "xhigh",
+   "max"
+  ]
+ },
+ {
+  "family": "relay",
+  "model": "step-5-preview",
+  "baseline": 404,
+  "accepted": []
+ },
+ {
+  "family": "relay",
+  "model": "Qwen/Qwen3.7-Flash",
+  "baseline": 200,
+  "accepted": [
+   "none",
+   "minimal",
+   "low",
+   "medium",
+   "high",
+   "xhigh",
+   "max"
+  ]
+ },
+ {
+  "family": "relay",
+  "model": "google/gemini-3.7-flash",
+  "baseline": 400,
+  "accepted": []
+ },
+ {
+  "family": "relay",
+  "model": "tencent/hy4-preview",
+  "baseline": 400,
+  "accepted": []
+ },
+ {
+  "family": "relay",
+  "model": "inclusionai/ling-3.0-flash-sante:free",
+  "baseline": 400,
+  "accepted": []
+ },
+ {
+  "family": "relay",
+  "model": "Qwen/Qwen3.8-Flash",
+  "baseline": 400,
+  "accepted": []
+ },
+ {
+  "family": "relay",
+  "model": "meituan/LongCat-2.0:free",
+  "baseline": 404,
+  "accepted": []
+ },
+ {
+  "family": "relay",
+  "model": "google/gemini-3.8-flash",
+  "baseline": 200,
+  "accepted": [
+   "none",
+   "minimal",
+   "low",
+   "medium",
+   "high",
+   "xhigh",
+   "max"
+  ]
+ },
+ {
+  "family": "relay",
+  "model": "poolside/laguna-s-2.1-free",
+  "baseline": 200,
+  "accepted": [
+   "none",
+   "minimal",
+   "low",
+   "medium",
+   "high",
+   "xhigh",
+   "max"
+  ]
+ },
+ {
+  "family": "relay",
+  "model": "tencent/hy3-paid",
+  "baseline": 200,
+  "accepted": [
+   "none",
+   "minimal",
+   "low",
+   "medium",
+   "high",
+   "xhigh",
+   "max"
+  ]
+ },
+ {
+  "family": "relay",
+  "model": "meta/muse-spark-1.3-contributor",
+  "baseline": 200,
+  "accepted": [
+   "none",
+   "minimal",
+   "low",
+   "medium",
+   "high",
+   "xhigh",
+   "max"
+  ]
+ },
+ {
+  "family": "go",
+  "model": "kimi-k2.6",
+  "baseline": 410,
+  "accepted": []
+ },
+ {
+  "family": "go",
+  "model": "hy4-preview",
+  "baseline": 200,
+  "accepted": [
+   "none",
+   "minimal",
+   "low",
+   "medium",
+   "high",
+   "xhigh",
+   "max"
+  ]
+ },
+ {
+  "family": "go",
+  "model": "kimi-k2.5",
+  "baseline": 400,
+  "accepted": []
+ },
+ {
+  "family": "go",
+  "model": "hy3",
+  "baseline": 200,
+  "accepted": [
+   "none",
+   "minimal",
+   "low",
+   "medium",
+   "high",
+   "xhigh",
+   "max"
+  ]
+ },
+ {
+  "family": "go",
+  "model": "glm-5",
+  "baseline": 400,
+  "accepted": []
+ },
+ {
+  "family": "go",
+  "model": "mimo-v2-pro",
+  "baseline": 400,
+  "accepted": []
+ },
+ {
+  "family": "go",
+  "model": "mimo-v2-omni",
+  "baseline": 400,
+  "accepted": []
+ },
+ {
+  "family": "go",
+  "model": "mimo-v2.6-flash",
+  "baseline": 200,
+  "accepted": [
+   "none",
+   "low",
+   "medium",
+   "high"
+  ]
+ },
+ {
+  "family": "go",
+  "model": "mimo-v2.6-pro",
+  "baseline": 200,
+  "accepted": [
+   "none",
+   "low",
+   "medium",
+   "high"
+  ]
+ },
+ {
+  "family": "go",
+  "model": "qwen3.5-plus",
+  "baseline": 400,
+  "accepted": []
+ },
+ {
+  "family": "go",
+  "model": "longcat-2.5-preview-free",
+  "baseline": 200,
+  "accepted": [
+   "none",
+   "minimal",
+   "low",
+   "medium",
+   "high",
+   "xhigh",
+   "max"
+  ]
+ },
+ {
+  "family": "go",
+  "model": "mimo-v2.5",
+  "baseline": 200,
+  "accepted": [
+   "none",
+   "low",
+   "medium",
+   "high"
+  ]
+ }
+]
