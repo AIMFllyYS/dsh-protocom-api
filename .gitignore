@@ -16,3 +16,17 @@ scratch-*.cjs
 .agents/cline/cline-src/
 .agents/cline/*.html
 .agents/cline/models-list.json
+
+# Security review artefacts: red-team reports and audit write-ups about THIS
+# plugin and the relay it talks to. They are written for the maintainer, name
+# the relay as a trusted upstream, and some carry reproduction detail.
+#
+# They were only ever UNTRACKED, which is not the same as ignored: `git add -A`
+# (or any tool that stages broadly) publishes them, and a report describing how
+# to attack a service is not something to ship by accident.
+SECURITY_AUDIT_CONSOLIDATED.md
+SECURITY_REMEDIATION_PLAN.md
+SECURITY_REMEDIATION_REPORT.md
+security_best_practices_report.md
+redteam-*.md
+.redteam/
