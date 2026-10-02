@@ -488,4 +488,31 @@ describe('per-group model editing (issue 1)', () => {
     // The registry-tagged model is what keeps the card usable meanwhile.
     expect(within(modelList(stepfun)).getByText('Step 5 Preview')).toBeTruthy()
   })
+
+  it('keys model rows by identity, so equal display names do not collide', async () => {
+    // `zai-org/GLM-5.2` carries an explicit `identity`, which opts it out of the
+    // name join that would otherwise merge it with the bare `glm-5.2` id. Both
+    // therefore present as "GLM-5.2" and land in one card as two rows. Keying
+    // them by display name made React see two children with the same key: it
+    // warns and may reuse one row's starred/hidden state on the other.
+    const errors: string[] = []
+    const spy = vi.spyOn(console, 'error').mockImplementation((...args: unknown[]) => {
+      errors.push(args.map(String).join(' '))
+    })
+    try {
+      vi.stubGlobal('fetch', vi.fn(async () => jsonResponse({})))
+      renderSection(listingOperations({
+        discoverModels: vi.fn(async (request: { provider?: string }) => (request.provider === 'protocom-aggregate'
+          ? { kind: 'found', models: [{ id: 'glm-5.2' }, { id: 'zai-org/GLM-5.2' }] }
+          : { kind: 'found', models: [] })) as never,
+      }))
+      const aggregate = await groupCard(en.groupAggregate)
+      // Both routes really are offered as separate rows...
+      await waitFor(() => expect(modelList(aggregate).querySelectorAll('.protocom-model-row')).toHaveLength(2))
+      // ...and React was never handed a duplicated key for them.
+      expect(errors.filter(message => message.includes('same key'))).toEqual([])
+    } finally {
+      spy.mockRestore()
+    }
+  })
 })

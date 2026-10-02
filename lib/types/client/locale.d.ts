@@ -149,6 +149,7 @@ export declare const en: {
     applyLeader: string;
     applyLeaderNoSession: string;
     applyLeaderSubagent: string;
+    applyLeaderNotListed: string;
     costTitle: string;
     costInput: string;
     costCache: string;
@@ -159,6 +160,7 @@ export declare const en: {
     saving: string;
     savedApplyFailed: string;
     needBothSeats: string;
+    halfSeat: string;
     conflict: string;
     saveFailed: string;
     catalogFailed: string;

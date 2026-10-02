@@ -886,7 +886,13 @@ function GroupCard({ groupKey, group, family, credential, writable, revision, pr
             <div className="protocom-models">
               {visibleRows.map(row => (
                 <ModelRow
-                  key={row.displayName}
+                  // Keyed by the row's identity, not its display name. Two rows
+                  // in one group can legitimately carry the same name -- an
+                  // entry with an explicit `identity` opts out of the name join
+                  // so the prefixed and bare ids stay distinct rows -- and React
+                  // then warns and may reuse the wrong row, showing one model's
+                  // hidden/stared state on another.
+                  key={row.upstreamId}
                   model={row}
                   group={group}
                   family={family}

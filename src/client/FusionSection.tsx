@@ -106,6 +106,23 @@ function seatComplete(seat: FusionStoredSeat | FusionSeat | undefined): seat is 
     && seat.model !== undefined && seat.model !== ''
 }
 
+/**
+ * Whether a seat is neither usable nor cleanly absent.
+ *
+ * `seatComplete` only accepts a full route, and `seatValue` writes an unset seat
+ * as `{}`, so a seat holding ONE half would be written as a partial object. The
+ * schema deliberately adds no defaults and no cross-field refinement, so such a
+ * section passes validation and persists -- and then fails `resolveFusionSeat`
+ * on every later read, which only logs and keeps the last good config. The file
+ * stays invalid until it is hand-edited, so the write is refused here instead.
+ */
+function seatHalfSet(seat: FusionStoredSeat | undefined): boolean {
+  if (seat === undefined) return false
+  const provider = seat.provider !== undefined && seat.provider !== ''
+  const model = seat.model !== undefined && seat.model !== ''
+  return provider !== model
+}
+
 /** Format one per-million-token price for the cost strip. */
 function price(value: number): string {
   return `$${value % 1 === 0 ? value.toFixed(0) : value.toFixed(2)}`
@@ -355,6 +372,10 @@ function FusionBody({ operations, t, copy }: {
 
   const save = async (): Promise<void> => {
     if (draft === undefined || busy) return
+    if (seatHalfSet(draft.leader) || seatHalfSet(draft.coder)) {
+      setNotice({ kind: 'error', text: t('halfSeat') })
+      return
+    }
     if (draft.enabled && (!seatComplete(draft.leader) || !seatComplete(draft.coder))) {
       setNotice({ kind: 'error', text: t('needBothSeats') })
       return
@@ -380,6 +401,11 @@ function FusionBody({ operations, t, copy }: {
       setNotice(failures.length === 0
         ? { kind: 'ok', text: t('saved') }
         : { kind: 'error', text: `${t('savedApplyFailed')}: ${failures.join(' ')}` })
+    } catch (error) {
+      // Without this, a rejecting save (a transport failure, or a dead service
+      // handle) cleared `busy` and left the dialog open saying nothing at all --
+      // the operator's click simply vanished.
+      setNotice({ kind: 'error', text: `${t('saveFailed')}: ${error instanceof Error ? error.message : String(error)}` })
     } finally {
       setBusy(false)
     }

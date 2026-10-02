@@ -170,17 +170,39 @@ export const FUSION_SECTION_PATH = 'fusion' as const
  * by the HOST session package (`SessionStore`, whose `list()` returns an
  * array), so in a project compiling both halves the host declaration wins and
  * the client's real shape cannot be named without the session-controller client
- * package. Reading the one field actually used keeps the faithful part (the id
- * is the shell's current selection, absent in the no-session view) and confines
- * the cast to this accessor.
+ * package.
+ *
+ * Two details here are load-bearing. The reach is `ctx.get`, not
+ * `ctx.sessions`: an undeclared property read throws even once the service is
+ * active, and `sessions` is deliberately not among this section's declared
+ * dependencies, because a deployment without it must still get a working Fusion
+ * editor -- only the soft-apply needs a Session at all. And the current session
+ * is the row the shell retains for its main view; the snapshot has no `current`
+ * field, only `ids`, `byId`, `phase` and `projectionsBySession`.
  */
 interface FusionSessionsFace {
-  list: { getSnapshot(): { current?: string } }
+  list: { getSnapshot(): { byId?: Record<string, FusionSessionListRow> } }
+}
+
+/** One row of the client Session list, as much as the shell selection reads. */
+interface FusionSessionListRow {
+  readonly id?: string
+  /** Which surfaces retain this Session; the shell's own view is `mainView`. */
+  readonly retainedBy?: { readonly mainView?: number }
 }
 
 /** Read the shell's current Session id, or undefined in the no-session view. */
 function currentSessionId(ctx: ClientContext): string | undefined {
-  return (ctx as unknown as { sessions?: FusionSessionsFace }).sessions?.list.getSnapshot().current
+  const sessions = (ctx as unknown as { get(name: string): unknown }).get('sessions') as
+    FusionSessionsFace | undefined
+  const byId = sessions?.list.getSnapshot().byId
+  if (byId === undefined) return undefined
+  // `retainedBy` counts live viewers, and the main view's count is what marks
+  // the conversation currently on screen. Reading a `current` field instead --
+  // a field this snapshot does not have -- made the cast above yield undefined
+  // on every page, so `applyLeader` reported "no session" no matter what was
+  // open and the leader seat was never soft-applied.
+  return Object.values(byId).find(row => (row.retainedBy?.mainView ?? 0) > 0)?.id
 }
 
 /**
@@ -231,10 +253,40 @@ function seatValue(seat: FusionSeat | undefined): Record<string, string> {
   }
 }
 
+/** The config-form face this section writes the Fusion path through. */
+interface FusionConfigFormsFace {
+  get<T>(entryId: string): {
+    getSnapshot(): { status: FusionSectionState['status']; value?: T; revision?: number; writable: boolean }
+    subscribe(listener: () => void): () => void
+    /**
+     * Resolves `false` when the Host REFUSED the mutation (validation, a stale
+     * revision, or a page whose persistence is memory-only) — it does not
+     * reject for those. Awaiting it and discarding the result therefore reports
+     * a refused write as a successful one.
+     */
+    mutate(ops: SettingsPathOpView[], expectedRevision: number | undefined): Promise<boolean>
+  }
+}
+
+/** The `remote.session` namespace, as much of it as the soft-apply reads. */
+interface FusionRemoteSessionFace {
+  modelCatalog(): Promise<{ ok: true; value: FusionCatalog } | { ok: false; error: { message: string } }>
+  list(request?: Record<string, never>): Promise<{ ok: true; value: { items: FusionSessionRow[] } } | { ok: false; error: { message: string } }>
+  selectModel(request: { sessionId: string; provider: string; model: string; reasoningEffort?: string }):
+  Promise<{ ok: true } | { ok: false; error: { message: string } }>
+}
+
 /**
  * Bind the Fusion section's Host operations.
- * @param ctx - the plugin's context, which declares `remote.session` and
- * `configForms` in its own `inject`.
+ * @param ctx - the Fusion section's context. It must have DECLARED both
+ * `remote.session` and `configForms` in its own `inject` (the caller in
+ * `index.ts` does this on a scoped fiber): cordis throws
+ * `cannot get property "…" without inject` for an undeclared read, even once
+ * the service is fully active, and a Remote namespace is mounted late by an
+ * async Host handshake, so a probe taken before that mount both reads
+ * `undefined` and is illegal. Declaring the dependency is what makes these two
+ * reads legal, and is also why this factory must be constructed only from
+ * inside that scoped callback.
  * @param t - the section's translator. The `applyLeader` outcomes that are not
  * failures but still need saying -- "there is no session to apply this to" --
  * are prose, so the wording stays with the locale rather than here.
@@ -244,13 +296,10 @@ export function createFusionOperations(ctx: ClientContext, t: Translator): Fusio
   // holding all four sections. The Fusion fields are therefore a PATH into that
   // form rather than a namespace of their own, which is why every op below is
   // rooted at FUSION_SECTION_PATH.
-  const scope = ctx.configForms.get<FusionStoredValue>(PROTOCOM_ENTRY_ID)
-  const session = (ctx.remote as { session: {
-    modelCatalog(): Promise<{ ok: true; value: FusionCatalog } | { ok: false; error: { message: string } }>
-    list(request?: Record<string, never>): Promise<{ ok: true; value: { items: FusionSessionRow[] } } | { ok: false; error: { message: string } }>
-    selectModel(request: { sessionId: string; provider: string; model: string; reasoningEffort?: string }):
-    Promise<{ ok: true } | { ok: false; error: { message: string } }>
-  } }).session
+  const forms = (ctx as unknown as { get(name: string): unknown }).get('configForms') as
+    FusionConfigFormsFace
+  const scope = forms.get<FusionStoredValue>(PROTOCOM_ENTRY_ID)
+  const session = (ctx.remote as { session: FusionRemoteSessionFace }).session
 
   return {
     loadCatalog: async () => {
@@ -271,13 +320,26 @@ export function createFusionOperations(ctx: ClientContext, t: Translator): Fusio
     subscribe: listener => scope.subscribe(listener),
     saveFusion: async (draft, expectedRevision) => {
       try {
-        await scope.mutate(fusionOps(draft), expectedRevision)
-        return { kind: 'written' }
+        // The refusal path RESOLVES `false` rather than rejecting, so the
+        // result must be inspected: discarding it made every refused write --
+        // including each save on a memory-persistence page -- report success
+        // while the stored section was unchanged.
+        const ok = await scope.mutate(fusionOps(draft), expectedRevision)
+        if (ok) return { kind: 'written' }
+        // A refusal does not say WHICH refusal it was. Comparing the revision
+        // the write was fenced against with the one the scope holds after its
+        // recovery read separates "this section moved on elsewhere" -- which
+        // has a remedy the operator can act on -- from an outright rejection.
+        const now = scope.getSnapshot().revision
+        return expectedRevision !== undefined && now !== undefined && now !== expectedRevision
+          ? { kind: 'conflict', message: t('conflict') }
+          : { kind: 'refused', message: t('saveFailed') }
       } catch (error) {
+        // Only a thrown transport failure reaches here; a stale revision was
+        // already converted to `false` by the scope, so a thrown error is a
+        // refusal to report, not a conflict.
         const message = error instanceof Error ? error.message : String(error)
-        // The scope rejects a stale fence without a wire call; every other
-        // refusal (validation, persistence) is the Host's own diagnosis.
-        return /conflict/i.test(message) ? { kind: 'conflict', message } : { kind: 'refused', message }
+        return { kind: 'refused', message }
       }
     },
     applyLeader: async (seat) => {
@@ -306,10 +368,12 @@ export function createFusionOperations(ctx: ClientContext, t: Translator): Fusio
       }
       const target = leaderTargetSession(listed.value.items, current)
       if (target === undefined) {
-        // The current session is a subagent, which this deliberately skips so
-        // persisted history is not activated outside the parent-continuation
-        // path. Saying so beats reporting a success that did not happen.
-        failures.push(t('applyLeaderSubagent'))
+        // Three unrelated causes used to share one message. Telling an operator
+        // their session "is a subagent" when the list simply had not refreshed
+        // yet is a wrong diagnosis pointing at the wrong remedy, so each cause
+        // now names itself.
+        const row = listed.value.items.find(candidate => candidate.sessionId === current)
+        failures.push(row === undefined ? t('applyLeaderNotListed') : t('applyLeaderSubagent'))
         return failures
       }
       const selected = await session.selectModel({

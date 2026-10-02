@@ -17,10 +17,14 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
  * Required services. Deliberately NOT including the Fusion-only two
  * (`remote.session`, `configForms`): a missing entry here deactivates the
  * whole client plugin, which would take the working provider panels down with
- * a feature they do not depend on. Fusion declares its own dependencies in a
- * scoped `ctx.inject` below instead, so an unusual deployment loses the Fusion
- * section and nothing else — the same trade the Host half makes for
- * `connection`.
+ * a feature they do not depend on. Fusion declares its own dependencies in the
+ * scoped `ctx.inject` in {@link apply} instead, so an unusual deployment loses
+ * the Fusion section and nothing else: the same trade the Host half makes for
+ * `connection`. That scoped declaration is also the ONLY legal way to read
+ * those two services. cordis throws `cannot get property "…" without inject`
+ * for an undeclared read even when the service is fully active, and optional
+ * chaining does not prevent that throw - `ctx.sessions?.x` throws too, because
+ * the throw happens on the property get, before `?.` is reached.
  */
 export declare const inject: string[];
 /** Wire both provider sections into the settings page. */

@@ -175,8 +175,15 @@ export declare function leaderTargetSession(rows: readonly FusionSessionRow[], c
 export declare function fusionOps(draft: FusionDraft): SettingsPathOpView[];
 /**
  * Bind the Fusion section's Host operations.
- * @param ctx - the plugin's context, which declares `remote.session` and
- * `configForms` in its own `inject`.
+ * @param ctx - the Fusion section's context. It must have DECLARED both
+ * `remote.session` and `configForms` in its own `inject` (the caller in
+ * `index.ts` does this on a scoped fiber): cordis throws
+ * `cannot get property "…" without inject` for an undeclared read, even once
+ * the service is fully active, and a Remote namespace is mounted late by an
+ * async Host handshake, so a probe taken before that mount both reads
+ * `undefined` and is illegal. Declaring the dependency is what makes these two
+ * reads legal, and is also why this factory must be constructed only from
+ * inside that scoped callback.
  * @param t - the section's translator. The `applyLeader` outcomes that are not
  * failures but still need saying -- "there is no session to apply this to" --
  * are prose, so the wording stays with the locale rather than here.
