@@ -242,6 +242,11 @@ const TOOL_IMAGE_BRIDGE = 'The image returned by the tool call above:'
  * verified on both, on a tool result whose text was empty, and on a turn with
  * two tool results where only the second carried the image.
  *
+ * Where exactly that user item lands is {@link serializeChatRequest}'s call:
+ * it holds every bridge back until its whole tool run has landed, because an
+ * item wedged between two results of one parallel call list breaks the
+ * tool_call adjacency strict gateways enforce with HTTP 400.
+ *
  * The tool message itself keeps the string form, which is what the OpenAI schema
  * actually allows there (its content parts are text-only). Nothing about the
  * common, image-free path changes.
@@ -345,9 +350,28 @@ export function serializeChatRequest(
 ): Record<string, unknown> {
   const messages: WireMessage[] = []
   if (options.system !== undefined) messages.push({ role: 'system', content: options.system })
+  // A tool result's image rides a user item that FOLLOWS the result. Emitting
+  // that item immediately splits a parallel run —
+  //   assistant(tool_calls:[A,B]) -> tool(A) -> user(bridge) -> tool(B) —
+  // and a tool message that no longer directly answers the call list violates
+  // the wire contract: OpenCode Go and Command Code both refuse that shape
+  // with HTTP 400 (live, 2026-10-01), and because the images stay in the
+  // history every later request of the conversation fails the same way. The
+  // bridges therefore queue behind the whole run, which is also the exact
+  // shape the bridging was verified with ("two results, the second carried
+  // the image" — the one order that was already adjacent).
+  const pendingBridges: WireMessage[] = []
   for (const message of options.messages) {
-    messages.push(...wireMessages(message, images, replayReasoning, assistantTextReplay))
+    const wire = wireMessages(message, images, replayReasoning, assistantTextReplay)
+    if (message.role !== 'tool') {
+      messages.push(...pendingBridges.splice(0), ...wire)
+      continue
+    }
+    const tool = wire[0]
+    if (tool !== undefined) messages.push(tool)
+    pendingBridges.push(...wire.slice(1))
   }
+  messages.push(...pendingBridges)
   return {
     model,
     messages,

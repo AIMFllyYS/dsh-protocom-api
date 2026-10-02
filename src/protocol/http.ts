@@ -46,7 +46,9 @@ interface WireError {
     message?: string
     code?: string
     type?: string
-  }
+  } | string
+  /** Some gateways put the explanation at the top level instead of an envelope. */
+  message?: string
 }
 
 /** Map an HTTP status to a stable LlmError code. */
@@ -123,14 +125,28 @@ export async function postSse(
     return response
   }
   let message = `${label} API error (HTTP ${response.status})`
-  let providerError: WireError['error']
   const rawResponse = await response.text()
   try {
     const parsed = JSON.parse(rawResponse) as WireError
-    providerError = parsed.error
-    if (providerError?.message) message = providerError.message
+    const providerError = parsed.error
+    if (typeof providerError === 'object' && providerError?.message) {
+      message = providerError.message
+    } else if (typeof providerError === 'string' && providerError.length > 0) {
+      // A gateway that answers {"error": "…"} with a bare string.
+      message = providerError
+    } else if (typeof parsed.message === 'string' && parsed.message.length > 0) {
+      // A gateway that skips the envelope entirely: {"message": "…"}.
+      message = parsed.message
+    } else if (rawResponse.trim().length > 0) {
+      // An unrecognised body still beats no body: the upstream's own words are
+      // what makes a provider-specific rejection diagnosable from the UI.
+      // (OpenCode Go's chat-completions 400s looked exactly like this — a bare
+      // "HTTP 400" hid the actual complaint and cost a debugging session.)
+      message += `: ${rawResponse.trim().slice(0, 300)}`
+    }
   } catch {
     // The HTTP status remains authoritative when a gateway returns malformed JSON.
+    if (rawResponse.trim().length > 0) message += `: ${rawResponse.trim().slice(0, 300)}`
   }
   // Opt-in only (see src/capture.ts): the exact request and the upstream's own
   // explanation are what make a provider-specific rejection diagnosable.

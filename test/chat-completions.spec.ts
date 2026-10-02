@@ -328,6 +328,74 @@ describe('chat-completions serialization', () => {
     ])
   })
 
+  it('keeps a parallel tool run unbroken when an early result carries an image', () => {
+    // Live failure, 2026-10-01 (opencode-go-sub AND commandcode, two separate
+    // sessions): an assistant turn issued TWO parallel read_image calls, and
+    // the moment both image results sat in the history every later request
+    // answered HTTP 400 while a fresh conversation stayed healthy. The bridge
+    // user item was emitted right behind ITS tool message, splitting the run:
+    //   assistant(tool_calls:[A,B]) -> tool(A) -> user(bridge A) -> tool(B)
+    // A tool message that no longer directly answers the call list violates
+    // the wire contract, and strict gateways refuse the whole request. The
+    // earlier live check only covered "two results, the SECOND carried the
+    // image" — the one order that happens to stay adjacent.
+    const assistant = {
+      role: 'assistant',
+      content: [
+        { type: 'tool-call', id: 'call_a', name: 'read_image', arguments: '{}' },
+        { type: 'tool-call', id: 'call_b', name: 'read_image', arguments: '{}' },
+      ],
+    } as unknown as Message
+    const resultA = {
+      role: 'tool',
+      toolCallId: 'call_a',
+      content: [
+        { type: 'text', text: 'Read 1 image.' },
+        { type: 'image', attachment: { attachmentId: 'sha256:a', mediaType: 'image/png' } },
+      ],
+    } as unknown as Message
+    const resultB = {
+      role: 'tool',
+      toolCallId: 'call_b',
+      content: [
+        { type: 'text', text: 'Read 1 image.' },
+        { type: 'image', attachment: { attachmentId: 'sha256:b', mediaType: 'image/png' } },
+      ],
+    } as unknown as Message
+    const body = serializeChatRequest(
+      { ...base, messages: [assistant, resultA, resultB] },
+      'm',
+      new Map([['sha256:a', 'data:image/png;base64,AAAA'], ['sha256:b', 'data:image/png;base64,BBBB']]),
+    )
+    expect(body.messages).toEqual([
+      {
+        role: 'assistant',
+        content: '',
+        tool_calls: [
+          { id: 'call_a', type: 'function', function: { name: 'read_image', arguments: '{}' } },
+          { id: 'call_b', type: 'function', function: { name: 'read_image', arguments: '{}' } },
+        ],
+      },
+      // The whole tool run lands first; both bridges follow it, oldest first.
+      { role: 'tool', tool_call_id: 'call_a', content: 'Read 1 image.' },
+      { role: 'tool', tool_call_id: 'call_b', content: 'Read 1 image.' },
+      {
+        role: 'user',
+        content: [
+          { type: 'text', text: 'The image returned by the tool call above:' },
+          { type: 'image_url', image_url: { url: 'data:image/png;base64,AAAA' } },
+        ],
+      },
+      {
+        role: 'user',
+        content: [
+          { type: 'text', text: 'The image returned by the tool call above:' },
+          { type: 'image_url', image_url: { url: 'data:image/png;base64,BBBB' } },
+        ],
+      },
+    ])
+  })
+
   it('keeps a tool result with no image on the tool message alone', () => {
     // The common path is untouched: no extra user item appears.
     const toolMessage = {
