@@ -1,7 +1,7 @@
 {
   "name": "dsh-protocom-api",
   "description": "Protocom official API, OpenCode Go, Command Code and ClinePass subscriptions for the DeepSeek Harness LLM seam, with Fusion dual-model routing",
-  "version": "1.2.5",
+  "version": "1.2.6",
   "type": "module",
   "main": "lib/index.js",
   "types": "lib/types/index.d.ts",
