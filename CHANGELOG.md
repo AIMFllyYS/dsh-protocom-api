@@ -2,6 +2,94 @@
 
 All notable changes to `dsh-protocom-api` are documented here.
 
+## [1.2.5] — 修复：Fusion 双模型段落在设置页从不出现
+
+**548 个测试通过（新增 5 个）。** 这是**用户可见的功能修复**：此前 1.2.0 起
+「Fusion 双模型」配置段在设置页**从未出现过**，尽管代码与测试都齐全。
+
+### 根因：客户端一半在读取三个「从未声明」的服务
+
+cordis 4.0.4 中，**读取一个没有写进本插件 `inject` 的服务属性会直接抛错**，
+与该服务是否已激活无关（`ReflectService.get` 的严格模式 + 代理 `get` 陷阱）。
+而 `ctx.sessions`、`configForms`、`remote.session` 三者都**不在**插件的 `inject` 里。
+共四处缺陷，构成一条完整的不可能链：
+
+1. **`fusionAvailable()` 一次性探测在任何时序下都为假或抛错。**
+   命名空间未挂载时读得 `undefined` → 判假；已挂载时同一次读取**抛**
+   `cannot get property "remote.session" without inject`。该抛点位于
+   `slots.inject` 的 `ctx.effect` 内并被 `queueMicrotask` 重抛，
+   **不进入任何调用方**，所以页面上只是一条无人接管的控制台报错。
+   因此**没有第三种时序**能让 Fusion 注册成功。
+2. **`createFusionOperations` 以未声明属性读取两个服务**（`ctx.configForms`、
+   `ctx.remote.session`），即令段落能注册，渲染时也必抛。
+3. **`currentSessionId` 读取 `getSnapshot().current`——该字段不存在。**
+   真实快照是 `{ ids, byId, phase, projectionsBySession }`。即使前两条修好，
+   「当前会话」也永远是 `undefined`，`applyLeader` 会在任何页面报「没有会话」。
+4. **原回归测试的桩让上述问题全部不可见**：其 `get` 对任何名字都返回 `{}`，
+   于是旧探测在一个真实 cordis 判假或抛错的状态下返回 `true`。
+   它不是「盲目」，而是**被钉死在错误形态上**（在修复后的源码上直接报
+   `TypeError: ctx.inject is not a function`）。
+
+四个供应商面板**没有受牵连**：`slots.register` 注册在渲染器自身 fiber 上，
+所以现象是「Fusion 静默缺失、其余一切正常」。
+
+### 修复方式
+
+Fusion 改由**嵌套的 scoped `ctx.inject(['remote.session','configForms'], …)`
+延迟注册**，并把其返回的 disposer 交还外层 `slots.inject` 回调。
+插件自己的 `inject` 数组**保持不变**——把这两个名字加进去会让「部署缺少任一服务」
+时**整个客户端插件失活**，把四个正常工作的供应商面板一起带走。
+
+scoped 声明同时是读取这两个服务的**唯一合法途径**，并天然处理晚挂载：
+cordis 只在全部依赖激活后才执行回调，依赖被替换时自动重放。
+该调用**必须保持嵌套在 `apply` 的 fiber 内**，因为 scope 只继承祖先**已声明**的
+inject 名（`fusionCtx.remote` 可达仅仅是因为 `apply` 声明了 `remote`）——
+这条约束已写入代码注释。
+
+返回 disposer 是必需的：`SlotRegistry.inject` 的 `reconcile()` 在重放前会先
+dispose 上一次的贡献；若不返回，槽位重新声明时会触发同 id 二次注册并**抛错**
+（`already has an entry with id "model-fusion"`）——失败方向是响亮报错而非静默重复。
+
+### 一并修复的同类静默缺陷
+
+- **`saveFusion` 把被拒绝的写入报成「已保存」。** 真实 `ConfigFormController.mutate`
+  的签名是 `Promise<boolean>`，被拒绝时**返回 `false` 而不是抛错**；原代码丢弃返回值
+  （本地 face 还把它声明成 `Promise<void>`，类型上就掩盖了问题），于是校验失败、
+  版本冲突、以及 **memory 持久化页面上的每一次保存**都会关闭弹窗并显示「已保存」，
+  而配置根本没变。原来的 `conflict` 分支是**死代码**。现改为检查返回值，并用
+  「写入后 revision 是否已变」区分「别处改过」与「直接被拒」。
+- **半残席位可以被写盘，且此后永久无法解析。** `enabled: false` 时只检查两个席位
+  是否同时完整，于是「只有 provider、没有 model」的席位能通过校验并被写盘
+  （schema 有意没有 cross-field refinement）。写进去以后宿主 `resolveFusionSeat`
+  每次都抛，`mountFusion` 只记日志并沿用上一份好配置——**文件保持无效直到手工编辑**。
+  现在保存前直接拒绝并给出明确提示。
+- **三种不同原因共用一句「当前会话是子智能体」。** 实际有：真的是子智能体、
+  会话列表尚未刷新、以及（原缺陷 3 导致的）当前会话推导为 `undefined`。
+  对第二种用户按提示去开「主会话」是白费功夫。现已区分
+  「列表未刷新」与「子智能体」两条文案。
+- **`save()` 没有 `catch`。** 写入 reject 时只把按钮解 busy、**不显示任何提示**，
+  点击凭空消失。现已补 `catch` 并渲染失败原因。
+
+### 修复：设置页模型行的 React 键冲突（与 Fusion 无关）
+
+`ProtocomSection.tsx` 用**显示名**做 React key，而同一 registry 里确实存在
+同名但不同线路的条目：`zai-org/GLM-5.2` 显式声明了 `identity`，因而**免于**
+同名合并，于是它与裸 id `glm-5.2` 同时以「GLM-5.2」呈现为两行 →
+`Encountered two children with the same key, 'GLM-5.2'`。另有
+`deepseek/deepseek-v4.1-flash` vs `deepseek-v4.1-flash`、
+`mimo-v2.6-flash` vs `xiaomi/mimo-v2.6-flash` 两对同类。
+后果是 React 告警，且可能把一行的星标/隐藏状态复用到另一行。
+现改为以身份分组的键 `key={row.upstreamId}`。
+
+### 测试
+
+- 新增 `test/client-bundle.spec.ts`：**直接验证成品 `lib/client.js`**（而非 src），
+  按模块加载器的方式装载 bundle，断言五个段落全部注册。
+- `test/fusion-client-apply.spec.ts` 重写为使用**真实 `Context`/`Service`**，
+  并新增「同 id 重复注册」「refused 不得报成 written」「未列出会话与子智能体区分」
+  等用例。已用**突变测试**逐条证明这些用例非空转。
+- 新增设置页重复键的回归用例：改回显示名即精确复现上述 React 告警并失败。
+
 ## [1.2.4] — 正式发布：补齐发布文档与仓库暂存纪律
 
 **536 个测试通过。零运行时代码改动**——`lib/` 产物与 1.2.3 逐字节一致。

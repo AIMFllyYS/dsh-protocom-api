@@ -48,10 +48,10 @@ The DSH desktop app ships with a built-in plugin manager — no command line nee
 2. Click **Add plugin (添加插件)** and paste:
 
    ```
-   github:AIMFllyYS/dsh-protocom-api#v1.2.4
+   github:AIMFllyYS/dsh-protocom-api#v1.2.5
    ```
 
-   (`#v1.2.4` pins the release; omit `#...` to install the latest commit on main)
+   (`#v1.2.5` pins the release; omit `#...` to install the latest commit on main)
 3. Click **Install**, wait for pnpm to finish, then click **Enable now (立即启用)**
 
 The dialog accepts package names, Git URLs, tarballs, and local paths — the same spec format as `dsh plugin add`. The plugin manager currently offers **no auto-update and no version picker**: upgrading means uninstalling and installing the newer version (your configuration and credentials are untouched).

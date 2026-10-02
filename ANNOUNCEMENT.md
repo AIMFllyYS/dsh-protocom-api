@@ -82,7 +82,7 @@ chat-completions 与 responses **两条协议**都支持内联 base64 图片，*
 
 ## 安装
 
-**桌面端（推荐）**：侧栏「插件」→「添加插件」→ 粘贴 `github:AIMFllyYS/dsh-protocom-api#v1.2.4` → 安装 → 立即启用。
+**桌面端（推荐）**：侧栏「插件」→「添加插件」→ 粘贴 `github:AIMFllyYS/dsh-protocom-api#v1.2.5` → 安装 → 立即启用。
 
 **命令行**（dsh web / 自托管）：
 
