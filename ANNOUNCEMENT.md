@@ -82,12 +82,17 @@ chat-completions 与 responses **两条协议**都支持内联 base64 图片，*
 
 ## 安装
 
+**桌面端（推荐）**：侧栏「插件」→「添加插件」→ 粘贴 `github:AIMFllyYS/dsh-protocom-api#v1.2.4` → 安装 → 立即启用。
+
+**命令行**（dsh web / 自托管）：
+
 ```bash
-# 在 DSH profile 目录执行
-pnpm add github:AIMFllyYS/dsh-protocom-api#v1.2.4
+# 在 DSH 仓库目录执行（web profile；用其他 profile 就替换名字）
+pnpm dsh plugin --profile web add "github:AIMFllyYS/dsh-protocom-api"
+pnpm dsh web
 ```
 
-然后在 profile 的 `package.json` 里把插件加进 `dsh.profile.bundles`，重启 DSH，在 **设置 → ClinePass / OpenCode Go / Command Code** 填入密钥。
+安装命令会自动初始化 profile 并把插件追加进 `dsh.profile.bundles`，无需手改 YAML。装好后在 **设置 → ClinePass / OpenCode Go / Command Code** 填入密钥。
 
 ---
 
